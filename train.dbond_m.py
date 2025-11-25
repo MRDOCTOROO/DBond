@@ -31,7 +31,7 @@ model_weight_dir_pattern =  './best_model/{model}'
 model_weight_dir = model_weight_dir_pattern.format(model = MODEL)
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--config',type=str,action='store',default='/workspace/multi_model_config/default.yaml',help='path to config')
+parser.add_argument('--config',type=str,action='store',default='/workspace/dbond_m_config/default.yaml',help='path to config')
 
 args = parser.parse_args()
 print('='*10+'Args'+'='*10)
