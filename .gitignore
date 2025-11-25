@@ -1,15 +1,23 @@
 .vscode/**
 __pycache__/**
 
-tensorboard/**
-checkpoint/**
-best_model/**
-result/**
-dataset/**
+tensorboard/*
+checkpoint/*
+best_model/*
+result/*
+dataset/*
 
 # 保留所有目录里的 .gitkeep 文件
 !**/.gitkeep
 
+# 保留 dataset 中的特定文件
+!dataset/dataset.fbr.csv
+!dataset/dbond_m.test.csv
+!dataset/dbond_m.train.shuffle.csv
+!dataset/dbond_s.test.csv
+!dataset/dbond_s.train.shuffle.csv
+
+# 其他忽略
 *.pyc
 *.pt
 *.svg
