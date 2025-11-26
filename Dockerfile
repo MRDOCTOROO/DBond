@@ -3,7 +3,6 @@ FROM pytorch/pytorch:2.1.2-cuda11.8-cudnn8-runtime
 ENV DEBIAN_FRONTEND=noninteractive
 ENV GEOGRAPHIC_AREA=Asia
 
-# 更新源 + 安装系统工具 + 清理缓存
 RUN apt-get update  \
     && apt-get install -y sudo vim \
     && rm -rf /var/lib/apt/lists/*
@@ -12,7 +11,6 @@ RUN apt-get update  \
 
 RUN pip install --upgrade pip
 
-# 安装 Python 依赖
 RUN pip install scikit-learn pandas pyteomics matplotlib positional-encodings[pytorch] tensorboard pandarallel
 
 WORKDIR /workspace
