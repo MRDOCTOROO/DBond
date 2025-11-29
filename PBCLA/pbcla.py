@@ -104,6 +104,6 @@ def process_one_mgf(in_mgf_path:str,out_mgf_path:str) -> None:
 
   
 if __name__ == "__main__":
-    in_mgf_path = "./example.mgf"
-    out_mgf_path = "./example_out.mgf"
+    in_mgf_path = "./mgf_dataset/example.mgf"
+    out_mgf_path = "./mgf_dataset/example_out.mgf"
     process_one_mgf(in_mgf_path, out_mgf_path)
