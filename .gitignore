@@ -23,6 +23,9 @@ PBCLA/__pycache__/**
 !result/metric/dbond_m/multi/
 !result/metric/dbond_s/multi/
 
+!best_model/
+!best_model/dbond_m/
+!best_model/dbond_s/
 # 保留所有目录里的 .gitkeep 文件
 !**/.gitkeep
 
