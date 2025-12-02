@@ -519,6 +519,8 @@ docker run --gpus all -v $(pwd):/workspace dbond:latest python train.dbond_s.py
 
 ## 联系方式
 
+
+-**Fork自源项目**: https://github.com/LoserLus/DBond
 - **项目主页**: https://github.com/MRDOCTOROO/DBond
 - **问题反馈**: 请在GitHub提交Issue
 - **技术讨论**: 欢迎在Discussions中交流
