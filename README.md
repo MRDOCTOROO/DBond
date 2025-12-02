@@ -6,12 +6,13 @@ DBond2是一个基于深度学习的蛋白质组学（Protein Group Learning, PG
 
 本项目提供了两个主要的深度学习模型：
 
-- **DBond-s (DBond Small)**: 小型模型，适用于快速训练和推理
-- **DBond-m (DBond Medium)**: 中型模型，提供更高的精度但需要更多计算资源
+- **DBond-s (DBond Single-label)**: 单标签模型，适用于单一断裂类型预测
+- **DBond-m (DBond Multi-label)**: 多标签模型，能够同时预测多个断裂位置和类型
 
 两个模型都基于Transformer架构，能够：
 - 预测蛋白质序列中所有可能的二硫键断裂位置
-- 同时识别6种断裂的类型（如：二硫键桥、肽键断裂、二硫键断裂）
+- DBond-s：识别单一类型的断裂（如：肽键断裂）
+- DBond-m：同时识别多种断裂类型（如：二硫键桥、肽键断裂、二硫键断裂）
 - 考虑环境变量对断裂的影响
 
 ## 项目结构
@@ -23,28 +24,28 @@ DBond2/
 ├── dockerfile                       # Docker构建文件
 ├── .gitignore                       # Git忽略文件
 ├── 核心模型文件/
-│   ├── dbond_s.py                   # 小型DBond模型架构定义
-│   ├── dbond_m.py                   # 中型DBond模型架构定义
-│   ├── data_utils_dbond_s.py        # 小型模型数据处理工具
-│   └── data_utils_dbond_m.py        # 中型模型数据处理工具
+│   ├── dbond_s.py                   # 单标签DBond模型架构定义
+│   ├── dbond_m.py                   # 多标签DBond模型架构定义
+│   ├── data_utils_dbond_s.py        # 单标签模型数据处理工具
+│   └── data_utils_dbond_m.py        # 多标签模型数据处理工具
 ├── 训练和评估脚本/
-│   ├── train.dbond_s.py             # 小型模型训练脚本
-│   ├── train.dbond_m.py             # 中型模型训练脚本
-│   ├── evaluate.dbond_s.py          # 小型模型评估脚本
-│   └── evaluate.dbond_m.py          # 中型模型评估脚本
+│   ├── train.dbond_s.py             # 单标签模型训练脚本
+│   ├── train.dbond_m.py             # 多标签模型训练脚本
+│   ├── evaluate.dbond_s.py          # 单标签模型评估脚本
+│   └── evaluate.dbond_m.py          # 多标签模型评估脚本
 ├── 配置文件/
-│   ├── dbond_s_config/default.yaml  # 小型模型配置文件
-│   └── dbond_m_config/default.yaml  # 中型模型配置文件
+│   ├── dbond_s_config/default.yaml  # 单标签模型配置文件
+│   └── dbond_m_config/default.yaml  # 多标签模型配置文件
 ├── 数据集/
-│   ├── dbond_s.train.shuffle.csv    # 小型模型训练数据
-│   ├── dbond_s.test.csv             # 小型模型测试数据
-│   ├── dbond_m.train.shuffle.csv    # 中型模型训练数据
-│   ├── dbond_m.test.csv             # 中型模型测试数据
+│   ├── dbond_s.train.shuffle.csv    # 单标签模型训练数据
+│   ├── dbond_s.test.csv             # 单标签模型测试数据
+│   ├── dbond_m.train.shuffle.csv    # 多标签模型训练数据
+│   ├── dbond_m.test.csv             # 多标签模型测试数据
 │   └── dataset.fbr.csv              # 格式结合断裂位点信息数据
 ├── PBCLA工具/
 │   ├── pbcla.py                     # 主数据处理和转换工具
-│   ├── mgf2csv.dbond_s.py           # 小型模型MGF到CSV转换
-│   ├── mgf2csv.dbond_m.py           # 中型模型MGF到CSV转换
+│   ├── mgf2csv.dbond_s.py           # 单标签模型MGF到CSV转换
+│   ├── mgf2csv.dbond_m.py           # 多标签模型MGF到CSV转换
 │   ├── utils.py                     # 工具函数
 │   └── mgf_dataset/                 # 示例数据集
 │       ├── example.mgf              # 示例MGF文件
@@ -55,47 +56,47 @@ DBond2/
 │   └── multi_label_metrics.py       # 多标签分类评估指标计算
 ├── 输出目录/
 │   ├── best_model/                  # 最佳模型权重存储
-│   │   ├── dbond_s/                 # 小型模型最佳权重
-│   │   └── dbond_m/                 # 中型模型最佳权重
+│   │   ├── dbond_s/                 # 单标签模型最佳权重
+│   │   └── dbond_m/                 # 多标签模型最佳权重
 │   ├── checkpoint/                  # 模型检查点
-│   │   ├── dbond_s/                 # 小型模型检查点
-│   │   └── dbond_m/                 # 中型模型检查点
+│   │   ├── dbond_s/                 # 单标签模型检查点
+│   │   └── dbond_m/                 # 多标签模型检查点
 │   ├── result/                      # 评估结果存储
-│   │   ├── dbond_s/                 # 小型模型结果
-│   │   ├── dbond_m/                 # 中型模型结果
+│   │   ├── dbond_s/                 # 单标签模型结果
+│   │   ├── dbond_m/                 # 多标签模型结果
 │   │   └── multi_label_metric/      # 多标签评估结果
 │   └── tensorboard/                 # TensorBoard日志
-│       ├── dbond_s/                 # 小型模型日志
-│       └── dbond_m/                 # 中型模型日志
+│       ├── dbond_s/                 # 单标签模型日志
+│       └── dbond_m/                 # 多标签模型日志
 ```
 
 ## 核心文件功能说明
 
 ### 模型架构文件
-- **`dbond_s.py`**: 小型DBond模型实现，包含Transformer编码器、序列嵌入层和断裂预测头
-- **`dbond_m.py`**: 中型DBond模型实现，具有更大的模型容量和更高的预测精度
+- **`dbond_s.py`**: 单标签DBond模型实现，包含Transformer编码器、序列嵌入层和断裂预测头
+- **`dbond_m.py`**: 多标签DBond模型实现，具有更大的模型容量和更高的预测精度
 
 ### 数据处理文件
-- **`data_utils_dbond_s.py`**: 小型模型的数据加载器，支持批量处理、序列填充和多标签编码
-- **`data_utils_dbond_m.py`**: 中型模型的数据加载器，处理更复杂的特征和环境变量
+- **`data_utils_dbond_s.py`**: 单标签模型的数据加载器，支持批量处理、序列填充和多标签编码
+- **`data_utils_dbond_m.py`**: 多标签模型的数据加载器，处理更复杂的特征和环境变量
 
 ### 训练脚本
-- **`train.dbond_s.py`**: 小型模型训练主程序，支持GPU训练、学习率调度和模型保存
-- **`train.dbond_m.py`**: 中型模型训练主程序，包含完整的训练流程和验证
+- **`train.dbond_s.py`**: 单标签模型训练主程序，支持GPU训练、学习率调度和模型保存
+- **`train.dbond_m.py`**: 多标签模型训练主程序，包含完整的训练流程和验证
 
 ### 评估脚本
-- **`evaluate.dbond_s.py`**: 小型模型评估程序，计算多标签分类指标
-- **`evaluate.dbond_m.py`**: 中型模型评估程序，提供详细的性能分析
+- **`evaluate.dbond_s.py`**: 单标签模型评估程序，计算多标签分类指标
+- **`evaluate.dbond_m.py`**: 多标签模型评估程序，提供详细的性能分析
 
 ### 数据转换工具
 - **`PBCLA/pbcla.py`**: 主数据处理工具，支持多种质谱数据格式的转换
-- **`PBCLA/mgf2csv.dbond_s.py`**: 将MGF格式转换为小型模型所需的CSV格式
-- **`PBCLA/mgf2csv.dbond_m.py`**: 将MGF格式转换为中型模型所需的CSV格式
+- **`PBCLA/mgf2csv.dbond_s.py`**: 将MGF格式转换为单标签模型所需的CSV格式
+- **`PBCLA/mgf2csv.dbond_m.py`**: 将MGF格式转换为多标签模型所需的CSV格式
 - **`PBCLA/utils.py`**: 数据转换相关的工具函数
 
 ### 配置文件
-- **`dbond_s_config/default.yaml`**: 小型模型的所有配置参数（模型架构、训练超参数、数据路径等）
-- **`dbond_m_config/default.yaml`**: 中型模型的所有配置参数
+- **`dbond_s_config/default.yaml`**: 单标签模型的所有配置参数（模型架构、训练超参数、数据路径等）
+- **`dbond_m_config/default.yaml`**: 多标签模型的所有配置参数
 
 ### 评估指标
 - **`multi_label_metrics.py`**: 多标签分类评估指标，包括准确率、精确率、召回率、F1分数等
@@ -173,10 +174,10 @@ pip install pandas numpy pyteomics scikit-learn matplotlib seaborn tensorboard
 
 #### 1. 查看配置文件
 ```bash
-# 查看小型模型配置
+# 查看单标签模型配置
 cat dbond_s_config/default.yaml
 
-# 查看中型模型配置
+# 查看多标签模型配置
 cat dbond_m_config/default.yaml
 ```
 
@@ -189,24 +190,24 @@ ls dataset/
 
 #### 3. 训练模型
 
-**训练小型模型（DBond-s）**：
+**训练单标签模型（DBond-s）**：
 ```bash
 python train.dbond_s.py --config dbond_s_config/default.yaml
 ```
 
-**训练中型模型（DBond-m）**：
+**训练多标签模型（DBond-m）**：
 ```bash
 python train.dbond_m.py --config dbond_m_config/default.yaml
 ```
 
 #### 4. 评估模型
 
-**评估小型模型**：
+**评估单标签模型**：
 ```bash
 python evaluate.dbond_s.py --config dbond_s_config/default.yaml
 ```
 
-**评估中型模型**：
+**评估多标签模型**：
 ```bash
 python evaluate.dbond_m.py --config dbond_m_config/default.yaml
 ```
@@ -324,12 +325,12 @@ precision = label_precision_macro(gt, pred)
 ### 性能优化建议
 
 #### 1. 模型选择
-- **小型模型（DBond-s）**: 
+- **单标签模型（DBond-s）**: 
   - 适合快速原型开发和实验
   - 训练时间短，内存需求小
   - 适合资源受限的环境
 
-- **中型模型（DBond-m）**: 
+- **多标签模型（DBond-m）**: 
   - 提供更高的预测精度
   - 需要更多的计算资源和时间
   - 适合生产环境和精度要求高的应用
