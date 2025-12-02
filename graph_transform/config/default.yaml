@@ -1,0 +1,257 @@
+# 图神经网络多标签分类系统配置文件
+
+# 模型配置
+model:
+  # 基础配置
+  hidden_dim: 256
+  num_attention_heads: 8
+  dropout: 0.1
+  leaky_relu_slope: 0.2
+  
+  # 图配置
+  use_edge_features: true
+  edge_dim: 32
+  concat_heads: true
+  
+  # 网络结构配置
+  num_gcn_layers: 3
+  num_gat_layers: 2
+  num_hierarchical_layers: 2
+  
+  # 序列配置
+  max_seq_len: 100
+  alphabet: "ACDEFGHIKLMNPQRSTVWY"
+  pad_char: "U"
+  
+  # 特征维度配置
+  aa_embedding_dim: 64
+  position_embedding_dim: 32
+  physicochemical_dim: 32
+  num_physicochemical_features: 4
+  num_env_features: 5
+  
+  # 边配置
+  edge_types: ["sequence", "distance", "functional"]
+  edge_embedding_dim: 16
+  distance_embedding_dim: 16
+  max_distance: 10
+  
+  # 输出配置
+  num_classes: 24  # 根据数据格式中的标签范围设置
+  
+  # 其他配置
+  aggregator_type: "mean"
+  diffusion_steps: 3
+  num_attention_types: 3
+
+# 训练配置
+training:
+  # 基础训练参数
+  epochs: 100
+  batch_size: 32
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  gradient_clip_norm: 1.0
+  
+  # 学习率调度
+  scheduler: "cosine"  # "cosine", "step", "exponential", "plateau"
+  warmup_epochs: 10
+  min_lr: 0.00001
+  
+  # 早停配置
+  early_stopping: true
+  patience: 15
+  min_delta: 0.001
+  
+  # 验证配置
+  validation_split: 0.2
+  validation_interval: 1
+  
+  # 保存配置
+  save_interval: 10
+  save_best_only: false
+  checkpoint_dir: "checkpoints/graph_transform"
+
+# 数据配置
+data:
+  # 数据路径
+  train_csv_path: "dataset/dbond_m.train.shuffle.csv"
+  test_csv_path: "dataset/dbond_m.test.csv"
+  val_csv_path: null  # 如果为null，从训练集分割
+  
+  # 数据处理配置
+  max_seq_len: 100
+  graph_strategy: "distance"  # "sequence", "distance", "hybrid", "knowledge"
+  augmentation: true
+  cache_graphs: false
+  cache_dir: "cache/graph_data"
+  
+  # 数据增强配置
+  augmentation_prob: 0.3
+  max_augmentation_trials: 3
+  
+  # 批处理配置
+  num_workers: 4
+  pin_memory: true
+  drop_last: true
+  
+  # 数据平衡
+  use_class_weights: true
+  focal_loss_alpha: 0.25
+  focal_loss_gamma: 2.0
+
+# 损失函数配置
+loss:
+  # 主要损失类型
+  main_loss: "binary_cross_entropy"  # "binary_cross_entropy", "focal", "dice"
+  
+  # 辅助损失
+  use_auxiliary_losses: true
+  auxiliary_loss_weights:
+    focal: 0.5
+    dice: 0.3
+    l2_regularization: 0.1
+  
+  # 类别不平衡处理
+  handle_imbalance: true
+  imbalance_strategy: "focal"  # "focal", "weighted", "oversample"
+
+# 优化器配置
+optimizer:
+  type: "adamw"  # "adam", "adamw", "sgd", "rmsprop"
+  
+  # Adam/AdamW特定参数
+  betas: [0.9, 0.999]
+  eps: 1e-8
+  
+  # SGD特定参数
+  momentum: 0.9
+  nesterov: true
+  
+  # 学习率调度器参数
+  step_size: 30
+  gamma: 0.1
+  
+  # 余弦退火参数
+  t_max: 100
+  eta_min: 0.0
+
+# 评估配置
+evaluation:
+  # 评估指标
+  metrics: ["accuracy", "precision", "recall", "f1", "auc", "hamming_loss"]
+  
+  # 阈值配置
+  threshold: 0.5
+  threshold_strategy: "fixed"  # "fixed", "adaptive", "optimal"
+  
+  # 验证频率
+  eval_interval: 1
+  
+  # 测试时配置
+  test_time_augmentation: false
+  ensemble_predictions: false
+  num_ensemble_models: 5
+
+# 设备配置
+device:
+  # 自动检测设备
+  auto_detect: true
+  
+  # 手动指定设备
+  device_type: "cuda"  # "cuda", "cpu", "mps"
+  gpu_id: 0
+  
+  # 混合精度训练
+  use_amp: true
+  amp_backend: "native"  # "native", "apex"
+
+# 日志配置
+logging:
+  # 日志级别
+  level: "INFO"  # "DEBUG", "INFO", "WARNING", "ERROR"
+  
+  # 日志输出
+  log_dir: "logs/graph_transform"
+  log_file: "training.log"
+  
+  # TensorBoard配置
+  use_tensorboard: true
+  tensorboard_log_dir: "tensorboard/graph_transform"
+  
+  # 日志频率
+  log_interval: 10
+  save_graph_interval: 50
+
+# 实验配置
+experiment:
+  # 实验名称和版本
+  name: "graph_transform_multilabel"
+  version: "v1.0"
+  
+  # 实验描述
+  description: "图神经网络多标签分类用于蛋白质二硫键断裂预测"
+  
+  # 随机种子
+  seed: 42
+  deterministic: true
+  
+  # 可重现性
+  benchmark: false
+
+# 高级配置
+advanced:
+  # 模型集成
+  use_ensemble: false
+  ensemble_methods: ["voting", "averaging", "stacking"]
+  
+  # 超参数优化
+  hyperparameter_search: false
+  search_method: "grid"  # "grid", "random", "bayesian"
+  
+  # 分布式训练
+  distributed: false
+  backend: "nccl"
+  
+  # 模型量化
+  quantization: false
+  quantization_method: "dynamic"  # "dynamic", "static", "qat"
+  
+  # 模型蒸馏
+  distillation: false
+  teacher_model_path: null
+  distillation_alpha: 0.5
+  distillation_temperature: 4.0
+
+# 性能优化配置
+performance:
+  # 内存优化
+  gradient_checkpointing: false
+  use_efficient_attention: false
+  max_memory_usage: "8GB"
+  
+  # 计算优化
+  compile_model: false  # PyTorch 2.0编译
+  use_torch_compile: false
+  
+  # I/O优化
+  prefetch_factor: 2
+  persistent_workers: true
+
+# 调试配置
+debug:
+  # 调试模式
+  debug_mode: false
+  
+  # 梯度检查
+  check_gradients: false
+  check_nan_inf: false
+  
+  # 可视化
+  save_attention_weights: false
+  save_graph_structures: false
+  visualize_predictions: false
+  
+  # 性能分析
+  profile_memory: false
+  profile_time: false

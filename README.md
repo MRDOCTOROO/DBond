@@ -247,10 +247,10 @@ df.to_csv('custom_dataset.csv', index=False)
 
 #### 2. 使用PBCLA工具转换MGF文件
 ```bash
-# 转换MGF到CSV（小型模型）
+# 转换MGF到CSV（单标签模型）
 python PBCLA/mgf2csv.dbond_s.py --input your_data.mgf --output output.csv
 
-# 转换MGF到CSV（中型模型）
+# 转换MGF到CSV（多标签模型）
 python PBCLA/mgf2csv.dbond_m.py --input your_data.mgf --output output.csv
 ```
 
