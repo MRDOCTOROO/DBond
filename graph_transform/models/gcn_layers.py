@@ -107,8 +107,8 @@ class GraphConvLayer(nn.Module):
         deg_inv_sqrt = deg.pow(-0.5)
         deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
         
-        norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
-        node_messages = x[row] * edge_weights * norm.unsqueeze(1)
+        norm = (deg_inv_sqrt[row] * deg_inv_sqrt[col]).to(dtype=x.dtype)
+        node_messages = (x[row] * edge_weights * norm.unsqueeze(1)).to(dtype=x.dtype)
         
         # 聚合消息
         out = torch.zeros_like(x)
