@@ -232,6 +232,9 @@ def create_optimizer(model: nn.Module, config: Dict[str, Any]) -> optim.Optimize
     optimizer_type = optimizer_config.get('type', 'adamw').lower()
     learning_rate = training_config['learning_rate']
     weight_decay = training_config.get('weight_decay', 0.0)
+    eps = optimizer_config.get('eps', 1e-8)
+    if isinstance(eps, str):
+        eps = float(eps)
     
     if optimizer_type == 'adam':
         optimizer = optim.Adam(
@@ -239,7 +242,7 @@ def create_optimizer(model: nn.Module, config: Dict[str, Any]) -> optim.Optimize
             lr=learning_rate,
             weight_decay=weight_decay,
             betas=optimizer_config.get('betas', [0.9, 0.999]),
-            eps=optimizer_config.get('eps', 1e-8)
+            eps=eps
         )
     elif optimizer_type == 'adamw':
         optimizer = optim.AdamW(
@@ -247,7 +250,7 @@ def create_optimizer(model: nn.Module, config: Dict[str, Any]) -> optim.Optimize
             lr=learning_rate,
             weight_decay=weight_decay,
             betas=optimizer_config.get('betas', [0.9, 0.999]),
-            eps=optimizer_config.get('eps', 1e-8)
+            eps=eps
         )
     elif optimizer_type == 'sgd':
         optimizer = optim.SGD(
