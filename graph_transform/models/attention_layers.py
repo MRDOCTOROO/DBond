@@ -114,7 +114,7 @@ class GraphAttentionLayer(nn.Module):
         # 如果有边特征，加上边特征的贡献
         if edge_attr is not None:
             edge_attr = edge_attr.unsqueeze(1).expand(-1, self.num_heads, -1)
-            edge_scores = torch.sum(edge_attr, dim=-1)
+            edge_scores = torch.sum(edge_attr, dim=-1).to(dtype=e.dtype)
             e = e + edge_scores
         
         # 应用LeakyReLU
@@ -136,7 +136,7 @@ class GraphAttentionLayer(nn.Module):
         for node in range(num_nodes):
             mask = (edge_index_row == node)
             if mask.sum() > 0:
-                attention[mask] = F.softmax(e[mask], dim=0)
+                attention[mask] = F.softmax(e[mask].float(), dim=0).to(dtype=attention.dtype)
         
         return attention
     
@@ -151,7 +151,7 @@ class GraphAttentionLayer(nn.Module):
         
         # 聚合到目标节点
         num_nodes, num_heads, head_dim = x_heads.shape
-        output = torch.zeros(num_nodes, num_heads, head_dim, device=x_heads.device)
+        output = torch.zeros(num_nodes, num_heads, head_dim, device=x_heads.device, dtype=x_heads.dtype)
         
         # 使用scatter_add聚合
         output.index_add_(0, col, weighted_features)
