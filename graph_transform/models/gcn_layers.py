@@ -79,8 +79,8 @@ class GraphConvLayer(nn.Module):
         row, col = edge_index
         
         # 归一化（度归一化）
-        deg = torch.zeros(x.size(0), device=x.device)
-        deg.index_add_(0, col, torch.ones_like(col, dtype=torch.float))
+        deg = torch.zeros(x.size(0), device=x.device, dtype=x.dtype)
+        deg.index_add_(0, col, torch.ones_like(col, dtype=x.dtype))
         deg_inv_sqrt = deg.pow(-0.5)
         deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
         
@@ -100,7 +100,8 @@ class GraphConvLayer(nn.Module):
         row, col = edge_index
         
         # 度归一化
-        deg = torch.zeros(x.size(0), device=x.device)
+        edge_attr = edge_attr.to(dtype=x.dtype)
+        deg = torch.zeros(x.size(0), device=x.device, dtype=x.dtype)
         edge_weights = torch.sum(edge_attr, dim=1, keepdim=True)
         deg.index_add_(0, col, torch.abs(edge_weights.squeeze()))
         deg_inv_sqrt = deg.pow(-0.5)
