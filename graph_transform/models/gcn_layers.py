@@ -78,19 +78,18 @@ class GraphConvLayer(nn.Module):
         """标准消息传递"""
         row, col = edge_index
         
-        # 聚合邻域信息
-        out = torch.zeros_like(x)
-        out.index_add_(0, col, x[row])
-        
         # 归一化（度归一化）
         deg = torch.zeros(x.size(0), device=x.device)
         deg.index_add_(0, col, torch.ones_like(col, dtype=torch.float))
         deg_inv_sqrt = deg.pow(-0.5)
         deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
         
-        # 应用度归一化
         norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
-        out = out * norm.unsqueeze(1)
+        messages = x[row] * norm.unsqueeze(1)
+        
+        # 聚合邻域信息
+        out = torch.zeros_like(x)
+        out.index_add_(0, col, messages)
         
         return out
     
@@ -100,22 +99,19 @@ class GraphConvLayer(nn.Module):
         """使用边特征的消息传递"""
         row, col = edge_index
         
-        # 边权重调制
-        edge_weights = torch.sum(edge_attr, dim=1, keepdim=True)
-        node_messages = x[row] * edge_weights
-        
-        # 聚合消息
-        out = torch.zeros_like(x)
-        out.index_add_(0, col, node_messages)
-        
         # 度归一化
         deg = torch.zeros(x.size(0), device=x.device)
+        edge_weights = torch.sum(edge_attr, dim=1, keepdim=True)
         deg.index_add_(0, col, torch.abs(edge_weights.squeeze()))
         deg_inv_sqrt = deg.pow(-0.5)
         deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
         
         norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
-        out = out * norm.unsqueeze(1)
+        node_messages = x[row] * edge_weights * norm.unsqueeze(1)
+        
+        # 聚合消息
+        out = torch.zeros_like(x)
+        out.index_add_(0, col, node_messages)
         
         return out
 

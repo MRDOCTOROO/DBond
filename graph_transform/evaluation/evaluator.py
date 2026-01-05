@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 import logging
 from typing import Dict, Any, Optional
 from tqdm import tqdm
+import numpy as np
 
 from .metrics import MultiLabelMetrics
 
@@ -79,10 +80,12 @@ class Evaluator:
                     with torch.cuda.amp.autocast():
                         predictions = self.model(batch_data)
                         targets = batch_data['labels']
+                        targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
                         loss = criterion(predictions, targets)
                 else:
                     predictions = self.model(batch_data)
                     targets = batch_data['labels']
+                    targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
                     loss = criterion(predictions, targets)
                 
                 # 更新指标
@@ -137,6 +140,7 @@ class Evaluator:
                 batch_data = self._move_to_device(batch_data)
                 predictions = self.model(batch_data)
                 targets = batch_data['labels']
+                targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
                 
                 all_predictions.append(predictions.cpu())
                 all_targets.append(targets.cpu())
@@ -189,6 +193,7 @@ class Evaluator:
                 batch_data = self._move_to_device(batch_data)
                 predictions = self.model(batch_data)
                 targets = batch_data['labels']
+                targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
                 
                 all_predictions.append(predictions.cpu())
                 all_targets.append(targets.cpu())
@@ -246,7 +251,7 @@ class Evaluator:
                         predictions = self.model(batch_data)
                 else:
                     predictions = self.model(batch_data)
-                
+                predictions = self._apply_label_mask_predict(batch_data, predictions)
                 all_predictions.append(predictions.cpu())
         
         # 合并所有批次
@@ -281,9 +286,10 @@ class Evaluator:
                         predictions = self.model(batch_data)
                 else:
                     predictions = self.model(batch_data)
-                
+                targets = batch_data['labels']
+                targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
                 all_predictions.append(predictions.cpu())
-                all_targets.append(batch_data['labels'].cpu())
+                all_targets.append(targets.cpu())
         
         # 合并所有批次
         all_predictions = torch.cat(all_predictions, dim=0)
@@ -305,6 +311,38 @@ class Evaluator:
                 device_batch[key] = value
         
         return device_batch
+
+    def _apply_label_mask(self, batch_data: Dict[str, Any],
+                          targets: torch.Tensor,
+                          predictions: torch.Tensor) -> tuple:
+        """应用标签掩码，过滤padding位置"""
+        mask = batch_data.get('label_mask')
+        if mask is None:
+            return targets, predictions
+
+        mask = mask.bool()
+        masked_preds = predictions[mask]
+        masked_targets = targets[mask]
+
+        if masked_preds.dim() == 1:
+            masked_preds = masked_preds.unsqueeze(1)
+        if masked_targets.dim() == 1:
+            masked_targets = masked_targets.unsqueeze(1)
+
+        return masked_targets, masked_preds
+
+    def _apply_label_mask_predict(self, batch_data: Dict[str, Any],
+                                  predictions: torch.Tensor) -> torch.Tensor:
+        """预测时应用标签掩码，过滤padding位置"""
+        mask = batch_data.get('label_mask')
+        if mask is None:
+            return predictions
+
+        mask = mask.bool()
+        masked_preds = predictions[mask]
+        if masked_preds.dim() == 1:
+            masked_preds = masked_preds.unsqueeze(1)
+        return masked_preds
     
     def _compute_metrics_threshold(self, predictions: torch.Tensor, 
                                  targets: torch.Tensor,

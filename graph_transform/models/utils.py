@@ -56,6 +56,7 @@ class ModelConfig:
         # 其他配置
         self.aggregator_type = 'mean'
         self.diffusion_steps = 3
+        self.num_attention_types = 3
         
         # 更新配置
         if config_dict:

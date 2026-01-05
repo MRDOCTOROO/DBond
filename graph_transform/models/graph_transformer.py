@@ -131,14 +131,13 @@ class NodeEncoder(nn.Module):
         char_to_idx = {char: idx + 1 for idx, char in enumerate(self.alphabet)}
         char_to_idx[self.pad_char] = 0
         
-        # 编码序列
+        # 编码序列（与dbond一致：未知字符直接报错）
         encoded_seqs = torch.zeros(batch_size, max_len, dtype=torch.long)
         for i, seq in enumerate(sequences):
             for j, char in enumerate(seq):
-                if char in char_to_idx:
-                    encoded_seqs[i, j] = char_to_idx[char]
-                else:
-                    encoded_seqs[i, j] = 0  # 未知字符用padding
+                if char not in char_to_idx:
+                    raise ValueError(f"Unknown amino acid: {char}")
+                encoded_seqs[i, j] = char_to_idx[char]
         
         return encoded_seqs
     
@@ -222,7 +221,7 @@ class EdgeEncoder(nn.Module):
         
         # 距离嵌入
         self.distance_embedding = nn.Embedding(
-            config.max_distance,
+            config.max_distance + 1,
             self.distance_embedding_dim
         )
         
@@ -390,11 +389,16 @@ class GraphTransformer(nn.Module):
             GraphAttentionLayer(config) for _ in range(config.num_gat_layers)
         ])
         
-        # 全局池化
+        # 全局池化（保留，可能用于图级别任务）
         self.global_pool = GlobalAttentionPool(config)
         
-        # 多标签预测头
-        self.multi_label_head = MultiLabelHead(config)
+        # 键级别断裂预测头（相邻残基对）
+        self.bond_head = nn.Sequential(
+            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(config.dropout),
+            nn.Linear(self.hidden_dim, 1)
+        )
         
         # 层归一化
         self.layer_norms = nn.ModuleList([
@@ -419,47 +423,78 @@ class GraphTransformer(nn.Module):
             batch_data: 包含序列、图结构和特征的批次数据
             
         Returns:
-            torch.Tensor: 多标签预测结果 [batch_size, num_classes]
+            torch.Tensor: 键级别断裂预测结果 [batch_size, max_bonds]
         """
         # 节点特征编码
         node_features = self.node_encoder(batch_data)
         
         # 边特征编码
         edge_features = self.edge_encoder(
-            batch_data['edge_indices'],
+            batch_data['edge_index'],
             batch_data['edge_types'],
             batch_data['edge_distances']
         )
         
-        # 重塑节点特征为适合图神经网络的格式
-        batch_size, seq_len, hidden_dim = node_features.shape
-        node_features = node_features.view(-1, hidden_dim)
-        
-        # 创建批次索引
-        batch_indices = torch.arange(
-            batch_size, device=node_features.device
-        ).repeat_interleave(seq_len)
+        # 根据真实序列长度裁剪节点特征
+        seq_lens = batch_data['seq_lens'].tolist()
+        batch_size = len(seq_lens)
+        hidden_dim = node_features.size(-1)
+
+        trimmed_nodes = []
+        batch_indices = []
+        for i, seq_len in enumerate(seq_lens):
+            if seq_len > 0:
+                trimmed_nodes.append(node_features[i, :seq_len])
+                batch_indices.extend([i] * seq_len)
+
+        node_features = torch.cat(trimmed_nodes, dim=0) if trimmed_nodes else node_features.new_empty((0, hidden_dim))
+        batch_indices = torch.tensor(batch_indices, device=node_features.device, dtype=torch.long)
         
         # 图卷积层
         for i, gcn_layer in enumerate(self.gcn_layers):
             residual = node_features
-            node_features = gcn_layer(node_features, batch_data['edge_indices'], edge_features)
+            node_features = gcn_layer(node_features, batch_data['edge_index'], edge_features)
             node_features = self.layer_norms[i](node_features + residual)
             node_features = F.dropout(node_features, p=self.config.dropout, training=self.training)
         
         # 图注意力层
         for i, gat_layer in enumerate(self.gat_layers):
             residual = node_features
-            node_features = gat_layer(node_features, batch_data['edge_indices'])
+            node_features = gat_layer(node_features, batch_data['edge_index'])
             node_features = self.layer_norms[len(self.gcn_layers) + i](node_features + residual)
             node_features = F.dropout(node_features, p=self.config.dropout, training=self.training)
         
-        # 全局池化
-        pooled_features = self.global_pool(node_features, batch_indices)
-        
-        # 多标签预测
-        predictions = self.multi_label_head(pooled_features)
-        
+        # 构建相邻键的特征并预测断裂
+        seq_lens = batch_data['seq_lens'].tolist()
+        bond_src = []
+        bond_dst = []
+        offset = 0
+        for seq_len in seq_lens:
+            for i in range(max(seq_len - 1, 0)):
+                bond_src.append(offset + i)
+                bond_dst.append(offset + i + 1)
+            offset += seq_len
+
+        if bond_src:
+            bond_src = torch.tensor(bond_src, device=node_features.device)
+            bond_dst = torch.tensor(bond_dst, device=node_features.device)
+            bond_features = torch.cat(
+                [node_features[bond_src], node_features[bond_dst]], dim=-1
+            )
+            bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
+        else:
+            bond_logits_flat = torch.empty(0, device=node_features.device)
+
+        # 还原为 [batch_size, max_bonds]
+        max_bonds = max(max(seq_lens) - 1, 0) if seq_lens else 0
+        predictions = torch.zeros(batch_size, max_bonds, device=node_features.device)
+        cursor = 0
+        for i, seq_len in enumerate(seq_lens):
+            bond_len = max(seq_len - 1, 0)
+            if bond_len > 0:
+                predictions[i, :bond_len] = bond_logits_flat[cursor:cursor + bond_len]
+                cursor += bond_len
+
         return predictions
     
     def get_attention_weights(self, batch_data: Dict) -> List[torch.Tensor]:
@@ -471,7 +506,7 @@ class GraphTransformer(nn.Module):
         
         # 边特征编码
         edge_features = self.edge_encoder(
-            batch_data['edge_indices'],
+            batch_data['edge_index'],
             batch_data['edge_types'],
             batch_data['edge_distances']
         )
@@ -483,9 +518,9 @@ class GraphTransformer(nn.Module):
         # 通过注意力层收集权重
         for gat_layer in self.gat_layers:
             weights = gat_layer.get_attention_weights(
-                node_features, batch_data['edge_indices']
+                node_features, batch_data['edge_index']
             )
             attention_weights.append(weights)
-            node_features = gat_layer(node_features, batch_data['edge_indices'])
+            node_features = gat_layer(node_features, batch_data['edge_index'])
         
         return attention_weights

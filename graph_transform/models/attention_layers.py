@@ -109,7 +109,7 @@ class GraphAttentionLayer(nn.Module):
         x_ij = torch.cat([x_i, x_j], dim=-1)  # [num_edges, num_heads, 2*head_dim]
         
         # 计算注意力分数
-        e = torch.einsum('ehi,hih->eh', x_ij, self.a)  # [num_edges, num_heads]
+        e = torch.einsum('ehd,hdk->ehk', x_ij, self.a).squeeze(-1)  # [num_edges, num_heads]
         
         # 如果有边特征，加上边特征的贡献
         if edge_attr is not None:

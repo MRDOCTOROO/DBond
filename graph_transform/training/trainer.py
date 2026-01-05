@@ -208,10 +208,12 @@ class Trainer:
             with torch.cuda.amp.autocast():
                 predictions = self.model(batch_data)
                 targets = batch_data['labels']
+                targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
                 loss = self.criterion(predictions, targets)
         else:
             predictions = self.model(batch_data)
             targets = batch_data['labels']
+            targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
             loss = self.criterion(predictions, targets)
         
         # 更新训练指标
@@ -253,6 +255,25 @@ class Trainer:
                 device_batch[key] = value
         
         return device_batch
+
+    def _apply_label_mask(self, batch_data: Dict[str, Any],
+                          targets: torch.Tensor,
+                          predictions: torch.Tensor) -> tuple:
+        """应用标签掩码，过滤padding位置"""
+        mask = batch_data.get('label_mask')
+        if mask is None:
+            return targets, predictions
+
+        mask = mask.bool()
+        masked_preds = predictions[mask]
+        masked_targets = targets[mask]
+
+        if masked_preds.dim() == 1:
+            masked_preds = masked_preds.unsqueeze(1)
+        if masked_targets.dim() == 1:
+            masked_targets = masked_targets.unsqueeze(1)
+
+        return masked_targets, masked_preds
     
     def save_checkpoint(self, filepath: str, epoch: int, metrics: Dict[str, float], is_best: bool = False):
         """

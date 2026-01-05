@@ -20,8 +20,8 @@ model:
   
   # 序列配置
   max_seq_len: 100
-  alphabet: "ACDEFGHIKLMNPQRSTVWY"
-  pad_char: "U"
+  alphabet: "#ABCDEFGHIKLMNOPQRSTVWXYZ"
+  pad_char: "#"
   
   # 特征维度配置
   aa_embedding_dim: 64
@@ -37,7 +37,7 @@ model:
   max_distance: 10
   
   # 输出配置
-  num_classes: 24  # 根据数据格式中的标签范围设置
+  num_classes: 1  # 键级别断裂为二分类
   
   # 其他配置
   aggregator_type: "mean"

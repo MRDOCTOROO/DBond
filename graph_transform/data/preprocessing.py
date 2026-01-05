@@ -51,14 +51,13 @@ class SequencePreprocessor:
             List[int]: 编码后的序列
         """
         char_to_idx = {char: idx + 1 for idx, char in enumerate(self.alphabet)}
-        char_to_idx['U'] = 0  # padding字符
+        char_to_idx[self.config.pad_char] = 0  # padding字符
         
         encoded = []
         for char in sequence:
-            if char in char_to_idx:
-                encoded.append(char_to_idx[char])
-            else:
-                encoded.append(0)  # 未知字符用padding
+            if char not in char_to_idx:
+                raise ValueError(f"Unknown amino acid: {char}")
+            encoded.append(char_to_idx[char])
         
         return encoded
     
@@ -73,14 +72,14 @@ class SequencePreprocessor:
             str: 解码后的序列
         """
         idx_to_char = {idx + 1: char for idx, char in enumerate(self.alphabet)}
-        idx_to_char[0] = 'U'  # padding字符
+        idx_to_char[0] = self.config.pad_char  # padding字符
         
         sequence = ''
         for idx in encoded_sequence:
             if idx in idx_to_char:
                 sequence += idx_to_char[idx]
             else:
-                sequence += 'U'  # 未知索引
+                raise ValueError(f"Unknown amino acid index: {idx}")
         
         return sequence
     

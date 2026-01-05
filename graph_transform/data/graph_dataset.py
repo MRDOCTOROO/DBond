@@ -111,7 +111,6 @@ class GraphDataset(Dataset):
         # 组合数据
         sample = {
             'sequence': sequence,
-            'node_features': graph_data['node_features'],
             'edge_index': graph_data['edge_index'],
             'edge_attr': graph_data['edge_attr'],
             'edge_types': graph_data['edge_types'],
@@ -137,20 +136,19 @@ class GraphDataset(Dataset):
         return labels
     
     def _prepare_labels(self, labels: List[int], seq_len: int) -> torch.Tensor:
-        """准备多标签张量"""
-        # 创建多标签二进制矩阵 [seq_len, num_classes]
-        multi_hot = torch.zeros(seq_len, self.config.num_classes)
-        
-        # 处理每个位置的标签
-        for i, label in enumerate(labels):
-            if i >= seq_len:
-                break
-            if 0 <= label < self.config.num_classes:
-                multi_hot[i, label] = 1
-        
-        # 转换为float类型
-        label_tensor = multi_hot.float()
-        
+        """准备断裂位置标签张量（序列相邻键）"""
+        bond_len = max(seq_len - 1, 0)
+        label_values = labels
+
+        # 有些数据包含seq_len长度，取前seq_len-1作为键标签
+        if len(label_values) >= seq_len:
+            label_values = label_values[:bond_len]
+
+        # 过短则补0
+        if len(label_values) < bond_len:
+            label_values = label_values + [0] * (bond_len - len(label_values))
+
+        label_tensor = torch.tensor(label_values[:bond_len], dtype=torch.float32)
         return label_tensor
     
     def get_statistics(self) -> Dict[str, Any]:
@@ -222,7 +220,6 @@ class GraphDataLoader:
         """默认批处理函数"""
         # 收集所有数据
         sequences = [item['sequence'] for item in batch]
-        node_features_list = [item['node_features'] for item in batch]
         edge_index_list = [item['edge_index'] for item in batch]
         edge_attr_list = [item['edge_attr'] for item in batch]
         edge_types_list = [item['edge_types'] for item in batch]
@@ -236,20 +233,8 @@ class GraphDataLoader:
         fbrs = [item['fbr'] for item in batch]
         seq_lens = [item['seq_len'] for item in batch]
         
-        # 批处理节点特征
         batch_size = len(batch)
         max_seq_len = max(seq_lens)
-        
-        # 填充节点特征
-        padded_node_features = []
-        for node_features in node_features_list:
-            if node_features.size(0) < max_seq_len:
-                padding = torch.zeros(max_seq_len - node_features.size(0), node_features.size(1))
-                padded_node_features.append(torch.cat([node_features, padding], dim=0))
-            else:
-                padded_node_features.append(node_features[:max_seq_len])
-        
-        batch_node_features = torch.stack(padded_node_features, dim=0)
         
         # 批处理边索引（需要偏移）
         batch_edge_indices = []
@@ -276,35 +261,36 @@ class GraphDataLoader:
         batch_edge_types = torch.cat(batch_edge_types, dim=0)
         batch_edge_distances = torch.cat(batch_edge_distances, dim=0)
         
-        # 填充标签
-        if labels_list[0].dim() == 1:  # 单标签
-            padded_labels = []
-            for labels in labels_list:
-                if labels.size(0) < max_seq_len:
-                    padding = torch.zeros(max_seq_len - labels.size(0))
-                    padded_labels.append(torch.cat([labels, padding], dim=0))
-                else:
-                    padded_labels.append(labels[:max_seq_len])
-            batch_labels = torch.stack(padded_labels, dim=0)
-        else:  # 多标签
-            padded_labels = []
-            for labels in labels_list:
-                if labels.size(0) < max_seq_len:
-                    padding = torch.zeros(max_seq_len - labels.size(0), labels.size(1))
-                    padded_labels.append(torch.cat([labels, padding], dim=0))
-                else:
-                    padded_labels.append(labels[:max_seq_len])
-            batch_labels = torch.stack(padded_labels, dim=0)
+        # 填充标签（键级别，长度=seq_len-1）
+        max_bonds = max(max_seq_len - 1, 0)
+        padded_labels = []
+        label_masks = []
+        for labels, seq_len in zip(labels_list, seq_lens):
+            bond_len = max(seq_len - 1, 0)
+            if labels.size(0) < max_bonds:
+                padding = torch.zeros(max_bonds - labels.size(0))
+                padded = torch.cat([labels, padding], dim=0)
+            else:
+                padded = labels[:max_bonds]
+            padded_labels.append(padded)
+
+            mask = torch.zeros(max_bonds)
+            if bond_len > 0:
+                mask[:bond_len] = 1.0
+            label_masks.append(mask)
+
+        batch_labels = torch.stack(padded_labels, dim=0)
+        batch_label_masks = torch.stack(label_masks, dim=0)
         
         # 创建批次数据
         batch_data = {
             'sequences': sequences,
-            'node_features': batch_node_features,
             'edge_index': batch_edge_index,
             'edge_attr': batch_edge_attr,
             'edge_types': batch_edge_types,
             'edge_distances': batch_edge_distances,
             'labels': batch_labels,
+            'label_mask': batch_label_masks,
             'charges': torch.tensor(charges, dtype=torch.float32),
             'pep_masses': torch.tensor(pep_masses, dtype=torch.float32),
             'nces': torch.tensor(nces, dtype=torch.float32),

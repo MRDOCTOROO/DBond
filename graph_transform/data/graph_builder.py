@@ -104,13 +104,12 @@ class GraphBuilder:
                     # 确定边类型
                     if distance <= 2:
                         edge_type = 1  # 近距离
-                    elif distance <= 5:
-                        edge_type = 2  # 中距离
                     else:
-                        edge_type = 3  # 远距离
+                        edge_type = 2  # 中距离及以上
                     
                     edge_types.extend([edge_type, edge_type])
-                    edge_distances.extend([int(distance), int(distance)])
+                    clipped_distance = min(int(distance), self.max_distance)
+                    edge_distances.extend([clipped_distance, clipped_distance])
         
         edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
         edge_type_tensor = torch.tensor(edge_types, dtype=torch.long)
