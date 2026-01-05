@@ -51,10 +51,13 @@ class Trainer:
         self.training_config = self.config.get('training', {})
         self.gradient_clip_norm = self.training_config.get('gradient_clip_norm', 1.0)
         self.use_amp = self.config.get('device', {}).get('use_amp', False)
+        if self.device.type != 'cuda':
+            self.use_amp = False
+        self.amp_device_type = 'cuda' if self.device.type == 'cuda' else 'cpu'
         
         # 混合精度训练
         if self.use_amp:
-            self.scaler = torch.cuda.amp.GradScaler()
+            self.scaler = torch.amp.GradScaler(self.amp_device_type, enabled=True)
         
         # 指标跟踪
         self.metrics_calculator = MultiLabelMetrics(self.config.get('evaluation', {}))
@@ -205,7 +208,7 @@ class Trainer:
     def _forward_pass(self, batch_data: Dict[str, torch.Tensor]) -> torch.Tensor:
         """前向传播"""
         if self.use_amp:
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast(self.amp_device_type, enabled=True):
                 predictions = self.model(batch_data)
                 targets = batch_data['labels']
                 targets, predictions = self._apply_label_mask(batch_data, targets, predictions)

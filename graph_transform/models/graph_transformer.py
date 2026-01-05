@@ -90,8 +90,9 @@ class NodeEncoder(nn.Module):
         Returns:
             torch.Tensor: 节点特征张量 [batch_size, seq_len, hidden_dim]
         """
+        device = self._get_batch_device(batch_data)
         # 氨基酸序列编码
-        seq_tokens = self._encode_sequences(batch_data['sequences'])
+        seq_tokens = self._encode_sequences(batch_data['sequences'], device)
         aa_features = self.aa_embedding(seq_tokens)
         
         # 位置编码
@@ -102,11 +103,11 @@ class NodeEncoder(nn.Module):
         pos_features = self.position_embedding(positions)
         
         # 物理化学性质编码
-        physico_features = self._encode_physicochemical(batch_data)
+        physico_features = self._encode_physicochemical(batch_data, device)
         physico_features = self.physicochemical_encoder(physico_features)
         
         # 环境变量编码
-        env_features = self._encode_environmental(batch_data)
+        env_features = self._encode_environmental(batch_data, device)
         env_features = self.env_encoder(env_features)
         
         # 扩展环境特征到每个位置
@@ -122,7 +123,7 @@ class NodeEncoder(nn.Module):
         
         return node_features
     
-    def _encode_sequences(self, sequences: List[str]) -> torch.Tensor:
+    def _encode_sequences(self, sequences: List[str], device: torch.device) -> torch.Tensor:
         """将氨基酸序列编码为token序列"""
         batch_size = len(sequences)
         max_len = max(len(seq) for seq in sequences)
@@ -132,7 +133,7 @@ class NodeEncoder(nn.Module):
         char_to_idx[self.pad_char] = 0
         
         # 编码序列（与dbond一致：未知字符直接报错）
-        encoded_seqs = torch.zeros(batch_size, max_len, dtype=torch.long)
+        encoded_seqs = torch.zeros(batch_size, max_len, dtype=torch.long, device=device)
         for i, seq in enumerate(sequences):
             for j, char in enumerate(seq):
                 if char not in char_to_idx:
@@ -141,7 +142,7 @@ class NodeEncoder(nn.Module):
         
         return encoded_seqs
     
-    def _encode_physicochemical(self, batch_data: Dict) -> torch.Tensor:
+    def _encode_physicochemical(self, batch_data: Dict, device: torch.device) -> torch.Tensor:
         """编码物理化学性质"""
         batch_size = len(batch_data['sequences'])
         max_len = max(len(seq) for seq in batch_data['sequences'])
@@ -150,32 +151,36 @@ class NodeEncoder(nn.Module):
         aa_properties = self._get_aa_properties()
         
         # 创建物理化学特征张量
-        features = torch.zeros(batch_size, max_len, len(aa_properties['A']))
+        features = torch.zeros(batch_size, max_len, len(aa_properties['A']), device=device)
         
         for i, seq in enumerate(batch_data['sequences']):
             for j, aa in enumerate(seq):
                 if aa in aa_properties:
-                    features[i, j] = torch.tensor(aa_properties[aa])
+                    features[i, j] = torch.tensor(aa_properties[aa], device=device)
                 else:
-                    features[i, j] = torch.zeros(len(aa_properties['A']))
+                    features[i, j] = torch.zeros(len(aa_properties['A']), device=device)
         
         return features
     
-    def _encode_environmental(self, batch_data: Dict) -> torch.Tensor:
+    def _encode_environmental(self, batch_data: Dict, device: torch.device) -> torch.Tensor:
         """编码环境变量"""
-        # 提取环境变量
-        env_vars = []
-        for i in range(len(batch_data['sequences'])):
-            env_vector = [
-                batch_data['charges'][i],
-                batch_data['pep_masses'][i],
-                batch_data['nces'][i],
-                batch_data['rts'][i],
-                batch_data['fbrs'][i]
-            ]
-            env_vars.append(env_vector)
-        
-        return torch.tensor(env_vars, dtype=torch.float32)
+        return torch.stack(
+            [
+                batch_data['charges'],
+                batch_data['pep_masses'],
+                batch_data['nces'],
+                batch_data['rts'],
+                batch_data['fbrs']
+            ],
+            dim=1
+        ).to(device=device, dtype=torch.float32)
+
+    def _get_batch_device(self, batch_data: Dict) -> torch.device:
+        """从批次数据中推断设备"""
+        for value in batch_data.values():
+            if torch.is_tensor(value):
+                return value.device
+        return self.aa_embedding.weight.device
     
     def _get_aa_properties(self) -> Dict[str, List[float]]:
         """获取氨基酸物理化学性质"""

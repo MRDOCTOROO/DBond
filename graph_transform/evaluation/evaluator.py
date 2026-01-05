@@ -40,6 +40,9 @@ class Evaluator:
         # 评估配置
         self.eval_config = self.config.get('evaluation', {})
         self.use_amp = self.config.get('device', {}).get('use_amp', False)
+        if self.device.type != 'cuda':
+            self.use_amp = False
+        self.amp_device_type = 'cuda' if self.device.type == 'cuda' else 'cpu'
         
         # 指标计算器
         self.metrics_calculator = MultiLabelMetrics(self.eval_config)
@@ -247,7 +250,7 @@ class Evaluator:
                 batch_data = self._move_to_device(batch_data)
                 
                 if self.use_amp:
-                    with torch.cuda.amp.autocast():
+                    with torch.amp.autocast(self.amp_device_type, enabled=True):
                         predictions = self.model(batch_data)
                 else:
                     predictions = self.model(batch_data)
