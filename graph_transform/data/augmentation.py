@@ -11,13 +11,23 @@ from typing import Dict, List, Optional, Any, Tuple
 import re
 
 
+def _get_config_value(config: Any, key: str, default: Any) -> Any:
+    if isinstance(config, dict):
+        return config.get(key, default)
+    if hasattr(config, "get"):
+        return config.get(key, default)
+    if hasattr(config, key):
+        return getattr(config, key)
+    return default
+
+
 class SequenceAugmentation:
     """序列数据增强器"""
     
     def __init__(self, config):
         self.config = config
-        self.augmentation_prob = config.get('augmentation_prob', 0.3)
-        self.max_trials = config.get('max_augmentation_trials', 3)
+        self.augmentation_prob = _get_config_value(config, 'augmentation_prob', 0.3)
+        self.max_trials = _get_config_value(config, 'max_augmentation_trials', 3)
         
         # 氨基酸替代矩阵
         self.amino_acid_groups = {
@@ -171,7 +181,7 @@ class GraphAugmentation:
     
     def __init__(self, config):
         self.config = config
-        self.augmentation_prob = config.get('augmentation_prob', 0.3)
+        self.augmentation_prob = _get_config_value(config, 'augmentation_prob', 0.3)
     
     def augment_edges(self, edge_index: torch.Tensor, edge_attr: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
