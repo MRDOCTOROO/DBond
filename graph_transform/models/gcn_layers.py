@@ -102,8 +102,8 @@ class GraphConvLayer(nn.Module):
         # 度归一化
         edge_attr = edge_attr.to(dtype=x.dtype)
         deg = torch.zeros(x.size(0), device=x.device, dtype=x.dtype)
-        edge_weights = torch.sum(edge_attr, dim=1, keepdim=True)
-        deg.index_add_(0, col, torch.abs(edge_weights.squeeze()))
+        edge_weights = torch.sum(edge_attr, dim=1, keepdim=True).to(dtype=x.dtype)
+        deg.index_add_(0, col, torch.abs(edge_weights.squeeze()).to(dtype=x.dtype))
         deg_inv_sqrt = deg.pow(-0.5)
         deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
         
