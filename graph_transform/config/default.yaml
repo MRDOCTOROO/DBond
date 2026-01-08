@@ -75,14 +75,14 @@ training:
 # 数据配置
 data:
   # 数据路径
-  train_csv_path: "dataset/dbond_m.train.shuffle.csv"
-  test_csv_path: "dataset/dbond_m.test.csv"
+  train_csv_path: "dataset/dataset_private/1222.train.fbr.shuffle.multi.csv"
+  test_csv_path: "dataset/dataset_private/1222.test.fbr.multi.csv"
   val_csv_path: null  # 如果为null，从训练集分割
   
   # 数据处理配置
   max_seq_len: 100
   graph_strategy: "distance"  # "sequence", "distance", "hybrid", "knowledge"
-  augmentation: true
+  augmentation: false  # 是否使用数据增强
   cache_graphs: false
   cache_dir: "cache/graph_data"
   
