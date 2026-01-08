@@ -410,6 +410,14 @@ def main():
     # 训练循环
     logger.info("Starting training loop...")
     training_config = config['training']
+    if args.resume:
+        training_config['checkpoint_dir'] = os.path.dirname(args.resume)
+    else:
+        base_checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints/graph_transform')
+        run_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+        training_config['checkpoint_dir'] = os.path.join(base_checkpoint_dir, run_id)
+    os.makedirs(training_config['checkpoint_dir'], exist_ok=True)
+    logger.info(f"Checkpoint dir: {training_config['checkpoint_dir']}")
     epochs = training_config['epochs']
     
     for epoch in range(start_epoch, epochs):
