@@ -48,7 +48,7 @@ model:
 training:
   # 基础训练参数
   epochs: 100
-  batch_size: 32
+  batch_size: 64
   learning_rate: 0.001
   weight_decay: 0.0001
   gradient_clip_norm: 1.0
@@ -83,7 +83,7 @@ data:
   max_seq_len: 100
   graph_strategy: "distance"  # "sequence", "distance", "hybrid", "knowledge"
   augmentation: false  # 是否使用数据增强
-  cache_graphs: false
+  cache_graphs: true #false 会让每个 epoch 都在构图/读 CSV，true启用缓存
   cache_dir: "cache/graph_data"
   
   # 数据增强配置
@@ -91,7 +91,7 @@ data:
   max_augmentation_trials: 3
   
   # 批处理配置
-  num_workers: 4
+  num_workers: 12 #最低尝试的4线程
   pin_memory: true
   drop_last: true
   
@@ -194,10 +194,10 @@ experiment:
   
   # 随机种子
   seed: 42
-  deterministic: true
+  deterministic: false #不需要严格复现，改成 false
   
   # 可重现性
-  benchmark: false
+  benchmark: true
 
 # 高级配置
 advanced:
@@ -235,7 +235,7 @@ performance:
   use_torch_compile: false
   
   # I/O优化
-  prefetch_factor: 2
+  prefetch_factor: 4
   persistent_workers: true
 
 # 调试配置

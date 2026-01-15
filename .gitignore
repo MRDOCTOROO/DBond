@@ -35,7 +35,7 @@ PBCLA/__pycache__/**
 !dataset/dbond_m.train.shuffle.csv
 !dataset/dbond_s.test.csv
 !dataset/dbond_s.train.shuffle.csv
-
+#!dataset/说明.md
 # 最后指定要保留的具体文件
 !result/pred/dbond_m/multi/default.pred.csv
 !result/pred/dbond_s/multi/default.pred.csv

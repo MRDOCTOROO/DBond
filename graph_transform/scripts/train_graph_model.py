@@ -27,7 +27,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import GraphTransformer
 from models.utils import ModelConfig, CheckpointManager, LearningRateScheduler
-from data import GraphDataset, GraphDataLoader
+from data import GraphDataset, GraphDataLoader, CachedGraphDataset
 from training import Trainer, MultiLabelLoss
 from evaluation import Evaluator, MultiLabelMetrics
 
@@ -122,27 +122,41 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
     """创建数据集"""
     data_config = config['data']
     model_config = ModelConfig(config['model'])
+
+    dataset_cls = CachedGraphDataset if data_config.get('cache_graphs', False) else GraphDataset
     
     # 训练数据集
-    train_dataset = GraphDataset(
-        csv_path=data_config['train_csv_path'],
-        config=model_config,
-        max_seq_len=data_config['max_seq_len'],
-        graph_strategy=data_config['graph_strategy'],
-        augmentation=data_config.get('augmentation', False),
-        split='train'
-    )
+    train_kwargs = {
+        'csv_path': data_config['train_csv_path'],
+        'config': model_config,
+        'max_seq_len': data_config['max_seq_len'],
+        'graph_strategy': data_config['graph_strategy'],
+        'augmentation': data_config.get('augmentation', False),
+        'split': 'train'
+    }
+    if dataset_cls is CachedGraphDataset:
+        train_kwargs.update({
+            'cache_dir': data_config.get('cache_dir', 'cache/graph_data'),
+            'rebuild_cache': data_config.get('rebuild_cache', False),
+        })
+    train_dataset = dataset_cls(**train_kwargs)
     
     # 验证数据集
     if data_config.get('val_csv_path'):
-        val_dataset = GraphDataset(
-            csv_path=data_config['val_csv_path'],
-            config=model_config,
-            max_seq_len=data_config['max_seq_len'],
-            graph_strategy=data_config['graph_strategy'],
-            augmentation=False,
-            split='val'
-        )
+        val_kwargs = {
+            'csv_path': data_config['val_csv_path'],
+            'config': model_config,
+            'max_seq_len': data_config['max_seq_len'],
+            'graph_strategy': data_config['graph_strategy'],
+            'augmentation': False,
+            'split': 'val'
+        }
+        if dataset_cls is CachedGraphDataset:
+            val_kwargs.update({
+                'cache_dir': data_config.get('cache_dir', 'cache/graph_data'),
+                'rebuild_cache': data_config.get('rebuild_cache', False),
+            })
+        val_dataset = dataset_cls(**val_kwargs)
     else:
         # 从训练集分割验证集
         val_split = data_config.get('validation_split', 0.2)
@@ -156,14 +170,20 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
     # 测试数据集
     test_dataset = None
     if data_config.get('test_csv_path'):
-        test_dataset = GraphDataset(
-            csv_path=data_config['test_csv_path'],
-            config=model_config,
-            max_seq_len=data_config['max_seq_len'],
-            graph_strategy=data_config['graph_strategy'],
-            augmentation=False,
-            split='test'
-        )
+        test_kwargs = {
+            'csv_path': data_config['test_csv_path'],
+            'config': model_config,
+            'max_seq_len': data_config['max_seq_len'],
+            'graph_strategy': data_config['graph_strategy'],
+            'augmentation': False,
+            'split': 'test'
+        }
+        if dataset_cls is CachedGraphDataset:
+            test_kwargs.update({
+                'cache_dir': data_config.get('cache_dir', 'cache/graph_data'),
+                'rebuild_cache': data_config.get('rebuild_cache', False),
+            })
+        test_dataset = dataset_cls(**test_kwargs)
     
     # 打印数据集统计信息
     logger.info("Dataset Statistics:")

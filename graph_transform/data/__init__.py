@@ -5,7 +5,7 @@
 预处理工具和数据增强功能。
 """
 
-from .graph_dataset import GraphDataset, GraphDataLoader
+from .graph_dataset import GraphDataset, GraphDataLoader, CachedGraphDataset
 from .graph_builder import GraphBuilder, SequenceGraphBuilder
 from .preprocessing import DataPreprocessor, SequencePreprocessor
 from .augmentation import GraphAugmentation, SequenceAugmentation
@@ -13,6 +13,7 @@ from .augmentation import GraphAugmentation, SequenceAugmentation
 __all__ = [
     'GraphDataset',
     'GraphDataLoader', 
+    'CachedGraphDataset',
     'GraphBuilder',
     'SequenceGraphBuilder',
     'DataPreprocessor',

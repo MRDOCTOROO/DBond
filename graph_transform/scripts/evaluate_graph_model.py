@@ -21,7 +21,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import GraphTransformer
 from models.utils import ModelConfig, CheckpointManager
-from data import GraphDataset, GraphDataLoader
+from data import GraphDataset, GraphDataLoader, CachedGraphDataset
 from evaluation import Evaluator
 
 
@@ -172,14 +172,21 @@ def main():
     CheckpointManager.load_checkpoint(args.checkpoint, model=model, device=device)
 
     data_config = config["data"]
-    test_dataset = GraphDataset(
-        csv_path=data_config["test_csv_path"],
-        config=model_config,
-        max_seq_len=data_config["max_seq_len"],
-        graph_strategy=data_config["graph_strategy"],
-        augmentation=False,
-        split="test",
-    )
+    dataset_cls = CachedGraphDataset if data_config.get("cache_graphs", False) else GraphDataset
+    test_kwargs = {
+        "csv_path": data_config["test_csv_path"],
+        "config": model_config,
+        "max_seq_len": data_config["max_seq_len"],
+        "graph_strategy": data_config["graph_strategy"],
+        "augmentation": False,
+        "split": "test",
+    }
+    if dataset_cls is CachedGraphDataset:
+        test_kwargs.update({
+            "cache_dir": data_config.get("cache_dir", "cache/graph_data"),
+            "rebuild_cache": data_config.get("rebuild_cache", False),
+        })
+    test_dataset = dataset_cls(**test_kwargs)
     test_loader = GraphDataLoader(
         dataset=test_dataset,
         batch_size=config["training"]["batch_size"],

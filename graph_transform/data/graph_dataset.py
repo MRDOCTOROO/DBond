@@ -416,7 +416,6 @@ class CachedGraphDataset(GraphDataset):
         for idx in range(len(self.data)):
             sample = super().__getitem__(idx)
             self.cached_data[idx] = {
-                'node_features': sample['node_features'],
                 'edge_index': sample['edge_index'],
                 'edge_attr': sample['edge_attr'],
                 'edge_types': sample['edge_types'],
@@ -456,7 +455,6 @@ class CachedGraphDataset(GraphDataset):
         # 组合数据
         sample = {
             'sequence': sequence,
-            'node_features': cached_graph['node_features'],
             'edge_index': cached_graph['edge_index'],
             'edge_attr': cached_graph['edge_attr'],
             'edge_types': cached_graph['edge_types'],

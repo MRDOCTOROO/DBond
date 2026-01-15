@@ -239,10 +239,20 @@ class EdgeEncoder(nn.Module):
             nn.ReLU(),
             nn.Dropout(config.dropout)
         )
+
+        # 物理环境等原始边特征编码（延迟推断输入维度）
+        self.edge_attr_encoder = nn.LazyLinear(config.hidden_dim)
+        self.edge_attr_norm = nn.LayerNorm(config.hidden_dim)
+        self.edge_attr_fuse = nn.Sequential(
+            nn.Linear(config.hidden_dim * 2, config.hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(config.dropout)
+        )
     
     def forward(self, edge_indices: torch.Tensor, 
                 edge_types: torch.Tensor,
-                distances: torch.Tensor) -> torch.Tensor:
+                distances: torch.Tensor,
+                edge_attr: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         前向传播
         
@@ -250,6 +260,7 @@ class EdgeEncoder(nn.Module):
             edge_indices: 边索引 [2, num_edges]
             edge_types: 边类型 [num_edges]
             distances: 距离信息 [num_edges]
+            edge_attr: 原始边特征 [num_edges, edge_attr_dim] (可选)
             
         Returns:
             torch.Tensor: 边特征 [num_edges, hidden_dim]
@@ -259,6 +270,11 @@ class EdgeEncoder(nn.Module):
         
         combined_features = torch.cat([type_features, distance_features], dim=-1)
         edge_features = self.edge_encoder(combined_features)
+
+        if edge_attr is not None:
+            attr_features = self.edge_attr_encoder(edge_attr.to(dtype=edge_features.dtype))
+            attr_features = self.edge_attr_norm(attr_features)
+            edge_features = self.edge_attr_fuse(torch.cat([edge_features, attr_features], dim=-1))
         
         return edge_features
 
@@ -437,7 +453,8 @@ class GraphTransformer(nn.Module):
         edge_features = self.edge_encoder(
             batch_data['edge_index'],
             batch_data['edge_types'],
-            batch_data['edge_distances']
+            batch_data['edge_distances'],
+            batch_data.get('edge_attr')
         )
         
         # 根据真实序列长度裁剪节点特征

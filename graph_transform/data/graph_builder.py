@@ -26,6 +26,7 @@ class GraphBuilder:
         self.alphabet = config.alphabet
         self.max_distance = getattr(config, 'max_distance', 10)
         self.edge_types = getattr(config, 'edge_types', ['sequence', 'distance', 'functional'])
+        self._edge_cache = {}
     
     def build_graph(self, 
                    sequence: str,
@@ -54,27 +55,9 @@ class GraphBuilder:
     def _build_sequence_graph(self, sequence: str, env_vars: Dict[str, float]) -> Dict[str, torch.Tensor]:
         """构建基于序列连接的图"""
         seq_len = len(sequence)
-        
-        # 创建序列边（相邻氨基酸）
-        edge_indices = []
-        edge_types = []
-        edge_distances = []
-        
-        for i in range(seq_len - 1):
-            # 前向连接
-            edge_indices.append([i, i + 1])
-            edge_indices.append([i + 1, i])  # 反向连接
-            
-            edge_types.extend([0, 0])  # 序列边类型
-            edge_distances.extend([1, 1])  # 相邻距离
-        
-        edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
-        edge_type_tensor = torch.tensor(edge_types, dtype=torch.long)
-        edge_distance_tensor = torch.tensor(edge_distances, dtype=torch.long)
-        
-        # 边特征
+        edge_index, edge_type_tensor, edge_distance_tensor = self._get_or_build_edges(seq_len, 'sequence')
         edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, env_vars)
-        
+
         return {
             'edge_index': edge_index,
             'edge_attr': edge_attr,
@@ -85,39 +68,9 @@ class GraphBuilder:
     def _build_distance_graph(self, sequence: str, env_vars: Dict[str, float]) -> Dict[str, torch.Tensor]:
         """构建基于距离的图"""
         seq_len = len(sequence)
-        
-        # 预测距离矩阵（简化版本）
-        distance_matrix = self._predict_distance_matrix(sequence)
-        
-        edge_indices = []
-        edge_types = []
-        edge_distances = []
-        
-        for i in range(seq_len):
-            for j in range(i + 1, seq_len):
-                distance = distance_matrix[i, j]
-                if distance <= self.max_distance:
-                    # 添加边
-                    edge_indices.append([i, j])
-                    edge_indices.append([j, i])
-                    
-                    # 确定边类型
-                    if distance <= 2:
-                        edge_type = 1  # 近距离
-                    else:
-                        edge_type = 2  # 中距离及以上
-                    
-                    edge_types.extend([edge_type, edge_type])
-                    clipped_distance = min(int(distance), self.max_distance)
-                    edge_distances.extend([clipped_distance, clipped_distance])
-        
-        edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
-        edge_type_tensor = torch.tensor(edge_types, dtype=torch.long)
-        edge_distance_tensor = torch.tensor(edge_distances, dtype=torch.long)
-        
-        # 边特征
+        edge_index, edge_type_tensor, edge_distance_tensor = self._get_or_build_edges(seq_len, 'distance')
         edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, env_vars)
-        
+
         return {
             'edge_index': edge_index,
             'edge_attr': edge_attr,
@@ -127,31 +80,128 @@ class GraphBuilder:
     
     def _build_hybrid_graph(self, sequence: str, env_vars: Dict[str, float]) -> Dict[str, torch.Tensor]:
         """构建混合图"""
-        # 组合序列图和距离图
-        seq_graph = self._build_sequence_graph(sequence, env_vars)
-        dist_graph = self._build_distance_graph(sequence, env_vars)
-        
-        # 合并边
-        all_edges = torch.cat([seq_graph['edge_index'], dist_graph['edge_index']], dim=1)
-        all_types = torch.cat([seq_graph['edge_types'], dist_graph['edge_types']])
-        all_distances = torch.cat([seq_graph['edge_distances'], dist_graph['edge_distances']])
-        
-        # 去重边
-        unique_edges, unique_indices = torch.unique(all_edges, dim=1, return_inverse=True)
-        
-        # 合并边特征
-        edge_attr = self._create_edge_features(all_types, all_distances, env_vars)
-        
-        return {
-            'edge_index': unique_edges,
-            'edge_attr': edge_attr[unique_indices],
-            'edge_types': all_types[unique_indices],
-            'edge_distances': all_distances[unique_indices]
-        }
-    
-    def _predict_distance_matrix(self, sequence: str) -> np.ndarray:
-        """预测氨基酸距离矩阵"""
         seq_len = len(sequence)
+        edge_index, edge_type_tensor, edge_distance_tensor = self._get_or_build_edges(seq_len, 'hybrid')
+        edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, env_vars)
+
+        return {
+            'edge_index': edge_index,
+            'edge_attr': edge_attr,
+            'edge_types': edge_type_tensor,
+            'edge_distances': edge_distance_tensor
+        }
+
+    def _get_or_build_edges(self, seq_len: int, strategy: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        key = (strategy, seq_len, self.max_distance)
+        cached = self._edge_cache.get(key)
+        if cached is not None:
+            return cached
+
+        if strategy == 'sequence':
+            edge_index, edge_types, edge_distances = self._build_sequence_edges(seq_len)
+        elif strategy == 'distance':
+            edge_index, edge_types, edge_distances = self._build_distance_edges(seq_len)
+        elif strategy == 'hybrid':
+            edge_index, edge_types, edge_distances = self._build_hybrid_edges(seq_len)
+        else:
+            raise ValueError(f"Unknown graph building strategy: {strategy}")
+
+        self._edge_cache[key] = (edge_index, edge_types, edge_distances)
+        return edge_index, edge_types, edge_distances
+
+    def _build_sequence_edges(self, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        edge_indices = []
+        edge_types = []
+        edge_distances = []
+
+        for i in range(seq_len - 1):
+            edge_indices.append([i, i + 1])
+            edge_indices.append([i + 1, i])
+            edge_types.extend([0, 0])
+            edge_distances.extend([1, 1])
+
+        if edge_indices:
+            edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+            edge_type_tensor = torch.tensor(edge_types, dtype=torch.long)
+            edge_distance_tensor = torch.tensor(edge_distances, dtype=torch.long)
+        else:
+            edge_index = torch.empty((2, 0), dtype=torch.long)
+            edge_type_tensor = torch.empty((0,), dtype=torch.long)
+            edge_distance_tensor = torch.empty((0,), dtype=torch.long)
+
+        return edge_index, edge_type_tensor, edge_distance_tensor
+
+    def _build_distance_edges(self, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        distance_matrix = self._predict_distance_matrix(seq_len)
+
+        edge_indices = []
+        edge_types = []
+        edge_distances = []
+
+        for i in range(seq_len):
+            for j in range(i + 1, seq_len):
+                distance = distance_matrix[i, j]
+                if distance <= self.max_distance:
+                    edge_indices.append([i, j])
+                    edge_indices.append([j, i])
+
+                    if distance <= 2:
+                        edge_type = 1
+                    else:
+                        edge_type = 2
+
+                    edge_types.extend([edge_type, edge_type])
+                    clipped_distance = min(int(distance), self.max_distance)
+                    edge_distances.extend([clipped_distance, clipped_distance])
+
+        if edge_indices:
+            edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+            edge_type_tensor = torch.tensor(edge_types, dtype=torch.long)
+            edge_distance_tensor = torch.tensor(edge_distances, dtype=torch.long)
+        else:
+            edge_index = torch.empty((2, 0), dtype=torch.long)
+            edge_type_tensor = torch.empty((0,), dtype=torch.long)
+            edge_distance_tensor = torch.empty((0,), dtype=torch.long)
+
+        return edge_index, edge_type_tensor, edge_distance_tensor
+
+    def _build_hybrid_edges(self, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        seq_edge_index, seq_edge_types, seq_edge_distances = self._build_sequence_edges(seq_len)
+        dist_edge_index, dist_edge_types, dist_edge_distances = self._build_distance_edges(seq_len)
+
+        all_edges = torch.cat([seq_edge_index, dist_edge_index], dim=1)
+        all_types = torch.cat([seq_edge_types, dist_edge_types])
+        all_distances = torch.cat([seq_edge_distances, dist_edge_distances])
+
+        edge_map = {}
+        for i in range(all_edges.size(1)):
+            src = int(all_edges[0, i])
+            dst = int(all_edges[1, i])
+            key = (src, dst)
+            if key not in edge_map:
+                edge_map[key] = (int(all_types[i]), int(all_distances[i]))
+
+        edge_indices = []
+        edge_types = []
+        edge_distances = []
+        for (src, dst), (edge_type, edge_distance) in edge_map.items():
+            edge_indices.append([src, dst])
+            edge_types.append(edge_type)
+            edge_distances.append(edge_distance)
+
+        if edge_indices:
+            edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+            edge_type_tensor = torch.tensor(edge_types, dtype=torch.long)
+            edge_distance_tensor = torch.tensor(edge_distances, dtype=torch.long)
+        else:
+            edge_index = torch.empty((2, 0), dtype=torch.long)
+            edge_type_tensor = torch.empty((0,), dtype=torch.long)
+            edge_distance_tensor = torch.empty((0,), dtype=torch.long)
+
+        return edge_index, edge_type_tensor, edge_distance_tensor
+    
+    def _predict_distance_matrix(self, seq_len: int) -> np.ndarray:
+        """预测氨基酸距离矩阵"""
         distance_matrix = np.zeros((seq_len, seq_len))
         
         # 简化的距离预测（实际应用中应使用更复杂的方法）
