@@ -121,7 +121,8 @@ class GraphDataset(Dataset):
             'nce': env_vars['nce'],
             'rt': env_vars['rt'],
             'fbr': env_vars['fbr'],
-            'seq_len': len(sequence)
+            'seq_len': len(sequence),
+            'node_len': len(sequence) + (1 if getattr(self.config, 'use_global_node', False) else 0)
         }
         
         return sample
@@ -232,6 +233,7 @@ class GraphDataLoader:
         rts = [item['rt'] for item in batch]
         fbrs = [item['fbr'] for item in batch]
         seq_lens = [item['seq_len'] for item in batch]
+        node_lens = [item.get('node_len', item['seq_len']) for item in batch]
         
         batch_size = len(batch)
         max_seq_len = max(seq_lens)
@@ -253,7 +255,7 @@ class GraphDataLoader:
             batch_edge_types.append(edge_types)
             batch_edge_distances.append(edge_distances)
             
-            node_offset += seq_lens[i]
+            node_offset += node_lens[i]
         
         # 拼接所有边
         batch_edge_index = torch.cat(batch_edge_indices, dim=1)
@@ -297,6 +299,7 @@ class GraphDataLoader:
             'rts': torch.tensor(rts, dtype=torch.float32),
             'fbrs': torch.tensor(fbrs, dtype=torch.float32),
             'seq_lens': torch.tensor(seq_lens, dtype=torch.long),
+            'node_lens': torch.tensor(node_lens, dtype=torch.long),
             'batch_size': batch_size
         }
         
@@ -373,7 +376,8 @@ class CachedGraphDataset(GraphDataset):
                  graph_strategy: str = 'distance',
                  augmentation: bool = False,
                  split: str = 'train',
-                 rebuild_cache: bool = False):
+                 rebuild_cache: bool = False,
+                 cache_full_graphs: bool = False):
         """
         初始化缓存图数据集
         
@@ -386,26 +390,147 @@ class CachedGraphDataset(GraphDataset):
             augmentation: 是否使用数据增强
             split: 数据分割
             rebuild_cache: 是否重建缓存
+            cache_full_graphs: 是否缓存完整图（大数据集可能较慢）
         """
         super().__init__(csv_path, config, max_seq_len, graph_strategy, augmentation, split)
         
-        self.cache_dir = cache_dir
+        self.cache_dir = self._resolve_cache_dir(cache_dir)
         self.rebuild_cache = rebuild_cache
+        self.cache_full_graphs = cache_full_graphs
+        self.use_long_range_edges = getattr(self.config, 'use_long_range_edges', False)
+        self.long_range_stride = getattr(self.config, 'long_range_stride', 10)
+        self.long_range_hops = getattr(self.config, 'long_range_hops', 1)
+        self.use_global_node = getattr(self.config, 'use_global_node', False)
         
         # 创建缓存目录
-        os.makedirs(cache_dir, exist_ok=True)
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+        # 加载或构建边缓存（按长度）
+        edge_suffix = self._cache_suffix()
+        self.edge_cache_file = os.path.join(
+            self.cache_dir,
+            f"edges_{self.graph_strategy}_{edge_suffix}.pt"
+        )
+        self._load_or_build_edge_cache()
         
         # 加载或构建缓存
-        self.cache_file = os.path.join(cache_dir, f"{split}_{graph_strategy}_cache.pt")
-        self._load_or_build_cache()
+        self.cache_file = os.path.join(
+            self.cache_dir,
+            f"{split}_{graph_strategy}_{edge_suffix}_cache.pt"
+        )
+        if self.cache_full_graphs:
+            self._load_or_build_cache()
+        else:
+            self.cached_data = None
+
+    def _resolve_cache_dir(self, cache_dir: str) -> str:
+        """将相对路径缓存目录解析为项目根目录下的绝对路径"""
+        if os.path.isabs(cache_dir):
+            return cache_dir
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        return os.path.join(project_root, cache_dir)
+
+    def _edge_cache_meta(self) -> Dict[str, Any]:
+        return {
+            "version": 1,
+            "graph_strategy": self.graph_strategy,
+            "max_seq_len": self.max_seq_len,
+            "max_distance": getattr(self.config, "max_distance", 0),
+            "edge_types": list(getattr(self.config, "edge_types", [])),
+            "use_long_range_edges": self.use_long_range_edges,
+            "long_range_stride": self.long_range_stride,
+            "long_range_hops": self.long_range_hops,
+            "use_global_node": self.use_global_node,
+        }
+
+    def _cache_suffix(self) -> str:
+        parts = [
+            f"maxlen{self.max_seq_len}",
+            f"maxdist{getattr(self.config, 'max_distance', 0)}",
+        ]
+        if self.use_long_range_edges:
+            parts.append(f"lr{self.long_range_stride}x{self.long_range_hops}")
+        if self.use_global_node:
+            parts.append("g1")
+        return "_".join(parts)
+
+    def _populate_edge_cache(self, edge_cache: Dict[Any, Any]):
+        max_distance = getattr(self.config, "max_distance", 0)
+        for seq_len, edge_data in edge_cache.items():
+            if isinstance(seq_len, str):
+                seq_len = int(seq_len)
+            if isinstance(edge_data, dict):
+                edge_index = edge_data["edge_index"]
+                edge_types = edge_data["edge_types"]
+                edge_distances = edge_data["edge_distances"]
+            else:
+                edge_index, edge_types, edge_distances = edge_data
+            key = (
+                self.graph_strategy,
+                seq_len,
+                max_distance,
+                self.use_long_range_edges,
+                self.long_range_stride,
+                self.long_range_hops,
+                self.use_global_node,
+            )
+            self.graph_builder._edge_cache[key] = (edge_index, edge_types, edge_distances)
+
+    def _load_or_build_edge_cache(self):
+        """加载或构建按序列长度缓存的边结构"""
+        meta = self._edge_cache_meta()
+        if os.path.exists(self.edge_cache_file) and not self.rebuild_cache:
+            try:
+                payload = torch.load(self.edge_cache_file, map_location="cpu")
+                cached_meta = payload.get("meta", {})
+                cached_edges = payload.get("edges", None)
+                if cached_edges is not None and cached_meta == meta:
+                    self._populate_edge_cache(cached_edges)
+                    print(f"Loaded edge cache from {self.edge_cache_file}")
+                    return
+            except Exception as e:
+                print(f"Failed to load edge cache: {e}")
+
+        # 构建边缓存（按长度）
+        print("Building edge cache (by sequence length)...")
+        edge_cache: Dict[int, Any] = {}
+        for seq_len in range(1, self.max_seq_len + 1):
+            edge_index, edge_types, edge_distances = self.graph_builder._get_or_build_edges(
+                seq_len, self.graph_strategy
+            )
+            edge_cache[seq_len] = {
+                "edge_index": edge_index,
+                "edge_types": edge_types,
+                "edge_distances": edge_distances,
+            }
+
+        self._populate_edge_cache(edge_cache)
+        torch.save({"meta": meta, "edges": edge_cache}, self.edge_cache_file)
+        print(f"Edge cache saved to {self.edge_cache_file}")
     
     def _load_or_build_cache(self):
         """加载或构建缓存"""
+        meta = {
+            "version": 1,
+            "csv_path": os.path.abspath(self.csv_path),
+            "graph_strategy": self.graph_strategy,
+            "max_seq_len": self.max_seq_len,
+            "max_distance": getattr(self.config, "max_distance", 0),
+            "edge_types": list(getattr(self.config, "edge_types", [])),
+            "use_long_range_edges": self.use_long_range_edges,
+            "long_range_stride": self.long_range_stride,
+            "long_range_hops": self.long_range_hops,
+            "use_global_node": self.use_global_node,
+        }
         if os.path.exists(self.cache_file) and not self.rebuild_cache:
             try:
-                self.cached_data = torch.load(self.cache_file)
-                print(f"Loaded cache from {self.cache_file}")
-                return
+                payload = torch.load(self.cache_file, map_location="cpu")
+                cached_meta = payload.get("meta", {})
+                cached_data = payload.get("data", None)
+                if cached_data is not None and cached_meta == meta:
+                    self.cached_data = cached_data
+                    print(f"Loaded cache from {self.cache_file}")
+                    return
             except Exception as e:
                 print(f"Failed to load cache: {e}")
         
@@ -426,7 +551,7 @@ class CachedGraphDataset(GraphDataset):
                 print(f"Processed {idx + 1}/{len(self.data)} samples")
         
         # 保存缓存
-        torch.save(self.cached_data, self.cache_file)
+        torch.save({"meta": meta, "data": self.cached_data}, self.cache_file)
         print(f"Cache saved to {self.cache_file}")
     
     def __getitem__(self, idx: int) -> Dict[str, Any]:
@@ -446,8 +571,18 @@ class CachedGraphDataset(GraphDataset):
             'fbr': float(row['fbr'])
         }
         
-        # 从缓存获取图数据
-        cached_graph = self.cached_data[idx]
+        if self.cached_data is not None:
+            cached_graph = self.cached_data[idx]
+            edge_index = cached_graph['edge_index']
+            edge_attr = cached_graph['edge_attr']
+            edge_types = cached_graph['edge_types']
+            edge_distances = cached_graph['edge_distances']
+        else:
+            graph_data = self.graph_builder.build_graph(sequence, env_vars, self.graph_strategy)
+            edge_index = graph_data['edge_index']
+            edge_attr = graph_data['edge_attr']
+            edge_types = graph_data['edge_types']
+            edge_distances = graph_data['edge_distances']
         
         # 准备标签
         label_tensor = self._prepare_labels(labels, len(sequence))
@@ -455,17 +590,18 @@ class CachedGraphDataset(GraphDataset):
         # 组合数据
         sample = {
             'sequence': sequence,
-            'edge_index': cached_graph['edge_index'],
-            'edge_attr': cached_graph['edge_attr'],
-            'edge_types': cached_graph['edge_types'],
-            'edge_distances': cached_graph['edge_distances'],
+            'edge_index': edge_index,
+            'edge_attr': edge_attr,
+            'edge_types': edge_types,
+            'edge_distances': edge_distances,
             'labels': label_tensor,
             'charge': env_vars['charge'],
             'pep_mass': env_vars['pep_mass'],
             'nce': env_vars['nce'],
             'rt': env_vars['rt'],
             'fbr': env_vars['fbr'],
-            'seq_len': len(sequence)
+            'seq_len': len(sequence),
+            'node_len': len(sequence) + (1 if getattr(self.config, 'use_global_node', False) else 0)
         }
         
         return sample

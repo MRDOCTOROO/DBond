@@ -26,6 +26,11 @@ class GraphBuilder:
         self.alphabet = config.alphabet
         self.max_distance = getattr(config, 'max_distance', 10)
         self.edge_types = getattr(config, 'edge_types', ['sequence', 'distance', 'functional'])
+        self.use_long_range_edges = getattr(config, 'use_long_range_edges', False)
+        self.long_range_stride = max(1, int(getattr(config, 'long_range_stride', 10)))
+        self.long_range_hops = max(1, int(getattr(config, 'long_range_hops', 1)))
+        self.use_global_node = getattr(config, 'use_global_node', False)
+        self._distance_min_scale = 0.8
         self._edge_cache = {}
     
     def build_graph(self, 
@@ -92,7 +97,15 @@ class GraphBuilder:
         }
 
     def _get_or_build_edges(self, seq_len: int, strategy: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        key = (strategy, seq_len, self.max_distance)
+        key = (
+            strategy,
+            seq_len,
+            self.max_distance,
+            self.use_long_range_edges,
+            self.long_range_stride,
+            self.long_range_hops,
+            self.use_global_node,
+        )
         cached = self._edge_cache.get(key)
         if cached is not None:
             return cached
@@ -109,7 +122,7 @@ class GraphBuilder:
         self._edge_cache[key] = (edge_index, edge_types, edge_distances)
         return edge_index, edge_types, edge_distances
 
-    def _build_sequence_edges(self, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _build_sequence_edges(self, seq_len: int, include_optional: bool = True) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         edge_indices = []
         edge_types = []
         edge_distances = []
@@ -120,27 +133,21 @@ class GraphBuilder:
             edge_types.extend([0, 0])
             edge_distances.extend([1, 1])
 
-        if edge_indices:
-            edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
-            edge_type_tensor = torch.tensor(edge_types, dtype=torch.long)
-            edge_distance_tensor = torch.tensor(edge_distances, dtype=torch.long)
-        else:
-            edge_index = torch.empty((2, 0), dtype=torch.long)
-            edge_type_tensor = torch.empty((0,), dtype=torch.long)
-            edge_distance_tensor = torch.empty((0,), dtype=torch.long)
+        return self._finalize_edges(edge_indices, edge_types, edge_distances, seq_len, include_optional)
 
-        return edge_index, edge_type_tensor, edge_distance_tensor
-
-    def _build_distance_edges(self, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        distance_matrix = self._predict_distance_matrix(seq_len)
+    def _build_distance_edges(self, seq_len: int, include_optional: bool = True) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        max_seq_dist = int(math.ceil(self.max_distance / self._distance_min_scale))
 
         edge_indices = []
         edge_types = []
         edge_distances = []
 
         for i in range(seq_len):
-            for j in range(i + 1, seq_len):
-                distance = distance_matrix[i, j]
+            max_j = min(seq_len - 1, i + max_seq_dist)
+            for j in range(i + 1, max_j + 1):
+                seq_dist = j - i
+                folding_factor = 1.0 + 0.2 * np.sin(seq_dist * 0.5)
+                distance = seq_dist * folding_factor
                 if distance <= self.max_distance:
                     edge_indices.append([i, j])
                     edge_indices.append([j, i])
@@ -154,42 +161,45 @@ class GraphBuilder:
                     clipped_distance = min(int(distance), self.max_distance)
                     edge_distances.extend([clipped_distance, clipped_distance])
 
-        if edge_indices:
-            edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
-            edge_type_tensor = torch.tensor(edge_types, dtype=torch.long)
-            edge_distance_tensor = torch.tensor(edge_distances, dtype=torch.long)
-        else:
-            edge_index = torch.empty((2, 0), dtype=torch.long)
-            edge_type_tensor = torch.empty((0,), dtype=torch.long)
-            edge_distance_tensor = torch.empty((0,), dtype=torch.long)
-
-        return edge_index, edge_type_tensor, edge_distance_tensor
+        return self._finalize_edges(edge_indices, edge_types, edge_distances, seq_len, include_optional)
 
     def _build_hybrid_edges(self, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        seq_edge_index, seq_edge_types, seq_edge_distances = self._build_sequence_edges(seq_len)
-        dist_edge_index, dist_edge_types, dist_edge_distances = self._build_distance_edges(seq_len)
+        seq_edge_index, seq_edge_types, seq_edge_distances = self._build_sequence_edges(seq_len, include_optional=False)
+        dist_edge_index, dist_edge_types, dist_edge_distances = self._build_distance_edges(seq_len, include_optional=False)
 
         all_edges = torch.cat([seq_edge_index, dist_edge_index], dim=1)
         all_types = torch.cat([seq_edge_types, dist_edge_types])
         all_distances = torch.cat([seq_edge_distances, dist_edge_distances])
 
-        edge_map = {}
-        for i in range(all_edges.size(1)):
-            src = int(all_edges[0, i])
-            dst = int(all_edges[1, i])
-            key = (src, dst)
-            if key not in edge_map:
-                edge_map[key] = (int(all_types[i]), int(all_distances[i]))
+        edge_indices = all_edges.t().tolist() if all_edges.numel() > 0 else []
+        edge_types = all_types.tolist() if all_types.numel() > 0 else []
+        edge_distances = all_distances.tolist() if all_distances.numel() > 0 else []
 
-        edge_indices = []
-        edge_types = []
-        edge_distances = []
-        for (src, dst), (edge_type, edge_distance) in edge_map.items():
-            edge_indices.append([src, dst])
-            edge_types.append(edge_type)
-            edge_distances.append(edge_distance)
+        return self._finalize_edges(edge_indices, edge_types, edge_distances, seq_len, include_optional=True)
+
+    def _finalize_edges(self,
+                        edge_indices: List[List[int]],
+                        edge_types: List[int],
+                        edge_distances: List[int],
+                        seq_len: int,
+                        include_optional: bool) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if include_optional:
+            if self.use_long_range_edges:
+                self._add_long_range_edges(edge_indices, edge_types, edge_distances, seq_len)
+            if self.use_global_node:
+                self._add_global_edges(edge_indices, edge_types, edge_distances, seq_len)
 
         if edge_indices:
+            edge_map = {}
+            for (src, dst), edge_type, edge_distance in zip(edge_indices, edge_types, edge_distances):
+                key = (int(src), int(dst))
+                if key not in edge_map:
+                    edge_map[key] = (int(edge_type), int(edge_distance))
+
+            edge_indices = [[src, dst] for (src, dst) in edge_map.keys()]
+            edge_types = [edge_map[key][0] for key in edge_map]
+            edge_distances = [edge_map[key][1] for key in edge_map]
+
             edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
             edge_type_tensor = torch.tensor(edge_types, dtype=torch.long)
             edge_distance_tensor = torch.tensor(edge_distances, dtype=torch.long)
@@ -199,6 +209,39 @@ class GraphBuilder:
             edge_distance_tensor = torch.empty((0,), dtype=torch.long)
 
         return edge_index, edge_type_tensor, edge_distance_tensor
+
+    def _add_long_range_edges(self,
+                              edge_indices: List[List[int]],
+                              edge_types: List[int],
+                              edge_distances: List[int],
+                              seq_len: int) -> None:
+        long_range_type = 3
+        for i in range(seq_len):
+            for hop in range(1, self.long_range_hops + 1):
+                j = i + hop * self.long_range_stride
+                if j >= seq_len:
+                    break
+                seq_dist = j - i
+                edge_indices.append([i, j])
+                edge_indices.append([j, i])
+                edge_types.extend([long_range_type, long_range_type])
+                edge_dist = min(seq_dist, self.max_distance)
+                edge_distances.extend([edge_dist, edge_dist])
+
+    def _add_global_edges(self,
+                          edge_indices: List[List[int]],
+                          edge_types: List[int],
+                          edge_distances: List[int],
+                          seq_len: int) -> None:
+        if seq_len <= 0:
+            return
+        global_type = 4
+        global_idx = seq_len
+        for i in range(seq_len):
+            edge_indices.append([i, global_idx])
+            edge_indices.append([global_idx, i])
+            edge_types.extend([global_type, global_type])
+            edge_distances.extend([0, 0])
     
     def _predict_distance_matrix(self, seq_len: int) -> np.ndarray:
         """预测氨基酸距离矩阵"""
@@ -223,30 +266,25 @@ class GraphBuilder:
                            edge_distances: torch.Tensor,
                            env_vars: Dict[str, float]) -> torch.Tensor:
         """创建边特征"""
-        num_edges = len(edge_types)
-        edge_features = []
-        
-        for i in range(num_edges):
-            edge_type = edge_types[i].item()
-            distance = edge_distances[i].item()
-            
-            # 基础特征
-            features = [
-                float(edge_type),  # 边类型
-                float(distance),  # 距离
-                1.0 / (1.0 + distance),  # 距离倒数
-            ]
-            
-            # 环境变量影响
-            features.extend([
+        if edge_types.numel() == 0:
+            return torch.empty((0, 6), dtype=torch.float32)
+
+        edge_types_f = edge_types.to(dtype=torch.float32)
+        edge_distances_f = edge_distances.to(dtype=torch.float32)
+        inv_distance = 1.0 / (1.0 + edge_distances_f)
+
+        base_features = torch.stack([edge_types_f, edge_distances_f, inv_distance], dim=1)
+        env_features = torch.tensor(
+            [
                 env_vars.get('charge', 0.0) * 0.1,
                 env_vars.get('nce', 0.0) * 0.01,
                 env_vars.get('fbr', 0.0),
-            ])
-            
-            edge_features.append(features)
-        
-        return torch.tensor(edge_features, dtype=torch.float32)
+            ],
+            dtype=torch.float32,
+            device=base_features.device,
+        ).unsqueeze(0).expand(base_features.size(0), -1)
+
+        return torch.cat([base_features, env_features], dim=1)
 
 
 class SequenceGraphBuilder(GraphBuilder):

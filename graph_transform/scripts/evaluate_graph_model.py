@@ -185,6 +185,7 @@ def main():
         test_kwargs.update({
             "cache_dir": data_config.get("cache_dir", "cache/graph_data"),
             "rebuild_cache": data_config.get("rebuild_cache", False),
+            "cache_full_graphs": data_config.get("cache_full_graphs", False),
         })
     test_dataset = dataset_cls(**test_kwargs)
     test_loader = GraphDataLoader(

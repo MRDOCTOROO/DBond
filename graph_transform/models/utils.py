@@ -45,10 +45,16 @@ class ModelConfig:
         self.num_env_features = 5
         
         # 边配置
-        self.edge_types = ['sequence', 'distance', 'functional']
+        self.edge_types = ['sequence', 'distance', 'functional', 'long_range', 'global']
         self.edge_embedding_dim = 16
         self.distance_embedding_dim = 16
         self.max_distance = 10
+
+        # 图结构增强
+        self.use_long_range_edges = False
+        self.long_range_stride = 10
+        self.long_range_hops = 1
+        self.use_global_node = False
         
         # 输出配置
         self.num_classes = 20

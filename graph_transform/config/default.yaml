@@ -31,10 +31,18 @@ model:
   num_env_features: 5
   
   # 边配置
-  edge_types: ["sequence", "distance", "functional"]
+  edge_types: ["sequence", "distance", "functional", "long_range", "global"]
   edge_embedding_dim: 16
   distance_embedding_dim: 16
   max_distance: 10
+
+  # 图结构增强
+
+  use_long_range_edges: true      # 开启稀疏长程边
+  long_range_stride: 10           # 间隔
+  long_range_hops: 1              # 每个节点连接几跳
+  use_global_node: true           # 开关全局虚拟节点
+
   
   # 输出配置
   num_classes: 1  # 键级别断裂为二分类

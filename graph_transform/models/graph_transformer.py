@@ -399,6 +399,16 @@ class GraphTransformer(nn.Module):
         # 编码器
         self.node_encoder = NodeEncoder(config)
         self.edge_encoder = EdgeEncoder(config)
+
+        self.use_global_node = getattr(config, 'use_global_node', False)
+        if self.use_global_node:
+            env_out_dim = self.node_encoder.env_encoder[-1].out_features
+            self.global_node_embedding = nn.Parameter(torch.zeros(1, config.hidden_dim))
+            self.global_node_proj = nn.Sequential(
+                nn.Linear(env_out_dim, config.hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(config.dropout)
+            )
         
         # 图卷积层
         self.gcn_layers = nn.ModuleList([
@@ -448,6 +458,11 @@ class GraphTransformer(nn.Module):
         """
         # 节点特征编码
         node_features = self.node_encoder(batch_data)
+        global_nodes = None
+        if self.use_global_node:
+            env_raw = self.node_encoder._encode_environmental(batch_data, node_features.device)
+            env_embed = self.node_encoder.env_encoder(env_raw)
+            global_nodes = self.global_node_embedding + self.global_node_proj(env_embed)
         
         # 边特征编码
         edge_features = self.edge_encoder(
@@ -459,6 +474,11 @@ class GraphTransformer(nn.Module):
         
         # 根据真实序列长度裁剪节点特征
         seq_lens = batch_data['seq_lens'].tolist()
+        node_lens = batch_data.get('node_lens')
+        if node_lens is not None:
+            node_lens = node_lens.tolist()
+        else:
+            node_lens = [seq_len + (1 if self.use_global_node else 0) for seq_len in seq_lens]
         batch_size = len(seq_lens)
         hidden_dim = node_features.size(-1)
 
@@ -466,8 +486,14 @@ class GraphTransformer(nn.Module):
         batch_indices = []
         for i, seq_len in enumerate(seq_lens):
             if seq_len > 0:
-                trimmed_nodes.append(node_features[i, :seq_len])
-                batch_indices.extend([i] * seq_len)
+                nodes = node_features[i, :seq_len]
+            else:
+                nodes = node_features.new_empty((0, hidden_dim))
+            if self.use_global_node:
+                nodes = torch.cat([nodes, global_nodes[i:i + 1]], dim=0)
+            if nodes.numel() > 0:
+                trimmed_nodes.append(nodes)
+                batch_indices.extend([i] * nodes.size(0))
 
         node_features = torch.cat(trimmed_nodes, dim=0) if trimmed_nodes else node_features.new_empty((0, hidden_dim))
         batch_indices = torch.tensor(batch_indices, device=node_features.device, dtype=torch.long)
@@ -491,11 +517,11 @@ class GraphTransformer(nn.Module):
         bond_src = []
         bond_dst = []
         offset = 0
-        for seq_len in seq_lens:
+        for seq_len, node_len in zip(seq_lens, node_lens):
             for i in range(max(seq_len - 1, 0)):
                 bond_src.append(offset + i)
                 bond_dst.append(offset + i + 1)
-            offset += seq_len
+            offset += node_len
 
         if bond_src:
             bond_src = torch.tensor(bond_src, device=node_features.device)
