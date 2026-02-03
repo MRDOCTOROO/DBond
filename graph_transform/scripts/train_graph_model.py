@@ -26,6 +26,7 @@ from tqdm import tqdm
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import GraphTransformer
+from torch.nn.parameter import UninitializedParameter
 from models.utils import ModelConfig, CheckpointManager, LearningRateScheduler
 from data import GraphDataset, GraphDataLoader, CachedGraphDataset
 from training import Trainer, MultiLabelLoss
@@ -113,7 +114,11 @@ def create_model(config: Dict[str, Any], device: torch.device) -> nn.Module:
     model = GraphTransformer(model_config)
     model = model.to(device)
     
-    logger.info(f"Created model with {sum(p.numel() for p in model.parameters())} parameters")
+    total_params = sum(
+        p.numel() for p in model.parameters()
+        if not isinstance(p, UninitializedParameter)
+    )
+    logger.info(f"Created model with {total_params} parameters")
     
     return model
 
