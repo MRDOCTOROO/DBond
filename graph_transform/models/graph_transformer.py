@@ -8,6 +8,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.parameter import UninitializedParameter
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
@@ -442,8 +443,10 @@ class GraphTransformer(nn.Module):
         """初始化模型权重"""
         for module in self.modules():
             if isinstance(module, nn.Linear):
+                if isinstance(module.weight, UninitializedParameter):
+                    continue
                 nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
+                if module.bias is not None and not isinstance(module.bias, UninitializedParameter):
                     nn.init.constant_(module.bias, 0)
     
     def forward(self, batch_data: Dict) -> torch.Tensor:
