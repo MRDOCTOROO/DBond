@@ -30,11 +30,10 @@ python graph_transform/scripts/train_graph_model.py --config graph_transform/con
 
 评估使用`label_mask`过滤padding位置后计算指标。
 
-### 5. 虚拟节点（global node）的想法
-- 当前实现未引入虚拟节点；学习依赖参数共享与反向传播，不做跨图消息传递。
-- 如果需要引入全局上下文，可添加“虚拟节点”并连接到所有残基：
-  - 方案A：每个样本一个虚拟节点（推荐）。
-  - 方案B：将环境变量注入虚拟节点或键预测头。
+### 5. 虚拟节点（global node）
+- 当前实现**已支持**虚拟节点：通过 `model.use_global_node` 控制是否为每个样本添加一个全局节点。
+- 全局节点与所有残基双向连接，用于注入全局上下文。
+- 默认配置中已开启（见 `graph_transform/config/default.yaml`）。
   - 可做消融：无虚拟节点 vs 有虚拟节点 vs 有虚拟节点+环境变量注入。
 
 ### 6. 消融实验设计模板（表格+字段）

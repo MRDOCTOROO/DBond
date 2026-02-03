@@ -194,6 +194,7 @@ def main():
         shuffle=False,
         num_workers=data_config.get("num_workers", 4),
         pin_memory=data_config.get("pin_memory", True),
+        drop_last=False,
     )
 
     evaluator = Evaluator(model=model, device=device, config=config, logger=logger)

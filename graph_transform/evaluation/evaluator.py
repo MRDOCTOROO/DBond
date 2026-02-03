@@ -13,6 +13,7 @@ from tqdm import tqdm
 import numpy as np
 
 from .metrics import MultiLabelMetrics
+from training import MultiLabelLoss
 
 
 class Evaluator:
@@ -68,8 +69,9 @@ class Evaluator:
         total_loss = 0.0
         num_batches = 0
         
-        # 损失函数
-        criterion = nn.BCEWithLogitsLoss()
+        # 损失函数（与训练保持一致）
+        loss_config = self.config.get('loss', {})
+        criterion = MultiLabelLoss(loss_config).to(self.device)
         
         with torch.no_grad():
             pbar = tqdm(data_loader, desc="Evaluating")

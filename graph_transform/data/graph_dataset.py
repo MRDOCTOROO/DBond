@@ -187,7 +187,8 @@ class GraphDataLoader:
                  shuffle: bool = True,
                  num_workers: int = 4,
                  collate_fn: Optional[callable] = None,
-                 pin_memory: bool = True):
+                 pin_memory: bool = True,
+                 drop_last: bool = False):
         """
         初始化图数据加载器
         
@@ -205,6 +206,7 @@ class GraphDataLoader:
         self.num_workers = num_workers
         self.collate_fn = collate_fn or self._default_collate_fn
         self.pin_memory = pin_memory
+        self.drop_last = drop_last
         
         # 创建PyTorch DataLoader
         self.dataloader = DataLoader(
@@ -214,7 +216,7 @@ class GraphDataLoader:
             num_workers=num_workers,
             collate_fn=self.collate_fn,
             pin_memory=pin_memory,
-            drop_last=True if shuffle else False
+            drop_last=drop_last
         )
     
     def _default_collate_fn(self, batch: List[Dict]) -> Dict[str, torch.Tensor]:

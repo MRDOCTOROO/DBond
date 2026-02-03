@@ -219,7 +219,8 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset,
         batch_size=training_config['batch_size'],
         shuffle=True,
         num_workers=data_config.get('num_workers', 4),
-        pin_memory=data_config.get('pin_memory', True)
+        pin_memory=data_config.get('pin_memory', True),
+        drop_last=data_config.get('drop_last', False)
     )
     
     # 验证数据加载器
@@ -230,7 +231,8 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset,
             batch_size=training_config['batch_size'],
             shuffle=False,
             num_workers=data_config.get('num_workers', 4),
-            pin_memory=data_config.get('pin_memory', True)
+            pin_memory=data_config.get('pin_memory', True),
+            drop_last=False
         )
     
     # 测试数据加载器
@@ -241,7 +243,8 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset,
             batch_size=training_config['batch_size'],
             shuffle=False,
             num_workers=data_config.get('num_workers', 4),
-            pin_memory=data_config.get('pin_memory', True)
+            pin_memory=data_config.get('pin_memory', True),
+            drop_last=False
         )
     
     return train_loader, val_loader, test_loader
@@ -433,6 +436,12 @@ def main():
     # 训练循环
     logger.info("Starting training loop...")
     training_config = config['training']
+    early_stopping_enabled = training_config.get('early_stopping', False)
+    patience = training_config.get('patience', 10)
+    min_delta = training_config.get('min_delta', 0.0)
+    best_metric = best_metric if args.resume else float('-inf')
+    best_epoch = start_epoch
+    no_improve_epochs = 0
     if args.resume:
         training_config['checkpoint_dir'] = os.path.dirname(args.resume)
     else:
@@ -459,8 +468,10 @@ def main():
             
             # 保存最佳模型
             current_f1 = val_metrics['f1']
-            if current_f1 > best_metric:
+            if current_f1 > best_metric + min_delta:
                 best_metric = current_f1
+                best_epoch = epoch + 1
+                no_improve_epochs = 0
                 checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints/graph_transform')
                 os.makedirs(checkpoint_dir, exist_ok=True)
                 
@@ -475,6 +486,16 @@ def main():
                     is_best=True
                 )
                 logger.info(f"Saved best model with F1: {best_metric:.4f}")
+            else:
+                no_improve_epochs += 1
+                logger.info(f"No improvement for {no_improve_epochs} epoch(s)")
+
+            if early_stopping_enabled and no_improve_epochs >= patience:
+                logger.info(
+                    f"Early stopping triggered at epoch {epoch + 1}. "
+                    f"Best F1 {best_metric:.4f} at epoch {best_epoch}."
+                )
+                break
         
         # 定期保存检查点
         if (epoch + 1) % training_config.get('save_interval', 10) == 0:

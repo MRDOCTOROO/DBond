@@ -54,7 +54,10 @@ class MultiLabelLoss(nn.Module):
             torch.Tensor: 损失值
         """
         # 主要损失
-        if self.main_loss == 'binary_cross_entropy':
+        if self.handle_imbalance and self.imbalance_strategy == 'focal':
+            focal_loss = FocalLoss(self.config)
+            loss = focal_loss(predictions, targets)
+        elif self.main_loss == 'binary_cross_entropy':
             if self.handle_imbalance and self.imbalance_strategy == 'weighted':
                 pos_weight = self._get_pos_weight(targets)
                 loss = F.binary_cross_entropy_with_logits(
