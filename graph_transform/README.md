@@ -58,6 +58,40 @@ python graph_transform/scripts/train_graph_model.py --config graph_transform/con
 - `label_mask`用于过滤padding位置参与损失与评估。
 - 修复`edge_index`键名、GAT注意力计算与GCN消息归一化逻辑。
 
+## 当前代码结构问题（2026-03-04检查）
+
+以下问题会直接影响“训练可跑通”和“单条样本推理可用性”：
+
+1. 文档与实际代码结构不一致
+- README 中声明的多个文件不存在：`config/model_config.yaml`、`training/callbacks.py`、`evaluation/visualization.py`、`evaluation/analysis.py`、`inference/predictor.py`、`inference/utils.py`、`scripts/predict.py`、`scripts/analyze_results.py`。
+- 说明：当前 `inference/` 目录为空，因此文档里的 `GraphPredictor` 用法无法直接执行。
+
+2. 缺少单样本推理入口
+- 现有脚本只有训练与评估（`scripts/train_graph_model.py`、`scripts/evaluate_graph_model.py`），没有“输入 dataset 一条样本并输出预测”的独立脚本。
+- 影响：目标功能需要额外补一条轻量推理链路（加载 checkpoint + 读取单条样本 + 前向 + 阈值化输出）。
+
+3. 默认训练配置过重，导致训练时间非常长
+- 默认训练集是 `dataset/dataset_private/1222.train.fbr.shuffle.multi.csv`，实际规模约 383,295 条。
+- 默认训练配置是 `epochs: 100`、`batch_size: 64`（见 `config/default.yaml`），全量训练步数非常大。
+- 默认图策略是 `graph_strategy: distance`，且开启 `use_long_range_edges: true`、`use_global_node: true`，会增加边数量与计算开销。
+
+4. 关键前向路径存在明显 Python 循环热点
+- `models/graph_transformer.py:146` 的 `_encode_physicochemical` 对 batch 和序列位置进行双重 Python 循环，并在循环内频繁创建 `torch.tensor`（`models/graph_transformer.py:157,160`）。
+- `models/attention_layers.py:128` 的 `_softmax_attention` 对每个节点逐个循环做 softmax（`models/attention_layers.py:136`）。
+- 影响：这两处会显著拖慢每 step 训练/推理速度，尤其在大数据集下放大。
+
+5. 性能配置项存在“写了但未接线”的情况
+- `config/default.yaml` 里有 `performance.prefetch_factor`、`performance.persistent_workers`，但 `GraphDataLoader` 构造 `DataLoader` 时没有透传这些参数（`data/graph_dataset.py:212-219`）。
+- 影响：Windows 多进程加载时，数据吞吐优化没有真正生效。
+
+6. 训练可跑，但当前缺少“快速验证”结构
+- 虽然模型在小批量上可以前向输出（形状与标签可对齐），但项目中没有内置的“小数据/单epoch/smoke test”配置与脚本，导致每次验证都容易落到全量长训练流程。
+
+> 建议后续修复优先级：
+> 1) 先补单样本推理脚本（满足业务目标）  
+> 2) 再处理前向热点（NodeEncoder/GAT softmax）  
+> 3) 最后收敛文档与目录结构一致性
+
 ## 核心特性
 
 ### 图神经网络架构
