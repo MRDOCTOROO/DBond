@@ -48,6 +48,8 @@ def setup_logging(config: Dict[str, Any]) -> logging.Logger:
     # 配置logger
     logger = logging.getLogger('graph_transform')
     logger.setLevel(log_level)
+    logger.handlers.clear()
+    logger.propagate = False
     
     # 控制台处理器
     console_handler = logging.StreamHandler()
@@ -206,6 +208,8 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
         stats = train_dataset.get_statistics()
         logger.info(f"Average sequence length: {stats.get('avg_seq_length', 'N/A'):.2f}")
         logger.info(f"Max sequence length: {stats.get('max_seq_length', 'N/A')}")
+        if 'length_counts' in stats:
+            logger.info(f"Length counts: {stats['length_counts']}")
         if 'positive_ratio' in stats:
             logger.info(f"Positive label ratio: {stats['positive_ratio']:.4f}")
     

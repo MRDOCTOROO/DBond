@@ -114,15 +114,16 @@ loss:
   main_loss: "binary_cross_entropy"  # "binary_cross_entropy", "focal", "dice"
   
   # 辅助损失
-  use_auxiliary_losses: true
+  use_auxiliary_losses: false
   auxiliary_loss_weights:
     focal: 0.5
     dice: 0.3
     l2_regularization: 0.1
   
   # 类别不平衡处理
-  handle_imbalance: true
-  imbalance_strategy: "focal"  # "focal", "weighted", "oversample"
+  handle_imbalance: false
+  imbalance_strategy: "weighted"  # "focal", "weighted", "oversample"
+  pos_weight: null
 
 # 优化器配置
 optimizer:

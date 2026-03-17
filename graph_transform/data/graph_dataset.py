@@ -74,7 +74,8 @@ class GraphDataset(Dataset):
             raise ValueError(f"Missing required columns: {missing_columns}")
         
         # 过滤过长的序列
-        data = data[data['seq'].str.len() <= self.max_seq_len]
+        if self.max_seq_len is not None:
+            data = data[data['seq'].str.len() <= self.max_seq_len]
         
         return data.reset_index(drop=True)
     
@@ -161,7 +162,8 @@ class GraphDataset(Dataset):
             'avg_seq_length': np.mean(seq_lengths),
             'max_seq_length': np.max(seq_lengths),
             'min_seq_length': np.min(seq_lengths),
-            'sequence_length_distribution': np.histogram(seq_lengths, bins=20)
+            'sequence_length_distribution': np.histogram(seq_lengths, bins=20),
+            'length_counts': self.data['seq'].str.len().value_counts().sort_index().to_dict()
         }
         
         # 标签统计

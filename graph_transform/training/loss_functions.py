@@ -28,7 +28,7 @@ class MultiLabelLoss(nn.Module):
         
         # 主要损失函数
         if self.main_loss == 'binary_cross_entropy':
-            self.criterion = None
+            self.criterion = nn.BCEWithLogitsLoss(reduction='mean')
         elif self.main_loss == 'focal':
             self.criterion = FocalLoss(config)
         elif self.main_loss == 'dice':
@@ -55,18 +55,13 @@ class MultiLabelLoss(nn.Module):
         """
         # 主要损失
         if self.handle_imbalance and self.imbalance_strategy == 'focal':
-            focal_loss = FocalLoss(self.config)
-            loss = focal_loss(predictions, targets)
+            loss = self.criterion_focal(predictions, targets)
         elif self.main_loss == 'binary_cross_entropy':
             if self.handle_imbalance and self.imbalance_strategy == 'weighted':
                 pos_weight = self._get_pos_weight(targets)
-                loss = F.binary_cross_entropy_with_logits(
-                    predictions, targets, pos_weight=pos_weight, reduction='mean'
-                )
+                loss = F.binary_cross_entropy_with_logits(predictions, targets, pos_weight=pos_weight, reduction='mean')
             else:
-                loss = F.binary_cross_entropy_with_logits(
-                    predictions, targets, reduction='mean'
-                )
+                loss = self.criterion(predictions, targets)
         
         else:
             loss = self.criterion(predictions, targets)
@@ -87,6 +82,12 @@ class MultiLabelLoss(nn.Module):
                 loss = loss + sum(auxiliary_losses)
         
         return loss
+
+    @property
+    def criterion_focal(self) -> nn.Module:
+        if not hasattr(self, '_criterion_focal'):
+            self._criterion_focal = FocalLoss(self.config)
+        return self._criterion_focal
 
     def _get_pos_weight(self, targets: torch.Tensor) -> torch.Tensor:
         """计算或读取正类权重"""
