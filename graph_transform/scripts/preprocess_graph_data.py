@@ -106,17 +106,19 @@ class GraphDataPreprocessor:
             # 解析标签
             labels = self._parse_labels(str(row['true_multi']))
 
-            # 提取环境变量
-            env_vars = {
+            # 提取样本级特征
+            sample_features = {
                 'charge': float(row['charge']),
                 'pep_mass': float(row['pep_mass']),
+                'intensity': float(row['intensity']),
                 'nce': float(row['nce']),
                 'rt': float(row['rt']),
-                'fbr': float(row['fbr'])
             }
+            state_vars = [sample_features['charge'], sample_features['pep_mass'], sample_features['intensity']]
+            env_vars = [sample_features['nce'], sample_features['rt']]
 
             # 构建图
-            graph_data = self.graph_builder.build_graph(sequence, env_vars, self.graph_strategy)
+            graph_data = self.graph_builder.build_graph(sequence, sample_features, self.graph_strategy)
 
             # 准备标签张量
             label_tensor = self._prepare_labels(labels, len(sequence))
@@ -130,11 +132,13 @@ class GraphDataPreprocessor:
                 'edge_types': graph_data['edge_types'],
                 'edge_distances': graph_data['edge_distances'],
                 'labels': label_tensor,
-                'charge': env_vars['charge'],
-                'pep_mass': env_vars['pep_mass'],
-                'nce': env_vars['nce'],
-                'rt': env_vars['rt'],
-                'fbr': env_vars['fbr'],
+                'charge': sample_features['charge'],
+                'pep_mass': sample_features['pep_mass'],
+                'intensity': sample_features['intensity'],
+                'nce': sample_features['nce'],
+                'rt': sample_features['rt'],
+                'state_vars': torch.tensor(state_vars, dtype=torch.float32),
+                'env_vars': torch.tensor(env_vars, dtype=torch.float32),
                 'seq_len': len(sequence),
                 'node_len': len(sequence) + (1 if self.config['model'].get('use_global_node', False) else 0)
             }
@@ -189,7 +193,7 @@ class GraphDataPreprocessor:
         logger.info(f"加载数据集: {len(data)} 条样本")
 
         # 验证必需列
-        required_columns = ['seq', 'charge', 'pep_mass', 'nce', 'rt', 'fbr', 'true_multi']
+        required_columns = ['seq', 'charge', 'pep_mass', 'intensity', 'nce', 'rt', 'true_multi']
         missing_columns = [col for col in required_columns if col not in data.columns]
         if missing_columns:
             raise ValueError(f"CSV文件缺少必需列: {missing_columns}")

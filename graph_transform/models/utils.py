@@ -42,7 +42,8 @@ class ModelConfig:
         self.position_embedding_dim = 32
         self.physicochemical_dim = 32
         self.num_physicochemical_features = 4
-        self.num_env_features = 5
+        self.num_state_features = 3
+        self.num_env_features = 2
         
         # 边配置
         self.edge_types = ['sequence', 'distance', 'functional', 'long_range', 'global']

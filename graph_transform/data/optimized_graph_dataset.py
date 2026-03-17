@@ -272,9 +272,11 @@ class OptimizedGraphDataLoader:
 
         charges = [item['charge'] for item in batch]
         pep_masses = [item['pep_mass'] for item in batch]
+        intensities = [item['intensity'] for item in batch]
         nces = [item['nce'] for item in batch]
         rts = [item['rt'] for item in batch]
-        fbrs = [item['fbr'] for item in batch]
+        state_vars = [item['state_vars'] for item in batch]
+        env_vars = [item['env_vars'] for item in batch]
         seq_lens = [item['seq_len'] for item in batch]
         node_lens = [item.get('node_len', item['seq_len']) for item in batch]
 
@@ -338,9 +340,11 @@ class OptimizedGraphDataLoader:
             'label_mask': batch_label_masks,
             'charges': torch.tensor(charges, dtype=torch.float32),
             'pep_masses': torch.tensor(pep_masses, dtype=torch.float32),
+            'intensities': torch.tensor(intensities, dtype=torch.float32),
             'nces': torch.tensor(nces, dtype=torch.float32),
             'rts': torch.tensor(rts, dtype=torch.float32),
-            'fbrs': torch.tensor(fbrs, dtype=torch.float32),
+            'state_vars': torch.stack(state_vars, dim=0),
+            'env_vars': torch.stack(env_vars, dim=0),
             'seq_lens': torch.tensor(seq_lens, dtype=torch.long),
             'node_lens': torch.tensor(node_lens, dtype=torch.long),
             'batch_size': batch_size

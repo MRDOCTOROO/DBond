@@ -51,6 +51,14 @@ class NodeEncoder(nn.Module):
             self.physicochemical_dim
         )
         
+        # 状态变量编码
+        self.state_encoder = nn.Sequential(
+            nn.Linear(config.num_state_features, 64),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(64, 32)
+        )
+
         # 环境变量编码
         self.env_encoder = nn.Sequential(
             nn.Linear(config.num_env_features, 64),
@@ -64,6 +72,7 @@ class NodeEncoder(nn.Module):
             self.aa_embedding_dim + 
             self.position_embedding_dim + 
             self.physicochemical_dim + 32
+            + 32
         )
         
         # 最终编码层
@@ -107,16 +116,20 @@ class NodeEncoder(nn.Module):
         physico_features = self._encode_physicochemical(batch_data, device)
         physico_features = self.physicochemical_encoder(physico_features)
         
-        # 环境变量编码
+        # 状态变量与环境变量编码
+        state_features = self._encode_state(batch_data, device)
+        state_features = self.state_encoder(state_features)
+
         env_features = self._encode_environmental(batch_data, device)
         env_features = self.env_encoder(env_features)
         
-        # 扩展环境特征到每个位置
+        # 扩展样本级特征到每个位置
+        state_features = state_features.unsqueeze(1).expand(-1, seq_tokens.size(1), -1)
         env_features = env_features.unsqueeze(1).expand(-1, seq_tokens.size(1), -1)
         
         # 拼接所有特征
         combined_features = torch.cat([
-            aa_features, pos_features, physico_features, env_features
+            aa_features, pos_features, physico_features, state_features, env_features
         ], dim=-1)
         
         # 最终编码
@@ -163,18 +176,26 @@ class NodeEncoder(nn.Module):
         
         return features
     
-    def _encode_environmental(self, batch_data: Dict, device: torch.device) -> torch.Tensor:
-        """编码环境变量"""
+    def _encode_state(self, batch_data: Dict, device: torch.device) -> torch.Tensor:
+        """编码状态变量"""
+        if 'state_vars' in batch_data:
+            return batch_data['state_vars'].to(device=device, dtype=torch.float32)
+
         return torch.stack(
             [
                 batch_data['charges'],
                 batch_data['pep_masses'],
-                batch_data['nces'],
-                batch_data['rts'],
-                batch_data['fbrs']
+                batch_data['intensities'],
             ],
-            dim=1
+            dim=1,
         ).to(device=device, dtype=torch.float32)
+
+    def _encode_environmental(self, batch_data: Dict, device: torch.device) -> torch.Tensor:
+        """编码环境变量"""
+        if 'env_vars' in batch_data:
+            return batch_data['env_vars'].to(device=device, dtype=torch.float32)
+
+        return torch.stack([batch_data['nces'], batch_data['rts']], dim=1).to(device=device, dtype=torch.float32)
 
     def _get_batch_device(self, batch_data: Dict) -> torch.device:
         """从批次数据中推断设备"""
@@ -403,10 +424,11 @@ class GraphTransformer(nn.Module):
 
         self.use_global_node = getattr(config, 'use_global_node', False)
         if self.use_global_node:
+            state_out_dim = self.node_encoder.state_encoder[-1].out_features
             env_out_dim = self.node_encoder.env_encoder[-1].out_features
             self.global_node_embedding = nn.Parameter(torch.zeros(1, config.hidden_dim))
             self.global_node_proj = nn.Sequential(
-                nn.Linear(env_out_dim, config.hidden_dim),
+                nn.Linear(state_out_dim + env_out_dim, config.hidden_dim),
                 nn.ReLU(),
                 nn.Dropout(config.dropout)
             )
@@ -463,9 +485,12 @@ class GraphTransformer(nn.Module):
         node_features = self.node_encoder(batch_data)
         global_nodes = None
         if self.use_global_node:
+            state_raw = self.node_encoder._encode_state(batch_data, node_features.device)
+            state_embed = self.node_encoder.state_encoder(state_raw)
             env_raw = self.node_encoder._encode_environmental(batch_data, node_features.device)
             env_embed = self.node_encoder.env_encoder(env_raw)
-            global_nodes = self.global_node_embedding + self.global_node_proj(env_embed)
+            global_context = torch.cat([state_embed, env_embed], dim=-1)
+            global_nodes = self.global_node_embedding + self.global_node_proj(global_context)
         
         # 边特征编码
         edge_features = self.edge_encoder(

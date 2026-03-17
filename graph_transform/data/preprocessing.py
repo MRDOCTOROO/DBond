@@ -122,7 +122,7 @@ class DataPreprocessor:
             )
         
         # 标准化数值特征
-        numeric_features = ['charge', 'pep_mass', 'nce', 'rt', 'fbr']
+        numeric_features = ['charge', 'pep_mass', 'intensity', 'nce', 'rt']
         for feature in numeric_features:
             if feature in processed_sample:
                 processed_sample[feature] = self._normalize_feature(
@@ -146,9 +146,9 @@ class DataPreprocessor:
         normalization_ranges = {
             'charge': (1, 5),      # 电荷范围
             'pep_mass': (500, 3000),  # 肽段质量范围
+            'intensity': (1e3, 1e8),  # 前体峰强度范围
             'nce': (10, 50),         # 碰撞能量范围
             'rt': (0, 100),          # 保留时间范围
-            'fbr': (0, 1)            # 碎裂比例范围
         }
         
         if feature_name in normalization_ranges:

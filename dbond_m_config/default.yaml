@@ -30,7 +30,7 @@ csv:
 seq:
   alphabet: '#ABCDEFGHIKLMNOPQRSTVWXYZ'
   pad_char: '#'
-  max_len: 36
+  max_len: 32
 model:
   hidden_dim: 256
   num_heads: 4

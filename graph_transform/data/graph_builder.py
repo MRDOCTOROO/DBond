@@ -35,7 +35,7 @@ class GraphBuilder:
     
     def build_graph(self, 
                    sequence: str,
-                   env_vars: Dict[str, float],
+                   sample_features: Dict[str, float],
                    strategy: str = 'sequence') -> Dict[str, torch.Tensor]:
         """
         构建图结构
@@ -49,19 +49,19 @@ class GraphBuilder:
             Dict: 包含图数据的字典
         """
         if strategy == 'sequence':
-            return self._build_sequence_graph(sequence, env_vars)
+            return self._build_sequence_graph(sequence, sample_features)
         elif strategy == 'distance':
-            return self._build_distance_graph(sequence, env_vars)
+            return self._build_distance_graph(sequence, sample_features)
         elif strategy == 'hybrid':
-            return self._build_hybrid_graph(sequence, env_vars)
+            return self._build_hybrid_graph(sequence, sample_features)
         else:
             raise ValueError(f"Unknown graph building strategy: {strategy}")
     
-    def _build_sequence_graph(self, sequence: str, env_vars: Dict[str, float]) -> Dict[str, torch.Tensor]:
+    def _build_sequence_graph(self, sequence: str, sample_features: Dict[str, float]) -> Dict[str, torch.Tensor]:
         """构建基于序列连接的图"""
         seq_len = len(sequence)
         edge_index, edge_type_tensor, edge_distance_tensor = self._get_or_build_edges(seq_len, 'sequence')
-        edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, env_vars)
+        edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, sample_features)
 
         return {
             'edge_index': edge_index,
@@ -70,11 +70,11 @@ class GraphBuilder:
             'edge_distances': edge_distance_tensor
         }
     
-    def _build_distance_graph(self, sequence: str, env_vars: Dict[str, float]) -> Dict[str, torch.Tensor]:
+    def _build_distance_graph(self, sequence: str, sample_features: Dict[str, float]) -> Dict[str, torch.Tensor]:
         """构建基于距离的图"""
         seq_len = len(sequence)
         edge_index, edge_type_tensor, edge_distance_tensor = self._get_or_build_edges(seq_len, 'distance')
-        edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, env_vars)
+        edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, sample_features)
 
         return {
             'edge_index': edge_index,
@@ -83,11 +83,11 @@ class GraphBuilder:
             'edge_distances': edge_distance_tensor
         }
     
-    def _build_hybrid_graph(self, sequence: str, env_vars: Dict[str, float]) -> Dict[str, torch.Tensor]:
+    def _build_hybrid_graph(self, sequence: str, sample_features: Dict[str, float]) -> Dict[str, torch.Tensor]:
         """构建混合图"""
         seq_len = len(sequence)
         edge_index, edge_type_tensor, edge_distance_tensor = self._get_or_build_edges(seq_len, 'hybrid')
-        edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, env_vars)
+        edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, sample_features)
 
         return {
             'edge_index': edge_index,
@@ -264,10 +264,10 @@ class GraphBuilder:
     def _create_edge_features(self, 
                            edge_types: torch.Tensor,
                            edge_distances: torch.Tensor,
-                           env_vars: Dict[str, float]) -> torch.Tensor:
+                           sample_features: Dict[str, float]) -> torch.Tensor:
         """创建边特征"""
         if edge_types.numel() == 0:
-            return torch.empty((0, 6), dtype=torch.float32)
+            return torch.empty((0, 8), dtype=torch.float32)
 
         edge_types_f = edge_types.to(dtype=torch.float32)
         edge_distances_f = edge_distances.to(dtype=torch.float32)
@@ -276,9 +276,11 @@ class GraphBuilder:
         base_features = torch.stack([edge_types_f, edge_distances_f, inv_distance], dim=1)
         env_features = torch.tensor(
             [
-                env_vars.get('charge', 0.0) * 0.1,
-                env_vars.get('nce', 0.0) * 0.01,
-                env_vars.get('fbr', 0.0),
+                sample_features.get('charge', 0.0) * 0.1,
+                sample_features.get('pep_mass', 0.0) / 2000.0,
+                math.log1p(max(sample_features.get('intensity', 0.0), 0.0)) / 20.0,
+                sample_features.get('nce', 0.0) * 0.01,
+                sample_features.get('rt', 0.0) * 0.01,
             ],
             dtype=torch.float32,
             device=base_features.device,

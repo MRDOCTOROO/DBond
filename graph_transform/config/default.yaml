@@ -28,7 +28,8 @@ model:
   position_embedding_dim: 32
   physicochemical_dim: 32
   num_physicochemical_features: 4
-  num_env_features: 5
+  num_state_features: 3
+  num_env_features: 2
   
   # 边配置
   edge_types: ["sequence", "distance", "functional", "long_range", "global"]
@@ -199,7 +200,7 @@ experiment:
   version: "v1.0"
   
   # 实验描述
-  description: "图神经网络多标签分类用于蛋白质二硫键断裂预测"
+  description: "图神经网络多标签分类用于蛋白质二硫键断裂预测（state/env特征拆分，无fbr输入）"
   
   # 随机种子
   seed: 42

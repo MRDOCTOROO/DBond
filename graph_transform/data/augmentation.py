@@ -62,7 +62,7 @@ class SequenceAugmentation:
             'V': ['I', 'L', 'M']
         }
     
-    def augment(self, sequence: str, labels: List[int], env_vars: Dict[str, float]) -> Tuple[str, List[int], Dict[str, float]]:
+    def augment(self, sequence: str, labels: List[int], sample_features: Dict[str, float]) -> Tuple[str, List[int], Dict[str, float]]:
         """
         增强单个样本
         
@@ -75,7 +75,7 @@ class SequenceAugmentation:
             Tuple[str, List[int], Dict[str, float]]: 增强后的序列、标签和环境变量
         """
         if random.random() > self.augmentation_prob:
-            return sequence, labels, env_vars
+            return sequence, labels, sample_features
         
         # 选择增强策略
         augmentation_methods = [
@@ -86,12 +86,12 @@ class SequenceAugmentation:
         ]
         
         method = random.choice(augmentation_methods)
-        return method(sequence, labels, env_vars)
+        return method(sequence, labels, sample_features)
     
-    def _amino_acid_substitution(self, sequence: str, labels: List[int], env_vars: Dict[str, float]) -> Tuple[str, List[int], Dict[str, float]]:
+    def _amino_acid_substitution(self, sequence: str, labels: List[int], sample_features: Dict[str, float]) -> Tuple[str, List[int], Dict[str, float]]:
         """氨基酸替换"""
         if len(sequence) < 3:
-            return sequence, labels, env_vars
+            return sequence, labels, sample_features
         
         # 随机选择替换位置
         num_substitutions = random.randint(1, min(3, len(sequence) // 3))
@@ -108,12 +108,12 @@ class SequenceAugmentation:
         augmented_sequence = ''.join(sequence_list)
         
         # 保持标签不变
-        return augmented_sequence, labels, env_vars
+        return augmented_sequence, labels, sample_features
     
-    def _sequence_truncation(self, sequence: str, labels: List[int], env_vars: Dict[str, float]) -> Tuple[str, List[int], Dict[str, float]]:
+    def _sequence_truncation(self, sequence: str, labels: List[int], sample_features: Dict[str, float]) -> Tuple[str, List[int], Dict[str, float]]:
         """序列截断"""
         if len(sequence) <= 10:
-            return sequence, labels, env_vars
+            return sequence, labels, sample_features
         
         # 随机截断比例
         trunc_ratio = random.uniform(0.8, 0.95)
@@ -123,35 +123,35 @@ class SequenceAugmentation:
         augmented_sequence = sequence[:new_length]
         
         # 截断标签
-        augmented_labels = labels[:new_length]
+        augmented_labels = labels[: max(new_length - 1, 0)]
         
-        return augmented_sequence, augmented_labels, env_vars
+        return augmented_sequence, augmented_labels, sample_features
     
-    def _noise_injection(self, sequence: str, labels: List[int], env_vars: Dict[str, float]) -> Tuple[str, List[int], Dict[str, float]]:
+    def _noise_injection(self, sequence: str, labels: List[int], sample_features: Dict[str, float]) -> Tuple[str, List[int], Dict[str, float]]:
         """注入噪声到环境变量"""
         # 复制环境变量
-        augmented_env = env_vars.copy()
+        augmented_features = sample_features.copy()
         
         # 对数值特征添加噪声
-        noise_features = ['charge', 'pep_mass', 'nce', 'rt', 'fbr']
+        noise_features = ['charge', 'pep_mass', 'intensity', 'nce', 'rt']
         
         for feature in noise_features:
-            if feature in augmented_env:
-                value = augmented_env[feature]
+            if feature in augmented_features:
+                value = augmented_features[feature]
                 noise_std = value * 0.05  # 5%的标准差
                 noise = random.gauss(0, noise_std)
-                augmented_env[feature] = max(0, value + noise)
+                augmented_features[feature] = max(0, value + noise)
         
-        return sequence, labels, augmented_env
+        return sequence, labels, augmented_features
     
-    def _reverse_complement(self, sequence: str, labels: List[int], env_vars: Dict[str, float]) -> Tuple[str, List[int], Dict[str, float]]:
+    def _reverse_complement(self, sequence: str, labels: List[int], sample_features: Dict[str, float]) -> Tuple[str, List[int], Dict[str, float]]:
         """序列反转"""
         augmented_sequence = sequence[::-1]
         augmented_labels = labels[::-1]
         
-        return augmented_sequence, augmented_labels, env_vars
+        return augmented_sequence, augmented_labels, sample_features
     
-    def batch_augment(self, sequences: List[str], labels_list: List[List[int]], env_vars_list: List[Dict[str, float]]) -> Tuple[List[str], List[List[int]], List[Dict[str, float]]]:
+    def batch_augment(self, sequences: List[str], labels_list: List[List[int]], sample_features_list: List[Dict[str, float]]) -> Tuple[List[str], List[List[int]], List[Dict[str, float]]]:
         """
         批量增强数据
         
@@ -165,15 +165,15 @@ class SequenceAugmentation:
         """
         augmented_sequences = []
         augmented_labels = []
-        augmented_env_vars = []
+        augmented_feature_dicts = []
         
-        for seq, labels, env_vars in zip(sequences, labels_list, env_vars_list):
-            aug_seq, aug_labels, aug_env = self.augment(seq, labels, env_vars)
+        for seq, labels, sample_features in zip(sequences, labels_list, sample_features_list):
+            aug_seq, aug_labels, aug_features = self.augment(seq, labels, sample_features)
             augmented_sequences.append(aug_seq)
             augmented_labels.append(aug_labels)
-            augmented_env_vars.append(aug_env)
+            augmented_feature_dicts.append(aug_features)
         
-        return augmented_sequences, augmented_labels, augmented_env_vars
+        return augmented_sequences, augmented_labels, augmented_feature_dicts
 
 
 class GraphAugmentation:
