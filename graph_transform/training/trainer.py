@@ -296,12 +296,16 @@ class Trainer:
                 predictions = self.model(batch_data)
                 targets = batch_data['labels']
                 targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
+                self._ensure_finite_tensor(predictions, "predictions", batch_data)
                 loss = self.criterion(predictions, targets)
         else:
             predictions = self.model(batch_data)
             targets = batch_data['labels']
             targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
+            self._ensure_finite_tensor(predictions, "predictions", batch_data)
             loss = self.criterion(predictions, targets)
+
+        self._ensure_finite_tensor(loss, "loss", batch_data)
         
         # 更新训练指标
         self.metrics_calculator.update(predictions, targets)
@@ -407,6 +411,25 @@ class Trainer:
             else:
                 parts.append(f"{key}={value}")
         return ", ".join(parts)
+
+    def _ensure_finite_tensor(self, tensor: torch.Tensor, name: str, batch_data: Dict[str, Any]) -> None:
+        """检测非有限值并尽早失败，避免后续整轮训练都被 NaN 污染。"""
+        if torch.isfinite(tensor).all():
+            return
+
+        batch_stats = self._extract_batch_stats(batch_data)
+        finite_mask = torch.isfinite(tensor)
+        finite_values = tensor[finite_mask]
+        detail = {
+            'shape': tuple(tensor.shape),
+            'batch_stats': batch_stats,
+            'model_timing': getattr(self.model, 'last_forward_timing', {}),
+        }
+        if finite_values.numel() > 0:
+            detail['finite_min'] = float(finite_values.min().detach().cpu().item())
+            detail['finite_max'] = float(finite_values.max().detach().cpu().item())
+        self.logger.error("Non-finite %s detected: %s", name, detail)
+        raise FloatingPointError(f"Non-finite {name} detected; see training log for batch statistics.")
     
     def save_checkpoint(self, filepath: str, epoch: int, metrics: Dict[str, float], is_best: bool = False):
         """

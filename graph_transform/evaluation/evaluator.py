@@ -86,16 +86,19 @@ class Evaluator:
                 
                 # 前向传播
                 if self.use_amp:
-                    with torch.cuda.amp.autocast():
+                    with torch.amp.autocast(self.amp_device_type, enabled=True):
                         predictions = self.model(batch_data)
                         targets = batch_data['labels']
                         targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
+                        self._ensure_finite_tensor(predictions, "predictions")
                         loss = criterion(predictions, targets)
                 else:
                     predictions = self.model(batch_data)
                     targets = batch_data['labels']
                     targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
+                    self._ensure_finite_tensor(predictions, "predictions")
                     loss = criterion(predictions, targets)
+                self._ensure_finite_tensor(loss, "loss")
                 
                 # 更新指标
                 self.metrics_calculator.update(predictions, targets)
@@ -373,6 +376,12 @@ class Evaluator:
         }
         
         return metrics
+
+    def _ensure_finite_tensor(self, tensor: torch.Tensor, name: str) -> None:
+        """评估阶段遇到 NaN/Inf 直接失败，避免输出无意义指标。"""
+        if torch.isfinite(tensor).all():
+            return
+        raise FloatingPointError(f"Non-finite {name} detected during evaluation.")
     
     def _compute_single_class_metrics(self, targets: torch.Tensor,
                                     predictions: torch.Tensor,

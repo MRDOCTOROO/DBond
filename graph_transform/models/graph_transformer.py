@@ -186,23 +186,35 @@ class NodeEncoder(nn.Module):
     def _encode_state(self, batch_data: Dict, device: torch.device) -> torch.Tensor:
         """编码状态变量"""
         if 'state_vars' in batch_data:
-            return batch_data['state_vars'].to(device=device, dtype=torch.float32)
+            state_vars = batch_data['state_vars'].to(device=device, dtype=torch.float32)
+        else:
+            state_vars = torch.stack(
+                [
+                    batch_data['charges'],
+                    batch_data['pep_masses'],
+                    batch_data['intensities'],
+                ],
+                dim=1,
+            ).to(device=device, dtype=torch.float32)
 
-        return torch.stack(
-            [
-                batch_data['charges'],
-                batch_data['pep_masses'],
-                batch_data['intensities'],
-            ],
-            dim=1,
-        ).to(device=device, dtype=torch.float32)
+        # 与 edge_attr 使用同尺度归一化，避免 intensity 等大数值在 AMP 下放大为 NaN。
+        charge = state_vars[:, 0] * 0.1
+        pep_mass = state_vars[:, 1] / 2000.0
+        intensity = torch.log1p(torch.clamp_min(state_vars[:, 2], 0.0)) / 20.0
+        normalized = torch.stack([charge, pep_mass, intensity], dim=1)
+        return torch.nan_to_num(normalized, nan=0.0, posinf=10.0, neginf=-10.0)
 
     def _encode_environmental(self, batch_data: Dict, device: torch.device) -> torch.Tensor:
         """编码环境变量"""
         if 'env_vars' in batch_data:
-            return batch_data['env_vars'].to(device=device, dtype=torch.float32)
+            env_vars = batch_data['env_vars'].to(device=device, dtype=torch.float32)
+        else:
+            env_vars = torch.stack([batch_data['nces'], batch_data['rts']], dim=1).to(device=device, dtype=torch.float32)
 
-        return torch.stack([batch_data['nces'], batch_data['rts']], dim=1).to(device=device, dtype=torch.float32)
+        nce = env_vars[:, 0] * 0.01
+        rt = env_vars[:, 1] * 0.01
+        normalized = torch.stack([nce, rt], dim=1)
+        return torch.nan_to_num(normalized, nan=0.0, posinf=10.0, neginf=-10.0)
 
     def _get_batch_device(self, batch_data: Dict) -> torch.device:
         """从批次数据中推断设备"""
