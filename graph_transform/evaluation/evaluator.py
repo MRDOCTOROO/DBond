@@ -12,8 +12,12 @@ from typing import Dict, Any, Optional
 from tqdm import tqdm
 import numpy as np
 
-from .metrics import MultiLabelMetrics
-from training import MultiLabelLoss
+from .metrics import BinaryBondMetrics
+
+try:
+    from training import BinaryBondLoss
+except ImportError:
+    from graph_transform.training import BinaryBondLoss
 
 
 class Evaluator:
@@ -46,7 +50,7 @@ class Evaluator:
         self.amp_device_type = 'cuda' if self.device.type == 'cuda' else 'cpu'
         
         # 指标计算器
-        self.metrics_calculator = MultiLabelMetrics(self.eval_config)
+        self.metrics_calculator = BinaryBondMetrics(self.eval_config)
         
         # 将模型移动到设备
         self.model.to(self.device)
@@ -71,7 +75,7 @@ class Evaluator:
         
         # 损失函数（与训练保持一致）
         loss_config = self.config.get('loss', {})
-        criterion = MultiLabelLoss(loss_config).to(self.device)
+        criterion = BinaryBondLoss(loss_config).to(self.device)
         
         with torch.no_grad():
             pbar = tqdm(data_loader, desc="Evaluating")
@@ -357,15 +361,15 @@ class Evaluator:
         from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
         
         # 转换为numpy
-        preds_np = binary_predictions.numpy()
-        targets_np = targets.numpy()
+        preds_np = binary_predictions.numpy().reshape(-1)
+        targets_np = targets.numpy().reshape(-1)
         
         metrics = {
             'threshold': threshold,
             'accuracy': accuracy_score(targets_np, preds_np),
-            'precision': precision_score(targets_np, preds_np, average='macro', zero_division=0),
-            'recall': recall_score(targets_np, preds_np, average='macro', zero_division=0),
-            'f1': f1_score(targets_np, preds_np, average='macro', zero_division=0),
+            'precision': precision_score(targets_np, preds_np, zero_division=0),
+            'recall': recall_score(targets_np, preds_np, zero_division=0),
+            'f1': f1_score(targets_np, preds_np, zero_division=0),
         }
         
         return metrics
@@ -378,9 +382,9 @@ class Evaluator:
         from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
         
         # 转换为numpy
-        targets_np = targets.numpy()
-        preds_np = predictions.numpy()
-        probs_np = probabilities.numpy()
+        targets_np = targets.numpy().reshape(-1)
+        preds_np = predictions.numpy().reshape(-1)
+        probs_np = probabilities.numpy().reshape(-1)
         
         # 计算指标
         metrics = {}
@@ -414,7 +418,7 @@ class Evaluator:
         targets_np = targets.numpy()
         
         stats = {
-            'num_classes': targets_np.shape[1],
+            'num_classes': 1,
             'total_samples': targets_np.shape[0],
             'class_positive_counts': [],
             'class_positive_rates': [],
@@ -422,16 +426,14 @@ class Evaluator:
             'class_negative_rates': []
         }
         
-        for i in range(targets_np.shape[1]):
-            class_targets = targets_np[:, i]
-            positive_count = int(np.sum(class_targets))
-            total_count = len(class_targets)
-            positive_rate = float(np.mean(class_targets))
-            
-            stats['class_positive_counts'].append(positive_count)
-            stats['class_positive_rates'].append(positive_rate)
-            stats['class_negative_counts'].append(total_count - positive_count)
-            stats['class_negative_rates'].append(1.0 - positive_rate)
+        positive_count = int(np.sum(targets_np))
+        total_count = len(targets_np)
+        positive_rate = float(np.mean(targets_np)) if total_count > 0 else 0.0
+
+        stats['class_positive_counts'].append(positive_count)
+        stats['class_positive_rates'].append(positive_rate)
+        stats['class_negative_counts'].append(total_count - positive_count)
+        stats['class_negative_rates'].append(1.0 - positive_rate)
         
         return stats
     

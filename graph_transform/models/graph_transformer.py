@@ -1,7 +1,7 @@
 """
 主要的图神经网络模型实现
 
-本文件包含了GraphTransformer模型的完整实现，用于蛋白质序列的多标签分类。
+本文件包含了GraphTransformer模型的完整实现，用于蛋白质序列的键级别二分类。
 模型将蛋白质序列转换为图结构，然后使用图神经网络进行特征学习和预测。
 """
 
@@ -11,9 +11,16 @@ import torch.nn.functional as F
 from torch.nn.parameter import UninitializedParameter
 from typing import Dict, List, Optional, Tuple
 import numpy as np
+import time
 
 from .gcn_layers import GraphConvLayer, ResidualGCNLayer
 from .attention_layers import GraphAttentionLayer, GlobalAttentionPool
+
+
+def _maybe_sync(device: torch.device, enabled: bool) -> None:
+    """仅在 profiling 时同步 CUDA，避免常规训练开销。"""
+    if enabled and device.type == 'cuda' and torch.cuda.is_available():
+        torch.cuda.synchronize(device)
 
 
 class NodeEncoder(nn.Module):
@@ -302,7 +309,7 @@ class EdgeEncoder(nn.Module):
 
 
 class MultiLabelHead(nn.Module):
-    """多标签预测头"""
+    """保留的通用预测头，当前主路径未使用。"""
     
     def __init__(self, config):
         super(MultiLabelHead, self).__init__()
@@ -373,7 +380,7 @@ class MultiLabelHead(nn.Module):
             # 假设已经是序列级别的特征 [batch_size, seq_len, hidden_dim]
             pooled_features = node_features
         
-        # 多标签预测
+        # 通用逐位置预测
         predictions = self.mlp(pooled_features)
         
         return predictions
@@ -458,6 +465,9 @@ class GraphTransformer(nn.Module):
         self.layer_norms = nn.ModuleList([
             nn.LayerNorm(config.hidden_dim) for _ in range(config.num_gcn_layers + config.num_gat_layers)
         ])
+
+        self.enable_timing = False
+        self.last_forward_timing = {}
         
         self._init_weights()
     
@@ -481,8 +491,17 @@ class GraphTransformer(nn.Module):
         Returns:
             torch.Tensor: 键级别断裂预测结果 [batch_size, max_bonds]
         """
+        timing_enabled = bool(getattr(self, 'enable_timing', False))
+        device = self._infer_batch_device(batch_data)
+        if timing_enabled:
+            _maybe_sync(device, True)
+            total_start = time.perf_counter()
+
         # 节点特征编码
         node_features = self.node_encoder(batch_data)
+        if timing_enabled:
+            _maybe_sync(node_features.device, True)
+            node_encode_end = time.perf_counter()
         global_nodes = None
         if self.use_global_node:
             state_raw = self.node_encoder._encode_state(batch_data, node_features.device)
@@ -491,6 +510,9 @@ class GraphTransformer(nn.Module):
             env_embed = self.node_encoder.env_encoder(env_raw)
             global_context = torch.cat([state_embed, env_embed], dim=-1)
             global_nodes = self.global_node_embedding + self.global_node_proj(global_context)
+        if timing_enabled:
+            _maybe_sync(node_features.device, True)
+            global_node_end = time.perf_counter()
         
         # 边特征编码
         edge_features = self.edge_encoder(
@@ -499,6 +521,9 @@ class GraphTransformer(nn.Module):
             batch_data['edge_distances'],
             batch_data.get('edge_attr')
         )
+        if timing_enabled:
+            _maybe_sync(node_features.device, True)
+            edge_encode_end = time.perf_counter()
         
         # 根据真实序列长度裁剪节点特征
         seq_lens = batch_data['seq_lens'].tolist()
@@ -525,20 +550,44 @@ class GraphTransformer(nn.Module):
 
         node_features = torch.cat(trimmed_nodes, dim=0) if trimmed_nodes else node_features.new_empty((0, hidden_dim))
         batch_indices = torch.tensor(batch_indices, device=node_features.device, dtype=torch.long)
+        if timing_enabled:
+            _maybe_sync(node_features.device, True)
+            trim_end = time.perf_counter()
         
         # 图卷积层
+        gcn_timings = {}
         for i, gcn_layer in enumerate(self.gcn_layers):
+            layer_start = time.perf_counter() if timing_enabled else None
             residual = node_features
             node_features = gcn_layer(node_features, batch_data['edge_index'], edge_features)
             node_features = self.layer_norms[i](node_features + residual)
             node_features = F.dropout(node_features, p=self.config.dropout, training=self.training)
+            if timing_enabled:
+                _maybe_sync(node_features.device, True)
+                gcn_timings[f'gcn_layer_{i}'] = time.perf_counter() - layer_start
+        if timing_enabled:
+            gcn_end = time.perf_counter()
         
         # 图注意力层
+        gat_timings = {}
         for i, gat_layer in enumerate(self.gat_layers):
+            if hasattr(gat_layer, 'enable_timing'):
+                gat_layer.enable_timing = timing_enabled
+            layer_start = time.perf_counter() if timing_enabled else None
             residual = node_features
             node_features = gat_layer(node_features, batch_data['edge_index'])
             node_features = self.layer_norms[len(self.gcn_layers) + i](node_features + residual)
             node_features = F.dropout(node_features, p=self.config.dropout, training=self.training)
+            if timing_enabled:
+                _maybe_sync(node_features.device, True)
+                gat_timings[f'gat_layer_{i}_total'] = time.perf_counter() - layer_start
+                layer_timing = getattr(gat_layer, 'last_forward_timing', {})
+                for key, value in layer_timing.items():
+                    if key in {'num_nodes', 'num_edges'}:
+                        continue
+                    gat_timings[f'gat_layer_{i}_{key}'] = float(value)
+        if timing_enabled:
+            gat_end = time.perf_counter()
         
         # 构建相邻键的特征并预测断裂
         seq_lens = batch_data['seq_lens'].tolist()
@@ -566,12 +615,40 @@ class GraphTransformer(nn.Module):
         predictions = torch.zeros(batch_size, max_bonds, device=node_features.device)
         cursor = 0
         for i, seq_len in enumerate(seq_lens):
-            bond_len = max(seq_len - 1, 0)
-            if bond_len > 0:
-                predictions[i, :bond_len] = bond_logits_flat[cursor:cursor + bond_len]
-                cursor += bond_len
+                bond_len = max(seq_len - 1, 0)
+                if bond_len > 0:
+                    predictions[i, :bond_len] = bond_logits_flat[cursor:cursor + bond_len]
+                    cursor += bond_len
+
+        if timing_enabled:
+            _maybe_sync(node_features.device, True)
+            output_end = time.perf_counter()
+            self.last_forward_timing = {
+                'node_encode': node_encode_end - total_start,
+                'global_node': global_node_end - node_encode_end,
+                'edge_encode': edge_encode_end - global_node_end,
+                'trim_nodes': trim_end - edge_encode_end,
+                'gcn_total': gcn_end - trim_end,
+                'gat_total': gat_end - gcn_end,
+                'bond_predict_restore': output_end - gat_end,
+                'forward_total': output_end - total_start,
+                'batch_size': float(batch_size),
+                'total_nodes': float(node_features.size(0)),
+                'total_edges': float(batch_data['edge_index'].size(1)),
+            }
+            self.last_forward_timing.update(gcn_timings)
+            self.last_forward_timing.update(gat_timings)
+        else:
+            self.last_forward_timing = {}
 
         return predictions
+
+    def _infer_batch_device(self, batch_data: Dict) -> torch.device:
+        """从 batch 中推断当前设备。"""
+        for value in batch_data.values():
+            if torch.is_tensor(value):
+                return value.device
+        return self.global_node_embedding.device if self.use_global_node else next(self.parameters()).device
     
     def get_attention_weights(self, batch_data: Dict) -> List[torch.Tensor]:
         """获取注意力权重用于可视化"""

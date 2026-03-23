@@ -5,7 +5,13 @@
 """
 
 from .trainer import Trainer
-from .loss_functions import MultiLabelLoss
-from .metrics import MultiLabelMetrics
+from .loss_functions import BinaryBondLoss, MultiLabelLoss
+from .metrics import BinaryBondMetrics, MultiLabelMetrics
 
-__all__ = ['Trainer', 'MultiLabelLoss', 'MultiLabelMetrics']
+__all__ = [
+    'Trainer',
+    'BinaryBondLoss',
+    'BinaryBondMetrics',
+    'MultiLabelLoss',
+    'MultiLabelMetrics',
+]

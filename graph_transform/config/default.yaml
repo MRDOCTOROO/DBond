@@ -1,4 +1,4 @@
-# 图神经网络多标签分类系统配置文件
+# 图神经网络键级别二分类系统配置文件
 
 # 模型配置
 model:
@@ -57,7 +57,7 @@ model:
 training:
   # 基础训练参数
   epochs: 100
-  batch_size: 64
+  batch_size: 1024
   learning_rate: 0.001
   weight_decay: 0.0001
   gradient_clip_norm: 1.0
@@ -100,7 +100,7 @@ data:
   max_augmentation_trials: 3
   
   # 批处理配置
-  num_workers: 12 #最低尝试的4线程
+  num_workers: 8 #最低尝试的4线程
   pin_memory: true
   drop_last: true
   
@@ -196,11 +196,11 @@ logging:
 # 实验配置
 experiment:
   # 实验名称和版本
-  name: "graph_transform_multilabel"
+  name: "graph_transform_binary_bond"
   version: "v1.0"
   
   # 实验描述
-  description: "图神经网络多标签分类用于蛋白质二硫键断裂预测（state/env特征拆分，无fbr输入）"
+  description: "图神经网络键级别二分类用于蛋白质二硫键断裂预测（state/env特征拆分，无fbr输入）"
   
   # 随机种子
   seed: 42
@@ -263,5 +263,5 @@ debug:
   visualize_predictions: false
   
   # 性能分析
-  profile_memory: false
-  profile_time: false
+  profile_memory: false  # true时记录CUDA显存占用
+  profile_time: false    # true时输出batch级和模型内部各阶段耗时

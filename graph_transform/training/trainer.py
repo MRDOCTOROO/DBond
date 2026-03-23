@@ -13,7 +13,7 @@ import logging
 from typing import Dict, Any, Optional
 from tqdm import tqdm
 
-from .metrics import MultiLabelMetrics, MetricTracker
+from .metrics import BinaryBondMetrics, MetricTracker
 
 
 class Trainer:
@@ -60,7 +60,7 @@ class Trainer:
             self.scaler = torch.amp.GradScaler(self.amp_device_type, enabled=True)
         
         # 指标跟踪
-        self.metrics_calculator = MultiLabelMetrics(self.config.get('evaluation', {}))
+        self.metrics_calculator = BinaryBondMetrics(self.config.get('evaluation', {}))
         self.metric_tracker = MetricTracker()
         
         # 训练状态
@@ -69,6 +69,13 @@ class Trainer:
         
         # 将模型移动到设备
         self.model.to(self.device)
+        self.debug_config = self.config.get('debug', {})
+        self.profile_time = self.debug_config.get('profile_time', False)
+        self.profile_memory = self.debug_config.get('profile_memory', False)
+        if hasattr(self.model, 'enable_timing'):
+            self.model.enable_timing = self.profile_time
+        if self.profile_time:
+            self.logger.info("Detailed timing profiling is enabled; CUDA synchronization will add overhead.")
     
     def train_epoch(self, train_loader: DataLoader, epoch: int) -> Dict[str, float]:
         """
@@ -89,33 +96,94 @@ class Trainer:
         
         total_loss = 0.0
         num_batches = 0
+        total_fetch_wait_time = 0.0
+        total_move_time = 0.0
+        total_forward_time = 0.0
+        total_backward_time = 0.0
+        total_batch_time = 0.0
+        last_batch_end = time.perf_counter()
         
         # 进度条
         pbar = tqdm(train_loader, desc=f"Epoch {epoch} Training")
         
         for batch_idx, batch_data in enumerate(pbar):
+            batch_start = time.perf_counter()
+            fetch_wait_time = batch_start - last_batch_end
+            total_fetch_wait_time += fetch_wait_time
+
             # 将数据移动到设备
+            self._maybe_sync_device()
+            move_start = time.perf_counter()
             batch_data = self._move_to_device(batch_data)
+            self._maybe_sync_device()
+            move_time = time.perf_counter() - move_start
             
             # 前向传播
+            forward_start = time.perf_counter()
             loss = self._forward_pass(batch_data)
+            self._maybe_sync_device()
+            forward_time = time.perf_counter() - forward_start
             
             # 反向传播
+            backward_start = time.perf_counter()
             self._backward_pass(loss)
+            self._maybe_sync_device()
+            backward_time = time.perf_counter() - backward_start
+            batch_time = time.perf_counter() - batch_start
+            last_batch_end = time.perf_counter()
             
             # 更新指标
             total_loss += loss.item()
             num_batches += 1
+            total_move_time += move_time
+            total_forward_time += forward_time
+            total_backward_time += backward_time
+            total_batch_time += batch_time
             
             # 更新进度条
             pbar.set_postfix({
                 'Loss': f'{loss.item():.4f}',
-                'Avg Loss': f'{total_loss / num_batches:.4f}'
+                'Avg Loss': f'{total_loss / num_batches:.4f}',
+                'Batch s': f'{batch_time:.3f}'
             })
             
             # 记录日志
             if batch_idx % self.training_config.get('log_interval', 10) == 0:
-                self.logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f}")
+                if self.profile_time:
+                    batch_stats = self._extract_batch_stats(batch_data)
+                    self.logger.info(
+                        "Epoch %s Batch %s Timing - fetch_wait: %.4fs, move: %.4fs, forward: %.4fs, backward+opt: %.4fs, total: %.4fs, loss: %.4f, batch_stats: %s",
+                        epoch,
+                        batch_idx,
+                        fetch_wait_time,
+                        move_time,
+                        forward_time,
+                        backward_time,
+                        batch_time,
+                        loss.item(),
+                        batch_stats,
+                    )
+                    model_timing = getattr(self.model, 'last_forward_timing', {})
+                    if model_timing:
+                        self.logger.info(
+                            "Epoch %s Batch %s ModelTiming - %s",
+                            epoch,
+                            batch_idx,
+                            self._format_timing_dict(model_timing),
+                        )
+                    if self.profile_memory:
+                        memory_stats = self._get_memory_stats()
+                        if memory_stats is not None:
+                            self.logger.info(
+                                "Epoch %s Batch %s Memory - allocated: %.2fMB, reserved: %.2fMB, peak: %.2fMB",
+                                epoch,
+                                batch_idx,
+                                memory_stats['allocated_mb'],
+                                memory_stats['reserved_mb'],
+                                memory_stats['peak_allocated_mb'],
+                            )
+                else:
+                    self.logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f}")
         
         # 计算平均损失
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
@@ -123,6 +191,12 @@ class Trainer:
         # 计算指标
         metrics = self.metrics_calculator.compute()
         metrics['loss'] = avg_loss
+        if num_batches > 0:
+            metrics['avg_fetch_wait_time'] = total_fetch_wait_time / num_batches
+            metrics['avg_move_time'] = total_move_time / num_batches
+            metrics['avg_forward_time'] = total_forward_time / num_batches
+            metrics['avg_backward_time'] = total_backward_time / num_batches
+            metrics['avg_batch_time'] = total_batch_time / num_batches
         
         # 更新指标跟踪器
         self.metric_tracker.update(epoch, metrics, mode='train')
@@ -136,7 +210,16 @@ class Trainer:
                     self.scheduler.step()
         
         # 记录epoch总结
-        self.logger.info(f"Epoch {epoch} Training - Loss: {avg_loss:.4f}")
+        self.logger.info(
+            "Epoch %s Training - Loss: %.4f, AvgBatch: %.4fs, FetchWait: %.4fs, Move: %.4fs, Forward: %.4fs, Backward: %.4fs",
+            epoch,
+            avg_loss,
+            metrics.get('avg_batch_time', 0.0),
+            metrics.get('avg_fetch_wait_time', 0.0),
+            metrics.get('avg_move_time', 0.0),
+            metrics.get('avg_forward_time', 0.0),
+            metrics.get('avg_backward_time', 0.0),
+        )
         if metrics:
             metric_str = ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items() if k != 'loss'])
             self.logger.info(f"Epoch {epoch} Training Metrics - {metric_str}")
@@ -172,7 +255,8 @@ class Trainer:
                 # 前向传播
                 predictions = self.model(batch_data)
                 targets = batch_data['labels']
-                
+                targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
+
                 # 计算损失
                 loss = self.criterion(predictions, targets)
                 
@@ -246,6 +330,11 @@ class Trainer:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clip_norm)
             
             self.optimizer.step()
+
+    def _maybe_sync_device(self):
+        """仅在 profiling 时同步 CUDA，保证计时可信。"""
+        if self.profile_time and self.device.type == 'cuda' and torch.cuda.is_available():
+            torch.cuda.synchronize(self.device)
     
     def _move_to_device(self, batch_data: Dict[str, Any]) -> Dict[str, Any]:
         """将批次数据移动到设备"""
@@ -277,6 +366,47 @@ class Trainer:
             masked_targets = masked_targets.unsqueeze(1)
 
         return masked_targets, masked_preds
+
+    def _extract_batch_stats(self, batch_data: Dict[str, Any]) -> Dict[str, Any]:
+        """提取当前 batch 的基础统计，方便排查数据和吞吐问题。"""
+        stats = {}
+        seq_lens = batch_data.get('seq_lens')
+        if isinstance(seq_lens, torch.Tensor) and seq_lens.numel() > 0:
+            stats['batch_size'] = int(seq_lens.numel())
+            stats['seq_min'] = int(seq_lens.min().item())
+            stats['seq_max'] = int(seq_lens.max().item())
+            stats['seq_mean'] = round(float(seq_lens.float().mean().item()), 2)
+        edge_index = batch_data.get('edge_index')
+        if isinstance(edge_index, torch.Tensor):
+            stats['edges'] = int(edge_index.size(1))
+        label_mask = batch_data.get('label_mask')
+        if isinstance(label_mask, torch.Tensor):
+            stats['valid_bonds'] = int(label_mask.sum().item())
+        return stats
+
+    def _get_memory_stats(self) -> Optional[Dict[str, float]]:
+        """返回当前 CUDA 显存统计。"""
+        if self.device.type != 'cuda' or not torch.cuda.is_available():
+            return None
+        return {
+            'allocated_mb': torch.cuda.memory_allocated(self.device) / (1024 ** 2),
+            'reserved_mb': torch.cuda.memory_reserved(self.device) / (1024 ** 2),
+            'peak_allocated_mb': torch.cuda.max_memory_allocated(self.device) / (1024 ** 2),
+        }
+
+    def _format_timing_dict(self, timing: Dict[str, Any]) -> str:
+        """将模型内部 timing dict 格式化为紧凑字符串。"""
+        parts = []
+        count_keys = {'batch_size', 'total_nodes', 'total_edges', 'num_nodes', 'num_edges'}
+        for key, value in timing.items():
+            if isinstance(value, float):
+                if key in count_keys:
+                    parts.append(f"{key}={value:.0f}")
+                else:
+                    parts.append(f"{key}={value:.4f}s")
+            else:
+                parts.append(f"{key}={value}")
+        return ", ".join(parts)
     
     def save_checkpoint(self, filepath: str, epoch: int, metrics: Dict[str, float], is_best: bool = False):
         """

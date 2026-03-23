@@ -1,7 +1,7 @@
 """
 损失函数模块
 
-本模块包含多标签分类的损失函数实现。
+本模块包含键级别二分类任务的损失函数实现。
 """
 
 import torch
@@ -11,11 +11,11 @@ from typing import Dict, Any, Optional
 import numpy as np
 
 
-class MultiLabelLoss(nn.Module):
-    """多标签分类损失函数"""
+class BinaryBondLoss(nn.Module):
+    """键级别二分类损失函数"""
     
     def __init__(self, config: Dict[str, Any]):
-        super(MultiLabelLoss, self).__init__()
+        super(BinaryBondLoss, self).__init__()
         
         self.config = config
         self.main_loss = config.get('main_loss', 'binary_cross_entropy')
@@ -47,8 +47,8 @@ class MultiLabelLoss(nn.Module):
         计算损失
         
         Args:
-            predictions: 模型预测 [batch_size, num_classes]
-            targets: 真实标签 [batch_size, num_classes]
+            predictions: 模型预测 [num_bonds] 或 [num_bonds, 1]
+            targets: 真实标签 [num_bonds] 或 [num_bonds, 1]
             
         Returns:
             torch.Tensor: 损失值
@@ -143,7 +143,7 @@ class FocalLoss(nn.Module):
 
 
 class DiceLoss(nn.Module):
-    """Dice Loss用于多标签分类"""
+    """Dice Loss用于键级别二分类"""
     
     def __init__(self, config: Dict[str, Any]):
         super(DiceLoss, self).__init__()
@@ -156,8 +156,8 @@ class DiceLoss(nn.Module):
         计算Dice Loss
         
         Args:
-            inputs: 模型预测 [batch_size, num_classes]
-            targets: 真实标签 [batch_size, num_classes]
+            inputs: 模型预测 [num_bonds] 或 [num_bonds, 1]
+            targets: 真实标签 [num_bonds] 或 [num_bonds, 1]
             
         Returns:
             torch.Tensor: Dice Loss
@@ -216,3 +216,7 @@ class CombinedLoss(nn.Module):
         )
         
         return total_loss
+
+
+# Backward-compatible alias for older imports.
+MultiLabelLoss = BinaryBondLoss

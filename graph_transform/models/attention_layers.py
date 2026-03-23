@@ -10,6 +10,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple
 import math
+import time
+
+
+def _maybe_sync(device: torch.device, enabled: bool) -> None:
+    """仅在 profiling 时同步 CUDA，避免常规训练引入额外开销。"""
+    if enabled and device.type == 'cuda' and torch.cuda.is_available():
+        torch.cuda.synchronize(device)
 
 
 class GraphAttentionLayer(nn.Module):
@@ -40,6 +47,10 @@ class GraphAttentionLayer(nn.Module):
         
         # 层归一化
         self.layer_norm = nn.LayerNorm(self.output_dim)
+
+        # 可选的前向耗时分析
+        self.enable_timing = False
+        self.last_forward_timing = {}
         
         self.reset_parameters()
     
@@ -66,15 +77,31 @@ class GraphAttentionLayer(nn.Module):
             Optional[torch.Tensor]: 注意力权重 [num_heads, num_edges]
         """
         num_nodes, _ = x.shape
+        timing_enabled = bool(getattr(self, 'enable_timing', False))
+        total_start = time.perf_counter() if timing_enabled else None
+        if timing_enabled:
+            _maybe_sync(x.device, True)
         
         # 多头线性变换
         x_heads = torch.einsum('ni,hij->nhj', x, self.W)  # [num_nodes, num_heads, head_dim]
+        row, col = edge_index
+        src_heads = x_heads[row]
+        dst_heads = x_heads[col]
+        if timing_enabled:
+            _maybe_sync(x.device, True)
+            project_end = time.perf_counter()
         
         # 计算注意力权重
-        attention_weights = self._compute_attention(x_heads, edge_index, edge_attr)
+        attention_weights = self._compute_attention(src_heads, dst_heads, col, edge_attr, num_nodes)
+        if timing_enabled:
+            _maybe_sync(x.device, True)
+            attention_end = time.perf_counter()
         
         # 应用注意力权重更新节点特征
-        output_heads = self._propagate_with_attention(x_heads, edge_index, attention_weights)
+        output_heads = self._propagate_with_attention(src_heads, col, attention_weights, num_nodes)
+        if timing_enabled:
+            _maybe_sync(x.device, True)
+            propagate_end = time.perf_counter()
         
         # 拼接或平均多头输出
         if self.concat:
@@ -89,27 +116,42 @@ class GraphAttentionLayer(nn.Module):
         # 层归一化和dropout
         output = self.layer_norm(output)
         output = F.dropout(output, p=self.dropout, training=self.training)
+
+        if timing_enabled:
+            _maybe_sync(x.device, True)
+            output_end = time.perf_counter()
+            self.last_forward_timing = {
+                'project': project_end - total_start,
+                'attention': attention_end - project_end,
+                'propagate': propagate_end - attention_end,
+                'output': output_end - propagate_end,
+                'total': output_end - total_start,
+                'num_nodes': float(num_nodes),
+                'num_edges': float(edge_index.size(1)),
+            }
+        else:
+            self.last_forward_timing = {}
         
         if return_attention:
             return output, attention_weights
         else:
             return output
     
-    def _compute_attention(self, x_heads: torch.Tensor, 
-                          edge_index: torch.Tensor,
-                          edge_attr: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _compute_attention(self,
+                           src_heads: torch.Tensor,
+                           dst_heads: torch.Tensor,
+                           target_index: torch.Tensor,
+                           edge_attr: Optional[torch.Tensor],
+                           num_nodes: int) -> torch.Tensor:
         """计算注意力权重"""
-        row, col = edge_index
-        
-        # 获取源节点和目标节点的特征
-        x_i = x_heads[row]  # [num_edges, num_heads, head_dim]
-        x_j = x_heads[col]  # [num_edges, num_heads, head_dim]
-        
-        # 拼接源节点和目标节点特征
-        x_ij = torch.cat([x_i, x_j], dim=-1)  # [num_edges, num_heads, 2*head_dim]
-        
-        # 计算注意力分数
-        e = torch.einsum('ehd,hdk->ehk', x_ij, self.a).squeeze(-1)  # [num_edges, num_heads]
+        if src_heads.numel() == 0:
+            return src_heads.new_empty((0, self.num_heads))
+
+        # 将 attention 向量拆成 source/target 两半，避免 cat + einsum 的额外开销。
+        attention_vector = self.a.squeeze(-1)
+        a_src, a_dst = attention_vector.split(self.head_dim, dim=1)
+        e = (src_heads * a_src.unsqueeze(0)).sum(dim=-1)
+        e = e + (dst_heads * a_dst.unsqueeze(0)).sum(dim=-1)
         
         # 如果有边特征，加上边特征的贡献
         if edge_attr is not None:
@@ -121,42 +163,51 @@ class GraphAttentionLayer(nn.Module):
         e = F.leaky_relu(e, negative_slope=self.alpha)
         
         # 计算softmax注意力权重
-        attention_weights = self._softmax_attention(e, row, x_heads.size(0))
+        attention_weights = self._softmax_attention(e, target_index, num_nodes)
         
         return attention_weights
     
     def _softmax_attention(self, e: torch.Tensor, 
-                           edge_index_row: torch.Tensor,
+                           target_index: torch.Tensor,
                            num_nodes: int) -> torch.Tensor:
-        """计算softmax注意力权重"""
-        # 初始化注意力权重
-        attention = torch.zeros_like(e)
-        
-        # 对每个目标节点计算softmax
-        for node in range(num_nodes):
-            mask = (edge_index_row == node)
-            if mask.sum() > 0:
-                attention[mask] = F.softmax(e[mask].float(), dim=0).to(dtype=attention.dtype)
-        
-        return attention
+        """按目标节点分组计算softmax注意力权重。"""
+        if e.numel() == 0:
+            return e
+
+        num_heads = e.size(1)
+        expanded_index = target_index.unsqueeze(-1).expand(-1, num_heads)
+
+        # 先按目标节点求每个head的最大值，避免softmax上溢。
+        max_per_node = torch.full(
+            (num_nodes, num_heads),
+            float("-inf"),
+            device=e.device,
+            dtype=e.dtype,
+        )
+        max_per_node.scatter_reduce_(0, expanded_index, e, reduce="amax", include_self=True)
+        stabilized = e - max_per_node[target_index]
+        exp_scores = stabilized.exp()
+
+        sum_per_node = torch.zeros((num_nodes, num_heads), device=e.device, dtype=e.dtype)
+        sum_per_node.scatter_add_(0, expanded_index, exp_scores)
+
+        return exp_scores / sum_per_node[target_index].clamp_min(1e-12)
     
-    def _propagate_with_attention(self, x_heads: torch.Tensor,
-                                  edge_index: torch.Tensor,
-                                  attention_weights: torch.Tensor) -> torch.Tensor:
+    def _propagate_with_attention(self,
+                                  src_heads: torch.Tensor,
+                                  target_index: torch.Tensor,
+                                  attention_weights: torch.Tensor,
+                                  num_nodes: int) -> torch.Tensor:
         """使用注意力权重传播消息"""
-        row, col = edge_index
-        
         # 加权的源节点特征
-        weighted_features = x_heads[row] * attention_weights.unsqueeze(-1)
+        weighted_features = src_heads * attention_weights.unsqueeze(-1)
         
         # 聚合到目标节点
-        num_nodes, num_heads, head_dim = x_heads.shape
-        output = torch.zeros(num_nodes, num_heads, head_dim, device=x_heads.device, dtype=x_heads.dtype)
+        num_heads, head_dim = weighted_features.size(1), weighted_features.size(2)
+        output = torch.zeros(num_nodes, num_heads * head_dim, device=weighted_features.device, dtype=weighted_features.dtype)
+        output.index_add_(0, target_index, weighted_features.reshape(weighted_features.size(0), -1))
         
-        # 使用scatter_add聚合
-        output.index_add_(0, col, weighted_features)
-        
-        return output
+        return output.view(num_nodes, num_heads, head_dim)
     
     def get_attention_weights(self, x: torch.Tensor, 
                               edge_index: torch.Tensor,
@@ -165,9 +216,16 @@ class GraphAttentionLayer(nn.Module):
         with torch.no_grad():
             # 多头线性变换
             x_heads = torch.einsum('ni,hij->nhj', x, self.W)
+            row, col = edge_index
             
             # 计算注意力权重
-            attention_weights = self._compute_attention(x_heads, edge_index, edge_attr)
+            attention_weights = self._compute_attention(
+                x_heads[row],
+                x_heads[col],
+                col,
+                edge_attr,
+                x_heads.size(0),
+            )
             
             return attention_weights
 

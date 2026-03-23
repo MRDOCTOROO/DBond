@@ -2,7 +2,7 @@
 """
 图神经网络训练脚本
 
-本脚本用于训练图神经网络多标签分类模型。
+本脚本用于训练图神经网络键级别二分类模型。
 支持配置文件、命令行参数和完整的训练流程。
 """
 
@@ -29,8 +29,8 @@ from models import GraphTransformer
 from torch.nn.parameter import UninitializedParameter
 from models.utils import ModelConfig, CheckpointManager, LearningRateScheduler
 from data import GraphDataset, GraphDataLoader, CachedGraphDataset
-from training import Trainer, MultiLabelLoss
-from evaluation import Evaluator, MultiLabelMetrics
+from training import Trainer, BinaryBondLoss
+from evaluation import Evaluator
 
 
 def setup_logging(config: Dict[str, Any]) -> logging.Logger:
@@ -221,6 +221,9 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset,
     """创建数据加载器"""
     data_config = config['data']
     training_config = config['training']
+    performance_config = config.get('performance', {})
+    persistent_workers = performance_config.get('persistent_workers', False)
+    prefetch_factor = performance_config.get('prefetch_factor')
     
     # 训练数据加载器
     train_loader = GraphDataLoader(
@@ -229,7 +232,9 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset,
         shuffle=True,
         num_workers=data_config.get('num_workers', 4),
         pin_memory=data_config.get('pin_memory', True),
-        drop_last=data_config.get('drop_last', False)
+        drop_last=data_config.get('drop_last', False),
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
     )
     
     # 验证数据加载器
@@ -241,7 +246,9 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset,
             shuffle=False,
             num_workers=data_config.get('num_workers', 4),
             pin_memory=data_config.get('pin_memory', True),
-            drop_last=False
+            drop_last=False,
+            persistent_workers=persistent_workers,
+            prefetch_factor=prefetch_factor,
         )
     
     # 测试数据加载器
@@ -253,9 +260,21 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset,
             shuffle=False,
             num_workers=data_config.get('num_workers', 4),
             pin_memory=data_config.get('pin_memory', True),
-            drop_last=False
+            drop_last=False,
+            persistent_workers=persistent_workers,
+            prefetch_factor=prefetch_factor,
         )
     
+    logger.info(
+        "DataLoader config - batch_size: %s, num_workers: %s, pin_memory: %s, drop_last: %s, persistent_workers: %s, prefetch_factor: %s",
+        training_config['batch_size'],
+        data_config.get('num_workers', 4),
+        data_config.get('pin_memory', True),
+        data_config.get('drop_last', False),
+        persistent_workers if data_config.get('num_workers', 4) > 0 else False,
+        prefetch_factor if data_config.get('num_workers', 4) > 0 else None,
+    )
+
     return train_loader, val_loader, test_loader
 
 
@@ -350,7 +369,7 @@ def create_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any]) -> opti
 
 def main():
     """主函数"""
-    parser = argparse.ArgumentParser(description='训练图神经网络多标签分类模型')
+    parser = argparse.ArgumentParser(description='训练图神经网络键级别二分类模型')
     
     # 必需参数
     parser.add_argument('--config', type=str, required=True,
@@ -388,13 +407,20 @@ def main():
     logger.info(f"Using device: {device}")
     
     # 创建模型
+    model_start = time.perf_counter()
     model = create_model(config, device)
+    logger.info(f"Model creation took {time.perf_counter() - model_start:.2f}s")
     
     # 创建数据集和数据加载器
+    dataset_start = time.perf_counter()
     train_dataset, val_dataset, test_dataset = create_datasets(config)
+    logger.info(f"Dataset creation took {time.perf_counter() - dataset_start:.2f}s")
+
+    dataloader_start = time.perf_counter()
     train_loader, val_loader, test_loader = create_data_loaders(
         train_dataset, val_dataset, test_dataset, config
     )
+    logger.info(f"DataLoader creation took {time.perf_counter() - dataloader_start:.2f}s")
     
     logger.info(f"Training samples: {len(train_dataset)}")
     if val_dataset:
@@ -408,7 +434,7 @@ def main():
     
     # 创建损失函数
     loss_config = config.get('loss', {})
-    criterion = MultiLabelLoss(loss_config)
+    criterion = BinaryBondLoss(loss_config)
     
     # 创建训练器
     trainer = Trainer(
@@ -460,9 +486,11 @@ def main():
     os.makedirs(training_config['checkpoint_dir'], exist_ok=True)
     logger.info(f"Checkpoint dir: {training_config['checkpoint_dir']}")
     epochs = training_config['epochs']
+    training_start = time.perf_counter()
     
     for epoch in range(start_epoch, epochs):
         logger.info(f"Epoch {epoch + 1}/{epochs}")
+        epoch_start = time.perf_counter()
         
         # 训练阶段
         train_metrics = trainer.train_epoch(train_loader, epoch + 1)
@@ -504,6 +532,7 @@ def main():
                     f"Early stopping triggered at epoch {epoch + 1}. "
                     f"Best F1 {best_metric:.4f} at epoch {best_epoch}."
                 )
+                logger.info(f"Epoch {epoch + 1} wall time: {time.perf_counter() - epoch_start:.2f}s")
                 break
         
         # 定期保存检查点
@@ -522,15 +551,19 @@ def main():
                 is_best=False
             )
             logger.info(f"Saved checkpoint at epoch {epoch + 1}")
+
+        logger.info(f"Epoch {epoch + 1} wall time: {time.perf_counter() - epoch_start:.2f}s")
     
     # 测试阶段
     if test_loader is not None:
         logger.info("Starting final evaluation on test set...")
+        test_start = time.perf_counter()
         test_metrics = evaluator.evaluate(test_loader)
         logger.info(f"Test - Loss: {test_metrics['loss']:.4f}, "
                    f"F1: {test_metrics['f1']:.4f}")
+        logger.info(f"Final test evaluation took {time.perf_counter() - test_start:.2f}s")
     
-    logger.info("Training completed!")
+    logger.info(f"Training completed in {time.perf_counter() - training_start:.2f}s")
 
 
 if __name__ == '__main__':

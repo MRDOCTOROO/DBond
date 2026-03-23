@@ -196,7 +196,9 @@ class GraphDataLoader:
                  num_workers: int = 4,
                  collate_fn: Optional[callable] = None,
                  pin_memory: bool = True,
-                 drop_last: bool = False):
+                 drop_last: bool = False,
+                 persistent_workers: bool = False,
+                 prefetch_factor: Optional[int] = None):
         """
         初始化图数据加载器
         
@@ -207,6 +209,9 @@ class GraphDataLoader:
             num_workers: 工作进程数
             collate_fn: 批处理函数
             pin_memory: 是否固定内存
+            drop_last: 是否丢弃最后一个不完整批次
+            persistent_workers: 是否保持 worker 常驻
+            prefetch_factor: 每个 worker 预取的批次数
         """
         self.dataset = dataset
         self.batch_size = batch_size
@@ -215,9 +220,11 @@ class GraphDataLoader:
         self.collate_fn = collate_fn or self._default_collate_fn
         self.pin_memory = pin_memory
         self.drop_last = drop_last
+        self.persistent_workers = persistent_workers if num_workers > 0 else False
+        self.prefetch_factor = prefetch_factor if num_workers > 0 else None
         
         # 创建PyTorch DataLoader
-        self.dataloader = DataLoader(
+        dataloader_kwargs = dict(
             dataset=dataset,
             batch_size=batch_size,
             shuffle=shuffle,
@@ -226,6 +233,11 @@ class GraphDataLoader:
             pin_memory=pin_memory,
             drop_last=drop_last
         )
+        if num_workers > 0:
+            dataloader_kwargs['persistent_workers'] = self.persistent_workers
+            if self.prefetch_factor is not None:
+                dataloader_kwargs['prefetch_factor'] = self.prefetch_factor
+        self.dataloader = DataLoader(**dataloader_kwargs)
     
     def _default_collate_fn(self, batch: List[Dict]) -> Dict[str, torch.Tensor]:
         """默认批处理函数"""
