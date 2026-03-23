@@ -147,23 +147,27 @@ class GraphAttentionLayer(nn.Module):
         if src_heads.numel() == 0:
             return src_heads.new_empty((0, self.num_heads))
 
+        compute_dtype = torch.float32 if src_heads.dtype in (torch.float16, torch.bfloat16) else src_heads.dtype
+        src_heads_compute = src_heads.to(compute_dtype)
+        dst_heads_compute = dst_heads.to(compute_dtype)
+
         # 将 attention 向量拆成 source/target 两半，避免 cat + einsum 的额外开销。
-        attention_vector = self.a.squeeze(-1)
+        attention_vector = self.a.squeeze(-1).to(compute_dtype)
         a_src, a_dst = attention_vector.split(self.head_dim, dim=1)
-        e = (src_heads * a_src.unsqueeze(0)).sum(dim=-1)
-        e = e + (dst_heads * a_dst.unsqueeze(0)).sum(dim=-1)
+        e = (src_heads_compute * a_src.unsqueeze(0)).sum(dim=-1)
+        e = e + (dst_heads_compute * a_dst.unsqueeze(0)).sum(dim=-1)
         
         # 如果有边特征，加上边特征的贡献
         if edge_attr is not None:
-            edge_attr = edge_attr.unsqueeze(1).expand(-1, self.num_heads, -1)
-            edge_scores = torch.sum(edge_attr, dim=-1).to(dtype=e.dtype)
+            edge_attr = edge_attr.to(compute_dtype).unsqueeze(1).expand(-1, self.num_heads, -1)
+            edge_scores = torch.sum(edge_attr, dim=-1)
             e = e + edge_scores
         
         # 应用LeakyReLU
         e = F.leaky_relu(e, negative_slope=self.alpha)
         
         # 计算softmax注意力权重
-        attention_weights = self._softmax_attention(e, target_index, num_nodes)
+        attention_weights = self._softmax_attention(e, target_index, num_nodes).to(dtype=src_heads.dtype)
         
         return attention_weights
     

@@ -77,44 +77,52 @@ class GraphConvLayer(nn.Module):
     def propagate(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         """标准消息传递"""
         row, col = edge_index
+        compute_dtype = torch.float32 if x.dtype in (torch.float16, torch.bfloat16) else x.dtype
+        x_compute = x.to(compute_dtype)
         
         # 归一化（度归一化）
-        deg = torch.zeros(x.size(0), device=x.device, dtype=x.dtype)
-        deg.index_add_(0, col, torch.ones_like(col, dtype=x.dtype))
+        deg = torch.zeros(x.size(0), device=x.device, dtype=compute_dtype)
+        deg.index_add_(0, col, torch.ones_like(col, dtype=compute_dtype))
         deg_inv_sqrt = deg.pow(-0.5)
         deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
         
         norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
-        messages = x[row] * norm.unsqueeze(1)
+        messages = x_compute[row] * norm.unsqueeze(1)
         
         # 聚合邻域信息
-        out = torch.zeros_like(x)
+        out = torch.zeros_like(x_compute)
         out.index_add_(0, col, messages)
         
-        return out
+        return out.to(dtype=x.dtype)
     
     def propagate_with_edges(self, x: torch.Tensor, 
                            edge_index: torch.Tensor,
                            edge_attr: torch.Tensor) -> torch.Tensor:
         """使用边特征的消息传递"""
         row, col = edge_index
+        compute_dtype = torch.float32 if x.dtype in (torch.float16, torch.bfloat16) else x.dtype
+        x_compute = x.to(compute_dtype)
+        edge_attr = edge_attr.to(dtype=compute_dtype)
         
         # 度归一化
-        edge_attr = edge_attr.to(dtype=x.dtype)
-        deg = torch.zeros(x.size(0), device=x.device, dtype=x.dtype)
-        edge_weights = torch.sum(edge_attr, dim=1, keepdim=True).to(dtype=x.dtype)
-        deg.index_add_(0, col, torch.abs(edge_weights.squeeze()).to(dtype=x.dtype))
+        deg = torch.zeros(x.size(0), device=x.device, dtype=compute_dtype)
+
+        # 原实现直接 sum(hidden_dim) 作为边权，训练后期容易数值爆炸。
+        # 这里改成有界的 sigmoid(mean) 权重，让边特征只做门控，不做无界放大。
+        edge_logits = edge_attr.mean(dim=1, keepdim=True)
+        edge_weights = torch.sigmoid(edge_logits).clamp(1e-4, 1.0)
+        deg.index_add_(0, col, edge_weights.squeeze())
         deg_inv_sqrt = deg.pow(-0.5)
         deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
         
-        norm = (deg_inv_sqrt[row] * deg_inv_sqrt[col]).to(dtype=x.dtype)
-        node_messages = (x[row] * edge_weights * norm.unsqueeze(1)).to(dtype=x.dtype)
+        norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
+        node_messages = x_compute[row] * edge_weights * norm.unsqueeze(1)
         
         # 聚合消息
-        out = torch.zeros_like(x)
+        out = torch.zeros_like(x_compute)
         out.index_add_(0, col, node_messages)
         
-        return out
+        return out.to(dtype=x.dtype)
 
 
 class ResidualGCNLayer(nn.Module):

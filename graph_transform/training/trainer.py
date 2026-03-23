@@ -10,6 +10,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import time
 import logging
+import os
+import json
 from typing import Dict, Any, Optional
 from tqdm import tqdm
 
@@ -72,6 +74,14 @@ class Trainer:
         self.debug_config = self.config.get('debug', {})
         self.profile_time = self.debug_config.get('profile_time', False)
         self.profile_memory = self.debug_config.get('profile_memory', False)
+        self.log_grad_norm = self.debug_config.get('log_grad_norm', True)
+        self.save_nonfinite_batch = self.debug_config.get('save_nonfinite_batch', True)
+        self.diagnostic_dir = self.debug_config.get(
+            'diagnostic_dir',
+            os.path.join(self.config.get('logging', {}).get('log_dir', 'logs/graph_transform'), 'diagnostics'),
+        )
+        os.makedirs(self.diagnostic_dir, exist_ok=True)
+        self.last_grad_norm = 0.0
         if hasattr(self.model, 'enable_timing'):
             self.model.enable_timing = self.profile_time
         if self.profile_time:
@@ -101,6 +111,8 @@ class Trainer:
         total_forward_time = 0.0
         total_backward_time = 0.0
         total_batch_time = 0.0
+        total_grad_norm = 0.0
+        max_grad_norm = 0.0
         last_batch_end = time.perf_counter()
         
         # 进度条
@@ -139,6 +151,8 @@ class Trainer:
             total_forward_time += forward_time
             total_backward_time += backward_time
             total_batch_time += batch_time
+            total_grad_norm += self.last_grad_norm
+            max_grad_norm = max(max_grad_norm, self.last_grad_norm)
             
             # 更新进度条
             pbar.set_postfix({
@@ -163,6 +177,13 @@ class Trainer:
                         loss.item(),
                         batch_stats,
                     )
+                    if self.log_grad_norm:
+                        self.logger.info(
+                            "Epoch %s Batch %s GradNorm - total_grad_norm: %.4f",
+                            epoch,
+                            batch_idx,
+                            self.last_grad_norm,
+                        )
                     model_timing = getattr(self.model, 'last_forward_timing', {})
                     if model_timing:
                         self.logger.info(
@@ -197,6 +218,8 @@ class Trainer:
             metrics['avg_forward_time'] = total_forward_time / num_batches
             metrics['avg_backward_time'] = total_backward_time / num_batches
             metrics['avg_batch_time'] = total_batch_time / num_batches
+            metrics['avg_grad_norm'] = total_grad_norm / num_batches
+            metrics['max_grad_norm'] = max_grad_norm
         
         # 更新指标跟踪器
         self.metric_tracker.update(epoch, metrics, mode='train')
@@ -220,6 +243,13 @@ class Trainer:
             metrics.get('avg_forward_time', 0.0),
             metrics.get('avg_backward_time', 0.0),
         )
+        if self.log_grad_norm:
+            self.logger.info(
+                "Epoch %s Gradient - AvgGradNorm: %.4f, MaxGradNorm: %.4f",
+                epoch,
+                metrics.get('avg_grad_norm', 0.0),
+                metrics.get('max_grad_norm', 0.0),
+            )
         if metrics:
             metric_str = ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items() if k != 'loss'])
             self.logger.info(f"Epoch {epoch} Training Metrics - {metric_str}")
@@ -319,15 +349,18 @@ class Trainer:
         if self.use_amp:
             self.scaler.scale(loss).backward()
             
+            self.scaler.unscale_(self.optimizer)
+            self.last_grad_norm = self._compute_grad_norm()
+            
             # 梯度裁剪
             if self.gradient_clip_norm > 0:
-                self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clip_norm)
             
             self.scaler.step(self.optimizer)
             self.scaler.update()
         else:
             loss.backward()
+            self.last_grad_norm = self._compute_grad_norm()
             
             # 梯度裁剪
             if self.gradient_clip_norm > 0:
@@ -412,6 +445,19 @@ class Trainer:
                 parts.append(f"{key}={value}")
         return ", ".join(parts)
 
+    def _compute_grad_norm(self) -> float:
+        """计算当前参数梯度的 L2 范数。"""
+        total = 0.0
+        for parameter in self.model.parameters():
+            if parameter.grad is None:
+                continue
+            grad = parameter.grad.detach()
+            if not torch.isfinite(grad).all():
+                return float('inf')
+            grad_norm = grad.norm(2)
+            total += float(grad_norm.item()) ** 2
+        return total ** 0.5
+
     def _ensure_finite_tensor(self, tensor: torch.Tensor, name: str, batch_data: Dict[str, Any]) -> None:
         """检测非有限值并尽早失败，避免后续整轮训练都被 NaN 污染。"""
         if torch.isfinite(tensor).all():
@@ -428,8 +474,69 @@ class Trainer:
         if finite_values.numel() > 0:
             detail['finite_min'] = float(finite_values.min().detach().cpu().item())
             detail['finite_max'] = float(finite_values.max().detach().cpu().item())
+        detail['gradient_norm'] = self.last_grad_norm
+        detail['tensor_stats'] = self._collect_tensor_stats(batch_data)
+        diagnostic_path = None
+        if self.save_nonfinite_batch:
+            diagnostic_path = self._write_nonfinite_diagnostic(name, detail)
+            detail['diagnostic_path'] = diagnostic_path
         self.logger.error("Non-finite %s detected: %s", name, detail)
         raise FloatingPointError(f"Non-finite {name} detected; see training log for batch statistics.")
+
+    def _collect_tensor_stats(self, batch_data: Dict[str, Any]) -> Dict[str, Any]:
+        """收集 batch 主要张量的统计信息，便于远程排查。"""
+        stats = {}
+        keys_of_interest = {
+            'labels',
+            'label_mask',
+            'seq_lens',
+            'edge_index',
+            'edge_attr',
+            'edge_types',
+            'edge_distances',
+            'state_vars',
+            'env_vars',
+            'charges',
+            'pep_masses',
+            'intensities',
+            'nces',
+            'rts',
+        }
+        for key, value in batch_data.items():
+            if key not in keys_of_interest or not isinstance(value, torch.Tensor):
+                continue
+            detached = value.detach()
+            entry = {
+                'shape': list(detached.shape),
+                'dtype': str(detached.dtype),
+                'device': str(detached.device),
+                'numel': int(detached.numel()),
+                'finite': bool(torch.isfinite(detached).all().item()) if detached.is_floating_point() else True,
+            }
+            if detached.numel() > 0 and detached.is_floating_point():
+                finite = detached[torch.isfinite(detached)]
+                if finite.numel() > 0:
+                    entry.update({
+                        'min': float(finite.min().cpu().item()),
+                        'max': float(finite.max().cpu().item()),
+                        'mean': float(finite.mean().cpu().item()),
+                    })
+            elif detached.numel() > 0:
+                entry.update({
+                    'min': float(detached.min().cpu().item()),
+                    'max': float(detached.max().cpu().item()),
+                })
+            stats[key] = entry
+        return stats
+
+    def _write_nonfinite_diagnostic(self, name: str, detail: Dict[str, Any]) -> str:
+        """将非有限 batch 的统计信息写到诊断文件。"""
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        filename = f"nonfinite_{name}_epoch{self.current_epoch}_{timestamp}.json"
+        filepath = os.path.join(self.diagnostic_dir, filename)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(detail, f, ensure_ascii=True, indent=2)
+        return filepath
     
     def save_checkpoint(self, filepath: str, epoch: int, metrics: Dict[str, float], is_best: bool = False):
         """

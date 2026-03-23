@@ -58,7 +58,7 @@ training:
   # 基础训练参数
   epochs: 60
   batch_size: 512
-  learning_rate: 0.001
+  learning_rate: 0.0005
   weight_decay: 0.0001
   gradient_clip_norm: 1.0
   
@@ -173,7 +173,7 @@ device:
   gpu_id: 0
   
   # 混合精度训练
-  use_amp: true
+  use_amp: false
   amp_backend: "native"  # "native", "apex"
 
 # 日志配置
@@ -255,7 +255,10 @@ debug:
   
   # 梯度检查
   check_gradients: false
-  check_nan_inf: false
+  check_nan_inf: true
+  log_grad_norm: true
+  save_nonfinite_batch: true
+  diagnostic_dir: "logs/graph_transform/diagnostics"
   
   # 可视化
   save_attention_weights: false
