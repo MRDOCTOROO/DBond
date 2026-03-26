@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import UninitializedParameter
+from torch.nn.utils.rnn import pad_sequence
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import time
@@ -33,6 +34,8 @@ class NodeEncoder(nn.Module):
         self.alphabet = config.alphabet
         self.vocab_size = len(self.alphabet) + 1  # +1 for padding
         self.pad_char = config.pad_char
+        self.char_to_idx = {char: idx + 1 for idx, char in enumerate(self.alphabet)}
+        self.char_to_idx[self.pad_char] = 0
         
         # 基础特征维度
         self.aa_embedding_dim = config.aa_embedding_dim
@@ -89,6 +92,17 @@ class NodeEncoder(nn.Module):
             nn.ReLU(),
             nn.Dropout(config.dropout)
         )
+
+        self.register_buffer(
+            'ascii_lookup',
+            self._build_ascii_lookup_table(),
+            persistent=False
+        )
+        self.register_buffer(
+            'physicochemical_lookup',
+            self._build_physicochemical_lookup_table(config.num_physicochemical_features),
+            persistent=False
+        )
         
         self._init_weights()
     
@@ -120,7 +134,7 @@ class NodeEncoder(nn.Module):
         pos_features = self.position_embedding(positions)
         
         # 物理化学性质编码
-        physico_features = self._encode_physicochemical(batch_data, device)
+        physico_features = self._encode_physicochemical(seq_tokens)
         physico_features = self.physicochemical_encoder(physico_features)
         
         # 状态变量与环境变量编码
@@ -146,42 +160,32 @@ class NodeEncoder(nn.Module):
     
     def _encode_sequences(self, sequences: List[str], device: torch.device) -> torch.Tensor:
         """将氨基酸序列编码为token序列"""
-        batch_size = len(sequences)
-        max_len = max(len(seq) for seq in sequences)
-        
-        # 创建字符到索引的映射
-        char_to_idx = {char: idx + 1 for idx, char in enumerate(self.alphabet)}
-        char_to_idx[self.pad_char] = 0
-        
-        # 编码序列（与dbond一致：未知字符直接报错）
-        encoded_seqs = torch.zeros(batch_size, max_len, dtype=torch.long, device=device)
-        for i, seq in enumerate(sequences):
-            for j, char in enumerate(seq):
-                if char not in char_to_idx:
-                    raise ValueError(f"Unknown amino acid: {char}")
-                encoded_seqs[i, j] = char_to_idx[char]
-        
-        return encoded_seqs
+        encoded_sequences = []
+        lookup = self.ascii_lookup.to(device=device)
+
+        for seq in sequences:
+            try:
+                seq_bytes = np.frombuffer(seq.encode('ascii'), dtype=np.uint8)
+            except UnicodeEncodeError as exc:
+                raise ValueError(f"Sequence contains non-ASCII amino acid symbols: {seq}") from exc
+
+            if seq_bytes.size == 0:
+                encoded_sequences.append(torch.empty(0, dtype=torch.long, device=device))
+                continue
+
+            byte_tensor = torch.as_tensor(seq_bytes, device=device, dtype=torch.long)
+            encoded = lookup[byte_tensor]
+            invalid_mask = encoded < 0
+            if invalid_mask.any():
+                invalid_pos = int(invalid_mask.nonzero(as_tuple=False)[0].item())
+                raise ValueError(f"Unknown amino acid: {seq[invalid_pos]}")
+            encoded_sequences.append(encoded)
+
+        return pad_sequence(encoded_sequences, batch_first=True, padding_value=0)
     
-    def _encode_physicochemical(self, batch_data: Dict, device: torch.device) -> torch.Tensor:
+    def _encode_physicochemical(self, seq_tokens: torch.Tensor) -> torch.Tensor:
         """编码物理化学性质"""
-        batch_size = len(batch_data['sequences'])
-        max_len = max(len(seq) for seq in batch_data['sequences'])
-        
-        # 氨基酸物理化学性质表
-        aa_properties = self._get_aa_properties()
-        
-        # 创建物理化学特征张量
-        features = torch.zeros(batch_size, max_len, len(aa_properties['A']), device=device)
-        
-        for i, seq in enumerate(batch_data['sequences']):
-            for j, aa in enumerate(seq):
-                if aa in aa_properties:
-                    features[i, j] = torch.tensor(aa_properties[aa], device=device)
-                else:
-                    features[i, j] = torch.zeros(len(aa_properties['A']), device=device)
-        
-        return features
+        return F.embedding(seq_tokens, self.physicochemical_lookup)
     
     def _encode_state(self, batch_data: Dict, device: torch.device) -> torch.Tensor:
         """编码状态变量"""
@@ -222,6 +226,25 @@ class NodeEncoder(nn.Module):
             if torch.is_tensor(value):
                 return value.device
         return self.aa_embedding.weight.device
+
+    def _build_ascii_lookup_table(self) -> torch.Tensor:
+        """构建 ASCII 到词表索引的查找表。"""
+        lookup = torch.full((256,), -1, dtype=torch.long)
+        for char, idx in self.char_to_idx.items():
+            encoded = char.encode('ascii')
+            if len(encoded) != 1:
+                raise ValueError(f"Only single-byte ASCII amino acid symbols are supported: {char}")
+            lookup[encoded[0]] = idx
+        return lookup
+
+    def _build_physicochemical_lookup_table(self, num_features: int) -> torch.Tensor:
+        """构建 token 到物化属性的查找表。"""
+        table = torch.zeros(self.vocab_size, num_features, dtype=torch.float32)
+        for aa, props in self._get_aa_properties().items():
+            idx = self.char_to_idx.get(aa)
+            if idx is not None:
+                table[idx] = torch.tensor(props, dtype=torch.float32)
+        return table
     
     def _get_aa_properties(self) -> Dict[str, List[float]]:
         """获取氨基酸物理化学性质"""
@@ -538,30 +561,42 @@ class GraphTransformer(nn.Module):
             edge_encode_end = time.perf_counter()
         
         # 根据真实序列长度裁剪节点特征
-        seq_lens = batch_data['seq_lens'].tolist()
-        node_lens = batch_data.get('node_lens')
-        if node_lens is not None:
-            node_lens = node_lens.tolist()
+        seq_lens_tensor = batch_data['seq_lens'].to(device=node_features.device, dtype=torch.long)
+        node_lens_tensor = batch_data.get('node_lens')
+        if node_lens_tensor is not None:
+            node_lens_tensor = node_lens_tensor.to(device=node_features.device, dtype=torch.long)
         else:
-            node_lens = [seq_len + (1 if self.use_global_node else 0) for seq_len in seq_lens]
+            node_lens_tensor = seq_lens_tensor + (1 if self.use_global_node else 0)
+        seq_lens = seq_lens_tensor.tolist()
+        node_lens = node_lens_tensor.tolist()
         batch_size = len(seq_lens)
         hidden_dim = node_features.size(-1)
+        max_seq_len = node_features.size(1)
+        seq_positions = torch.arange(max_seq_len, device=node_features.device)
+        valid_seq_mask = seq_positions.unsqueeze(0) < seq_lens_tensor.unsqueeze(1)
 
-        trimmed_nodes = []
-        batch_indices = []
-        for i, seq_len in enumerate(seq_lens):
-            if seq_len > 0:
-                nodes = node_features[i, :seq_len]
-            else:
-                nodes = node_features.new_empty((0, hidden_dim))
-            if self.use_global_node:
-                nodes = torch.cat([nodes, global_nodes[i:i + 1]], dim=0)
-            if nodes.numel() > 0:
-                trimmed_nodes.append(nodes)
-                batch_indices.extend([i] * nodes.size(0))
-
-        node_features = torch.cat(trimmed_nodes, dim=0) if trimmed_nodes else node_features.new_empty((0, hidden_dim))
-        batch_indices = torch.tensor(batch_indices, device=node_features.device, dtype=torch.long)
+        if self.use_global_node:
+            max_node_len = int(node_lens_tensor.max().item()) if batch_size > 0 else 0
+            packed_nodes = node_features.new_zeros((batch_size, max_node_len, hidden_dim))
+            if max_seq_len > 0:
+                packed_nodes[:, :max_seq_len] = node_features[:, :max_seq_len]
+            global_positions = seq_lens_tensor.view(-1, 1, 1).expand(-1, 1, hidden_dim)
+            packed_nodes.scatter_(1, global_positions, global_nodes.unsqueeze(1))
+            node_positions = torch.arange(max_node_len, device=node_features.device)
+            valid_node_mask = node_positions.unsqueeze(0) < node_lens_tensor.unsqueeze(1)
+            node_features = packed_nodes[valid_node_mask]
+            batch_indices = torch.repeat_interleave(
+                torch.arange(batch_size, device=node_features.device),
+                node_lens_tensor,
+                output_size=int(node_lens_tensor.sum().item()),
+            )
+        else:
+            node_features = node_features[valid_seq_mask]
+            batch_indices = torch.repeat_interleave(
+                torch.arange(batch_size, device=node_features.device),
+                seq_lens_tensor,
+                output_size=int(seq_lens_tensor.sum().item()),
+            )
         if timing_enabled:
             _maybe_sync(node_features.device, True)
             trim_end = time.perf_counter()
@@ -602,35 +637,26 @@ class GraphTransformer(nn.Module):
             gat_end = time.perf_counter()
         
         # 构建相邻键的特征并预测断裂
-        seq_lens = batch_data['seq_lens'].tolist()
-        bond_src = []
-        bond_dst = []
-        offset = 0
-        for seq_len, node_len in zip(seq_lens, node_lens):
-            for i in range(max(seq_len - 1, 0)):
-                bond_src.append(offset + i)
-                bond_dst.append(offset + i + 1)
-            offset += node_len
+        bond_counts = torch.clamp(seq_lens_tensor - 1, min=0)
+        max_bonds = int(bond_counts.max().item()) if batch_size > 0 else 0
+        predictions = torch.zeros(batch_size, max_bonds, device=node_features.device)
 
-        if bond_src:
-            bond_src = torch.tensor(bond_src, device=node_features.device)
-            bond_dst = torch.tensor(bond_dst, device=node_features.device)
+        if max_bonds > 0:
+            bond_positions = torch.arange(max_bonds, device=node_features.device)
+            valid_bond_mask = bond_positions.unsqueeze(0) < bond_counts.unsqueeze(1)
+            node_offsets = torch.cumsum(
+                torch.cat([node_lens_tensor.new_zeros(1), node_lens_tensor[:-1]], dim=0),
+                dim=0,
+            )
+            bond_src = (node_offsets.unsqueeze(1) + bond_positions.unsqueeze(0))[valid_bond_mask]
+            bond_dst = bond_src + 1
             bond_features = torch.cat(
                 [node_features[bond_src], node_features[bond_dst]], dim=-1
             )
             bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
+            predictions[valid_bond_mask] = bond_logits_flat
         else:
             bond_logits_flat = torch.empty(0, device=node_features.device)
-
-        # 还原为 [batch_size, max_bonds]
-        max_bonds = max(max(seq_lens) - 1, 0) if seq_lens else 0
-        predictions = torch.zeros(batch_size, max_bonds, device=node_features.device)
-        cursor = 0
-        for i, seq_len in enumerate(seq_lens):
-                bond_len = max(seq_len - 1, 0)
-                if bond_len > 0:
-                    predictions[i, :bond_len] = bond_logits_flat[cursor:cursor + bond_len]
-                    cursor += bond_len
 
         if timing_enabled:
             _maybe_sync(node_features.device, True)

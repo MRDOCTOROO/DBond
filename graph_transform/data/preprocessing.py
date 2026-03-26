@@ -17,6 +17,15 @@ class SequencePreprocessor:
         self.config = config
         self.alphabet = config.alphabet
         self.max_seq_len = config.max_seq_len
+        self.char_to_idx = {char: idx + 1 for idx, char in enumerate(self.alphabet)}
+        self.char_to_idx[self.config.pad_char] = 0
+        self.idx_to_char = {idx: char for char, idx in self.char_to_idx.items()}
+        self._ascii_lookup = np.full(256, -1, dtype=np.int16)
+        for char, idx in self.char_to_idx.items():
+            encoded = char.encode('ascii')
+            if len(encoded) != 1:
+                raise ValueError(f"Only single-byte ASCII amino acid symbols are supported: {char}")
+            self._ascii_lookup[encoded[0]] = idx
     
     def preprocess_sequence(self, sequence: str) -> str:
         """
@@ -50,16 +59,17 @@ class SequencePreprocessor:
         Returns:
             List[int]: 编码后的序列
         """
-        char_to_idx = {char: idx + 1 for idx, char in enumerate(self.alphabet)}
-        char_to_idx[self.config.pad_char] = 0  # padding字符
-        
-        encoded = []
-        for char in sequence:
-            if char not in char_to_idx:
-                raise ValueError(f"Unknown amino acid: {char}")
-            encoded.append(char_to_idx[char])
-        
-        return encoded
+        try:
+            sequence_bytes = np.frombuffer(sequence.encode('ascii'), dtype=np.uint8)
+        except UnicodeEncodeError as exc:
+            raise ValueError(f"Sequence contains non-ASCII amino acid symbols: {sequence}") from exc
+
+        encoded = self._ascii_lookup[sequence_bytes]
+        invalid_positions = np.nonzero(encoded < 0)[0]
+        if invalid_positions.size > 0:
+            invalid_pos = int(invalid_positions[0])
+            raise ValueError(f"Unknown amino acid: {sequence[invalid_pos]}")
+        return encoded.astype(np.int64, copy=False).tolist()
     
     def decode_sequence(self, encoded_sequence: List[int]) -> str:
         """
@@ -71,17 +81,13 @@ class SequencePreprocessor:
         Returns:
             str: 解码后的序列
         """
-        idx_to_char = {idx + 1: char for idx, char in enumerate(self.alphabet)}
-        idx_to_char[0] = self.config.pad_char  # padding字符
-        
-        sequence = ''
+        chars = []
         for idx in encoded_sequence:
-            if idx in idx_to_char:
-                sequence += idx_to_char[idx]
+            if idx in self.idx_to_char:
+                chars.append(self.idx_to_char[idx])
             else:
                 raise ValueError(f"Unknown amino acid index: {idx}")
-        
-        return sequence
+        return ''.join(chars)
     
     def batch_preprocess(self, sequences: List[str]) -> List[str]:
         """

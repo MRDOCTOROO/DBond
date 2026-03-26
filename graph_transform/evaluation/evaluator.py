@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import logging
+import gc
 from typing import Dict, Any, Optional
 from tqdm import tqdm
 import numpy as np
@@ -48,6 +49,9 @@ class Evaluator:
         if self.device.type != 'cuda':
             self.use_amp = False
         self.amp_device_type = 'cuda' if self.device.type == 'cuda' else 'cpu'
+        self.debug_config = self.config.get('debug', {})
+        self.profile_memory = self.debug_config.get('profile_memory', False)
+        self.force_gc_on_eval_end = self.debug_config.get('force_gc_on_eval_end', False)
         
         # 指标计算器
         self.metrics_calculator = BinaryBondMetrics(self.eval_config)
@@ -72,6 +76,7 @@ class Evaluator:
         
         total_loss = 0.0
         num_batches = 0
+        memory_eval_start = self._get_memory_stats(reset_peak=True)
         
         # 损失函数（与训练保持一致）
         loss_config = self.config.get('loss', {})
@@ -87,21 +92,25 @@ class Evaluator:
                 # 前向传播
                 if self.use_amp:
                     with torch.amp.autocast(self.amp_device_type, enabled=True):
-                        predictions = self.model(batch_data)
-                        targets = batch_data['labels']
-                        targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
+                        predictions_full = self.model(batch_data)
+                        targets_full = batch_data['labels']
+                        targets, predictions = self._apply_label_mask(batch_data, targets_full, predictions_full)
                         self._ensure_finite_tensor(predictions, "predictions")
                         loss = criterion(predictions, targets)
                 else:
-                    predictions = self.model(batch_data)
-                    targets = batch_data['labels']
-                    targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
+                    predictions_full = self.model(batch_data)
+                    targets_full = batch_data['labels']
+                    targets, predictions = self._apply_label_mask(batch_data, targets_full, predictions_full)
                     self._ensure_finite_tensor(predictions, "predictions")
                     loss = criterion(predictions, targets)
                 self._ensure_finite_tensor(loss, "loss")
                 
                 # 更新指标
-                self.metrics_calculator.update(predictions, targets)
+                self.metrics_calculator.update(
+                    predictions_full,
+                    targets_full,
+                    label_mask=batch_data.get('label_mask'),
+                )
                 total_loss += loss.item()
                 num_batches += 1
                 
@@ -110,6 +119,25 @@ class Evaluator:
                     'Loss': f'{loss.item():.4f}',
                     'Avg Loss': f'{total_loss / num_batches:.4f}'
                 })
+                if self.profile_memory and batch_idx % self.config.get('logging', {}).get('log_interval', 10) == 0:
+                    memory_stats = self._get_memory_stats()
+                    if memory_stats is not None:
+                        self.logger.info(
+                            "Eval Batch %s GPU Memory - allocated: %.2fMB, reserved: %.2fMB, peak_allocated: %.2fMB, peak_reserved: %.2fMB, free: %.2fMB, total: %.2fMB",
+                            batch_idx,
+                            memory_stats['allocated_mb'],
+                            memory_stats['reserved_mb'],
+                            memory_stats['peak_allocated_mb'],
+                            memory_stats['peak_reserved_mb'],
+                            memory_stats['free_mb'],
+                            memory_stats['total_mb'],
+                        )
+                del loss
+                del predictions
+                del targets
+                del predictions_full
+                del targets_full
+                del batch_data
         
         # 计算平均损失
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
@@ -117,12 +145,31 @@ class Evaluator:
         # 计算指标
         metrics = self.metrics_calculator.compute()
         metrics['loss'] = avg_loss
+        memory_eval_end = self._get_memory_stats()
+        if memory_eval_start is not None and memory_eval_end is not None:
+            metrics['gpu_mem_start_allocated_mb'] = memory_eval_start['allocated_mb']
+            metrics['gpu_mem_end_allocated_mb'] = memory_eval_end['allocated_mb']
+            metrics['gpu_mem_end_reserved_mb'] = memory_eval_end['reserved_mb']
+            metrics['gpu_mem_peak_allocated_mb'] = memory_eval_end['peak_allocated_mb']
+            metrics['gpu_mem_peak_reserved_mb'] = memory_eval_end['peak_reserved_mb']
         
         # 记录结果
         self.logger.info(f"Evaluation - Loss: {avg_loss:.4f}")
+        if memory_eval_start is not None and memory_eval_end is not None:
+            self.logger.info(
+                "Evaluation GPU Memory - start_allocated: %.2fMB, end_allocated: %.2fMB, end_reserved: %.2fMB, peak_allocated: %.2fMB, peak_reserved: %.2fMB, free: %.2fMB",
+                memory_eval_start['allocated_mb'],
+                memory_eval_end['allocated_mb'],
+                memory_eval_end['reserved_mb'],
+                memory_eval_end['peak_allocated_mb'],
+                memory_eval_end['peak_reserved_mb'],
+                memory_eval_end['free_mb'],
+            )
         if metrics:
             metric_str = ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items() if k != 'loss'])
             self.logger.info(f"Evaluation Metrics - {metric_str}")
+        if self.force_gc_on_eval_end:
+            gc.collect()
         
         return metrics
     
@@ -294,7 +341,7 @@ class Evaluator:
                 batch_data = self._move_to_device(batch_data)
                 
                 if self.use_amp:
-                    with torch.cuda.amp.autocast():
+                    with torch.amp.autocast(self.amp_device_type, enabled=True):
                         predictions = self.model(batch_data)
                 else:
                     predictions = self.model(batch_data)
@@ -382,6 +429,22 @@ class Evaluator:
         if torch.isfinite(tensor).all():
             return
         raise FloatingPointError(f"Non-finite {name} detected during evaluation.")
+
+    def _get_memory_stats(self, reset_peak: bool = False) -> Optional[Dict[str, float]]:
+        """返回当前 CUDA 显存统计。"""
+        if self.device.type != 'cuda' or not torch.cuda.is_available():
+            return None
+        if reset_peak:
+            torch.cuda.reset_peak_memory_stats(self.device)
+        free_bytes, total_bytes = torch.cuda.mem_get_info(self.device)
+        return {
+            'allocated_mb': torch.cuda.memory_allocated(self.device) / (1024 ** 2),
+            'reserved_mb': torch.cuda.memory_reserved(self.device) / (1024 ** 2),
+            'peak_allocated_mb': torch.cuda.max_memory_allocated(self.device) / (1024 ** 2),
+            'peak_reserved_mb': torch.cuda.max_memory_reserved(self.device) / (1024 ** 2),
+            'free_mb': free_bytes / (1024 ** 2),
+            'total_mb': total_bytes / (1024 ** 2),
+        }
     
     def _compute_single_class_metrics(self, targets: torch.Tensor,
                                     predictions: torch.Tensor,

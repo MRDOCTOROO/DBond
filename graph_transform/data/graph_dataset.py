@@ -8,6 +8,7 @@
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+from torch.nn.utils.rnn import pad_sequence
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
@@ -243,43 +244,33 @@ class GraphDataLoader:
         """默认批处理函数"""
         # 收集所有数据
         sequences = [item['sequence'] for item in batch]
-        edge_index_list = [item['edge_index'] for item in batch]
-        edge_attr_list = [item['edge_attr'] for item in batch]
-        edge_types_list = [item['edge_types'] for item in batch]
-        edge_distances_list = [item['edge_distances'] for item in batch]
         labels_list = [item['labels'] for item in batch]
         
-        charges = [item['charge'] for item in batch]
-        pep_masses = [item['pep_mass'] for item in batch]
-        intensities = [item['intensity'] for item in batch]
-        nces = [item['nce'] for item in batch]
-        rts = [item['rt'] for item in batch]
-        state_vars = [item['state_vars'] for item in batch]
-        env_vars = [item['env_vars'] for item in batch]
-        seq_lens = [item['seq_len'] for item in batch]
-        node_lens = [item.get('node_len', item['seq_len']) for item in batch]
+        charges = torch.tensor([item['charge'] for item in batch], dtype=torch.float32)
+        pep_masses = torch.tensor([item['pep_mass'] for item in batch], dtype=torch.float32)
+        intensities = torch.tensor([item['intensity'] for item in batch], dtype=torch.float32)
+        nces = torch.tensor([item['nce'] for item in batch], dtype=torch.float32)
+        rts = torch.tensor([item['rt'] for item in batch], dtype=torch.float32)
+        state_vars = torch.stack([item['state_vars'] for item in batch], dim=0)
+        env_vars = torch.stack([item['env_vars'] for item in batch], dim=0)
+        seq_lens = torch.tensor([item['seq_len'] for item in batch], dtype=torch.long)
+        node_lens = torch.tensor([item.get('node_len', item['seq_len']) for item in batch], dtype=torch.long)
         
         batch_size = len(batch)
-        max_seq_len = max(seq_lens)
+        max_seq_len = int(seq_lens.max().item()) if batch_size > 0 else 0
         
         # 批处理边索引（需要偏移）
-        batch_edge_indices = []
-        batch_edge_attrs = []
-        batch_edge_types = []
-        batch_edge_distances = []
-        
-        node_offset = 0
-        for i, (edge_index, edge_attr, edge_types, edge_distances) in enumerate(
-            zip(edge_index_list, edge_attr_list, edge_types_list, edge_distances_list)
-        ):
-            # 添加节点偏移
-            offset_edge_index = edge_index + node_offset
-            batch_edge_indices.append(offset_edge_index)
-            batch_edge_attrs.append(edge_attr)
-            batch_edge_types.append(edge_types)
-            batch_edge_distances.append(edge_distances)
-            
-            node_offset += node_lens[i]
+        node_offsets = torch.cumsum(
+            torch.cat([node_lens.new_zeros(1), node_lens[:-1]], dim=0),
+            dim=0,
+        )
+        batch_edge_indices = [
+            item['edge_index'] + int(offset.item())
+            for item, offset in zip(batch, node_offsets)
+        ]
+        batch_edge_attrs = [item['edge_attr'] for item in batch]
+        batch_edge_types = [item['edge_types'] for item in batch]
+        batch_edge_distances = [item['edge_distances'] for item in batch]
         
         # 拼接所有边
         batch_edge_index = torch.cat(batch_edge_indices, dim=1)
@@ -289,24 +280,16 @@ class GraphDataLoader:
         
         # 填充标签（键级别，长度=seq_len-1）
         max_bonds = max(max_seq_len - 1, 0)
-        padded_labels = []
-        label_masks = []
-        for labels, seq_len in zip(labels_list, seq_lens):
-            bond_len = max(seq_len - 1, 0)
-            if labels.size(0) < max_bonds:
-                padding = torch.zeros(max_bonds - labels.size(0))
-                padded = torch.cat([labels, padding], dim=0)
-            else:
-                padded = labels[:max_bonds]
-            padded_labels.append(padded)
-
-            mask = torch.zeros(max_bonds)
-            if bond_len > 0:
-                mask[:bond_len] = 1.0
-            label_masks.append(mask)
-
-        batch_labels = torch.stack(padded_labels, dim=0)
-        batch_label_masks = torch.stack(label_masks, dim=0)
+        if max_bonds > 0:
+            batch_labels = pad_sequence(labels_list, batch_first=True, padding_value=0.0)
+            batch_label_masks = pad_sequence(
+                [torch.ones_like(labels, dtype=torch.float32) for labels in labels_list],
+                batch_first=True,
+                padding_value=0.0,
+            )
+        else:
+            batch_labels = torch.zeros((batch_size, 0), dtype=torch.float32)
+            batch_label_masks = torch.zeros((batch_size, 0), dtype=torch.float32)
         
         # 创建批次数据
         batch_data = {
@@ -317,15 +300,15 @@ class GraphDataLoader:
             'edge_distances': batch_edge_distances,
             'labels': batch_labels,
             'label_mask': batch_label_masks,
-            'charges': torch.tensor(charges, dtype=torch.float32),
-            'pep_masses': torch.tensor(pep_masses, dtype=torch.float32),
-            'intensities': torch.tensor(intensities, dtype=torch.float32),
-            'nces': torch.tensor(nces, dtype=torch.float32),
-            'rts': torch.tensor(rts, dtype=torch.float32),
-            'state_vars': torch.stack(state_vars, dim=0),
-            'env_vars': torch.stack(env_vars, dim=0),
-            'seq_lens': torch.tensor(seq_lens, dtype=torch.long),
-            'node_lens': torch.tensor(node_lens, dtype=torch.long),
+            'charges': charges,
+            'pep_masses': pep_masses,
+            'intensities': intensities,
+            'nces': nces,
+            'rts': rts,
+            'state_vars': state_vars,
+            'env_vars': env_vars,
+            'seq_lens': seq_lens,
+            'node_lens': node_lens,
             'batch_size': batch_size
         }
         

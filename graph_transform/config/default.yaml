@@ -188,6 +188,9 @@ logging:
   # TensorBoard配置
   use_tensorboard: true
   tensorboard_log_dir: "tensorboard/graph_transform"
+  save_training_curves: true
+  save_loss_curves: true
+  plot_dir: null  # null时默认保存到当前checkpoint目录下的plots/
   
   # 日志频率
   log_interval: 10
@@ -259,6 +262,9 @@ debug:
   log_grad_norm: true
   save_nonfinite_batch: true
   diagnostic_dir: "logs/graph_transform/diagnostics"
+  force_gc_on_epoch_end: false
+  force_gc_on_eval_end: false
+  empty_cache_on_epoch_end: false
   
   # 可视化
   save_attention_weights: false

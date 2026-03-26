@@ -13,13 +13,18 @@ import yaml
 import logging
 import time
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None
 import numpy as np
+import pandas as pd
 from tqdm import tqdm
 
 # 添加项目根目录到Python路径
@@ -63,6 +68,184 @@ def setup_logging(config: Dict[str, Any]) -> logging.Logger:
     logger.addHandler(file_handler)
     
     return logger
+
+
+def resolve_plot_dir(checkpoint_dir: str, log_config: Dict[str, Any]) -> str:
+    """解析训练曲线输出目录。"""
+    plot_dir = log_config.get('plot_dir')
+    if not plot_dir:
+        plot_dir = os.path.join(checkpoint_dir, 'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    return plot_dir
+
+
+def resolve_tensorboard_dir(checkpoint_dir: str, log_config: Dict[str, Any]) -> str:
+    """解析TensorBoard日志目录，按运行目录隔离。"""
+    base_dir = log_config.get('tensorboard_log_dir') or os.path.join(checkpoint_dir, 'tensorboard')
+    tb_dir = os.path.join(base_dir, os.path.basename(checkpoint_dir))
+    os.makedirs(tb_dir, exist_ok=True)
+    return tb_dir
+
+
+def _save_line_plot(
+    epochs: list,
+    series: Dict[str, list],
+    title: str,
+    ylabel: str,
+    save_path: str,
+) -> None:
+    """保存折线图，自动跳过None值。"""
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(10, 6))
+    has_data = False
+    for label, values in series.items():
+        valid_pairs = [(e, v) for e, v in zip(epochs, values) if v is not None]
+        if not valid_pairs:
+            continue
+        has_data = True
+        plt.plot(
+            [e for e, _ in valid_pairs],
+            [v for _, v in valid_pairs],
+            label=label,
+            linewidth=2,
+        )
+
+    if not has_data:
+        plt.close()
+        return
+
+    plt.xlabel('Epoch')
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=180)
+    plt.close()
+
+
+def save_training_curves(
+    history: Dict[str, list],
+    config: Dict[str, Any],
+    logger: logging.Logger,
+    checkpoint_dir: str,
+) -> None:
+    """保存训练曲线与历史表。"""
+    log_config = config.get('logging', {})
+    if not log_config.get('save_training_curves', log_config.get('save_loss_curves', True)):
+        return
+
+    plot_dir = resolve_plot_dir(checkpoint_dir, log_config)
+
+    history_df = pd.DataFrame(history)
+    history_csv = os.path.join(plot_dir, 'training_history.csv')
+    history_df.to_csv(history_csv, index=False)
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        logger.warning(f"Could not save training curves because matplotlib is unavailable: {exc}")
+        return
+
+    epochs = history.get('epoch', [])
+    if not epochs:
+        return
+
+    _save_line_plot(
+        epochs,
+        {
+            'Train Loss': history.get('train_loss', []),
+            'Val Loss': history.get('val_loss', []),
+        },
+        'GraphTransformer Loss Curve',
+        'Loss',
+        os.path.join(plot_dir, 'loss_curve.png'),
+    )
+    _save_line_plot(
+        epochs,
+        {
+            'Train F1': history.get('train_f1', []),
+            'Val F1': history.get('val_f1', []),
+        },
+        'GraphTransformer F1 Curve',
+        'F1',
+        os.path.join(plot_dir, 'f1_curve.png'),
+    )
+    _save_line_plot(
+        epochs,
+        {
+            'Learning Rate': history.get('learning_rate', []),
+        },
+        'Learning Rate Schedule',
+        'Learning Rate',
+        os.path.join(plot_dir, 'learning_rate_curve.png'),
+    )
+    _save_line_plot(
+        epochs,
+        {
+            'Avg Grad Norm': history.get('train_avg_grad_norm', []),
+            'Max Grad Norm': history.get('train_max_grad_norm', []),
+        },
+        'Gradient Norm Curve',
+        'Grad Norm',
+        os.path.join(plot_dir, 'grad_norm_curve.png'),
+    )
+    _save_line_plot(
+        epochs,
+        {
+            'Train Precision': history.get('train_precision', []),
+            'Train Recall': history.get('train_recall', []),
+            'Val Precision': history.get('val_precision', []),
+            'Val Recall': history.get('val_recall', []),
+        },
+        'Precision Recall Curve',
+        'Score',
+        os.path.join(plot_dir, 'precision_recall_curve.png'),
+    )
+    _save_line_plot(
+        epochs,
+        {
+            'Train AUC': history.get('train_auc', []),
+            'Val AUC': history.get('val_auc', []),
+        },
+        'AUC Curve',
+        'AUC',
+        os.path.join(plot_dir, 'auc_curve.png'),
+    )
+    _save_line_plot(
+        epochs,
+        {
+            'Avg Batch Time': history.get('train_avg_batch_time', []),
+            'Avg Forward Time': history.get('train_avg_forward_time', []),
+            'Avg Backward Time': history.get('train_avg_backward_time', []),
+            'Avg Fetch Wait Time': history.get('train_avg_fetch_wait_time', []),
+        },
+        'Timing Curve',
+        'Seconds',
+        os.path.join(plot_dir, 'timing_curve.png'),
+    )
+
+    logger.info(f"Saved training curves to {plot_dir}")
+
+
+def log_metrics_to_tensorboard(
+    writer: Optional['SummaryWriter'],
+    mode: str,
+    metrics: Dict[str, Any],
+    step: int,
+) -> None:
+    """写入TensorBoard标量。"""
+    if writer is None:
+        return
+
+    for key, value in metrics.items():
+        if value is None or isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            writer.add_scalar(f"{mode}/{key}", float(value), step)
 
 
 def setup_device(config: Dict[str, Any]) -> torch.device:
@@ -485,23 +668,81 @@ def main():
         training_config['checkpoint_dir'] = os.path.join(base_checkpoint_dir, run_id)
     os.makedirs(training_config['checkpoint_dir'], exist_ok=True)
     logger.info(f"Checkpoint dir: {training_config['checkpoint_dir']}")
+    log_config = config.get('logging', {})
+    writer: Optional[SummaryWriter] = None
+    if log_config.get('use_tensorboard', False):
+        if SummaryWriter is None:
+            logger.warning("TensorBoard is enabled in config but tensorboard is not installed; event logging is disabled.")
+        else:
+            tb_dir = resolve_tensorboard_dir(training_config['checkpoint_dir'], log_config)
+            writer = SummaryWriter(log_dir=tb_dir)
+            writer.add_text("config/yaml", yaml.safe_dump(config, sort_keys=False), 0)
+            logger.info(f"TensorBoard log dir: {tb_dir}")
     epochs = training_config['epochs']
     training_start = time.perf_counter()
+    history = {
+        'epoch': [],
+        'train_loss': [],
+        'train_f1': [],
+        'train_precision': [],
+        'train_recall': [],
+        'train_auc': [],
+        'train_avg_grad_norm': [],
+        'train_max_grad_norm': [],
+        'train_avg_batch_time': [],
+        'train_avg_forward_time': [],
+        'train_avg_backward_time': [],
+        'train_avg_fetch_wait_time': [],
+        'learning_rate': [],
+        'val_loss': [],
+        'val_f1': [],
+        'val_precision': [],
+        'val_recall': [],
+        'val_auc': [],
+    }
     
     for epoch in range(start_epoch, epochs):
         logger.info(f"Epoch {epoch + 1}/{epochs}")
         epoch_start = time.perf_counter()
+        epoch_lr = optimizer.param_groups[0]['lr']
         
         # 训练阶段
         train_metrics = trainer.train_epoch(train_loader, epoch + 1)
         logger.info(f"Train - Loss: {train_metrics['loss']:.4f}, "
                    f"F1: {train_metrics['f1']:.4f}")
+        log_metrics_to_tensorboard(writer, 'train', train_metrics, epoch + 1)
+        if writer is not None:
+            writer.add_scalar('train/learning_rate', epoch_lr, epoch + 1)
+        history['epoch'].append(epoch + 1)
+        history['train_loss'].append(train_metrics.get('loss'))
+        history['train_f1'].append(train_metrics.get('f1'))
+        history['train_precision'].append(train_metrics.get('precision_micro', train_metrics.get('precision')))
+        history['train_recall'].append(train_metrics.get('recall_micro', train_metrics.get('recall')))
+        history['train_auc'].append(train_metrics.get('auc_micro', train_metrics.get('auc')))
+        history['train_avg_grad_norm'].append(train_metrics.get('avg_grad_norm'))
+        history['train_max_grad_norm'].append(train_metrics.get('max_grad_norm'))
+        history['train_avg_batch_time'].append(train_metrics.get('avg_batch_time'))
+        history['train_avg_forward_time'].append(train_metrics.get('avg_forward_time'))
+        history['train_avg_backward_time'].append(train_metrics.get('avg_backward_time'))
+        history['train_avg_fetch_wait_time'].append(train_metrics.get('avg_fetch_wait_time'))
+        history['learning_rate'].append(epoch_lr)
+        current_val_loss: Optional[float] = None
+        current_val_f1: Optional[float] = None
+        current_val_precision: Optional[float] = None
+        current_val_recall: Optional[float] = None
+        current_val_auc: Optional[float] = None
         
         # 验证阶段
         if val_loader is not None and epoch % training_config.get('validation_interval', 1) == 0:
             val_metrics = evaluator.evaluate(val_loader)
             logger.info(f"Val - Loss: {val_metrics['loss']:.4f}, "
                        f"F1: {val_metrics['f1']:.4f}")
+            current_val_loss = val_metrics.get('loss')
+            current_val_f1 = val_metrics.get('f1')
+            current_val_precision = val_metrics.get('precision_micro', val_metrics.get('precision'))
+            current_val_recall = val_metrics.get('recall_micro', val_metrics.get('recall'))
+            current_val_auc = val_metrics.get('auc_micro', val_metrics.get('auc'))
+            log_metrics_to_tensorboard(writer, 'val', val_metrics, epoch + 1)
             
             # 保存最佳模型
             current_f1 = val_metrics['f1']
@@ -532,8 +773,23 @@ def main():
                     f"Early stopping triggered at epoch {epoch + 1}. "
                     f"Best F1 {best_metric:.4f} at epoch {best_epoch}."
                 )
+                history['val_loss'].append(current_val_loss)
+                history['val_f1'].append(current_val_f1)
+                history['val_precision'].append(current_val_precision)
+                history['val_recall'].append(current_val_recall)
+                history['val_auc'].append(current_val_auc)
+                save_training_curves(history, config, logger, training_config['checkpoint_dir'])
                 logger.info(f"Epoch {epoch + 1} wall time: {time.perf_counter() - epoch_start:.2f}s")
                 break
+        
+        history['val_loss'].append(current_val_loss)
+        history['val_f1'].append(current_val_f1)
+        history['val_precision'].append(current_val_precision)
+        history['val_recall'].append(current_val_recall)
+        history['val_auc'].append(current_val_auc)
+        save_training_curves(history, config, logger, training_config['checkpoint_dir'])
+        if writer is not None:
+            writer.flush()
         
         # 定期保存检查点
         if (epoch + 1) % training_config.get('save_interval', 10) == 0:
@@ -561,9 +817,12 @@ def main():
         test_metrics = evaluator.evaluate(test_loader)
         logger.info(f"Test - Loss: {test_metrics['loss']:.4f}, "
                    f"F1: {test_metrics['f1']:.4f}")
+        log_metrics_to_tensorboard(writer, 'test', test_metrics, epochs)
         logger.info(f"Final test evaluation took {time.perf_counter() - test_start:.2f}s")
     
     logger.info(f"Training completed in {time.perf_counter() - training_start:.2f}s")
+    if writer is not None:
+        writer.close()
 
 
 if __name__ == '__main__':

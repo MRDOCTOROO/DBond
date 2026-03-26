@@ -1,12 +1,13 @@
 """
 评估指标模块
 
-本模块包含键级别二分类的评估指标实现。
+本模块包含键级别二分类评估指标实现，同时补齐与 dbond_m 横向对齐的
+example-based / label-based 指标。
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import numpy as np
 import torch
@@ -20,73 +21,217 @@ from sklearn.metrics import (
 )
 
 
+EPSILON = 1e-8
+
+
+def _sigmoid_if_needed(values: np.ndarray) -> np.ndarray:
+    if values.size == 0:
+        return values.astype(np.float32)
+    if values.max() > 1.0 or values.min() < 0.0:
+        return torch.sigmoid(torch.from_numpy(values.astype(np.float32))).numpy()
+    return values.astype(np.float32)
+
+
+def _example_subset_accuracy(gt: np.ndarray, pred: np.ndarray) -> float:
+    return float(np.mean(np.all(np.equal(gt, pred), axis=1).astype(np.float32)))
+
+
+def _example_accuracy(gt: np.ndarray, pred: np.ndarray) -> float:
+    ex_and = np.sum(np.logical_and(gt, pred), axis=1).astype(np.float32)
+    ex_or = np.sum(np.logical_or(gt, pred), axis=1).astype(np.float32)
+    return float(np.mean(ex_and / (ex_or + EPSILON)))
+
+
+def _example_precision(gt: np.ndarray, pred: np.ndarray) -> float:
+    ex_and = np.sum(np.logical_and(gt, pred), axis=1).astype(np.float32)
+    ex_pred = np.sum(pred, axis=1).astype(np.float32)
+    return float(np.mean(ex_and / (ex_pred + EPSILON)))
+
+
+def _example_recall(gt: np.ndarray, pred: np.ndarray) -> float:
+    ex_and = np.sum(np.logical_and(gt, pred), axis=1).astype(np.float32)
+    ex_gt = np.sum(gt, axis=1).astype(np.float32)
+    return float(np.mean(ex_and / (ex_gt + EPSILON)))
+
+
+def _example_f1(gt: np.ndarray, pred: np.ndarray, beta: float = 1.0) -> float:
+    precision = _example_precision(gt, pred)
+    recall = _example_recall(gt, pred)
+    return float(((1 + beta ** 2) * precision * recall) / ((beta ** 2) * (precision + recall + EPSILON)))
+
+
+def _label_quantity(gt: np.ndarray, pred: np.ndarray) -> np.ndarray:
+    tp = np.sum(np.logical_and(gt, pred), axis=0)
+    fp = np.sum(np.logical_and(1 - gt, pred), axis=0)
+    tn = np.sum(np.logical_and(1 - gt, 1 - pred), axis=0)
+    fn = np.sum(np.logical_and(gt, 1 - pred), axis=0)
+    return np.stack([tp, fp, tn, fn], axis=0).astype(np.float64)
+
+
+def _label_accuracy_macro(gt: np.ndarray, pred: np.ndarray) -> float:
+    quantity = _label_quantity(gt, pred)
+    tp_tn = quantity[0] + quantity[2]
+    denom = np.sum(quantity, axis=0)
+    return float(np.mean(tp_tn / (denom + EPSILON)))
+
+
+def _label_accuracy_micro(gt: np.ndarray, pred: np.ndarray) -> float:
+    quantity = _label_quantity(gt, pred)
+    tp, fp, tn, fn = np.sum(quantity, axis=1)
+    return float((tp + tn) / (tp + fp + tn + fn + EPSILON))
+
+
+def _label_precision_macro(gt: np.ndarray, pred: np.ndarray) -> float:
+    quantity = _label_quantity(gt, pred)
+    tp = quantity[0]
+    tp_fp = quantity[0] + quantity[1]
+    return float(np.mean(tp / (tp_fp + EPSILON)))
+
+
+def _label_precision_micro(gt: np.ndarray, pred: np.ndarray) -> float:
+    quantity = _label_quantity(gt, pred)
+    tp, fp, _, _ = np.sum(quantity, axis=1)
+    return float(tp / (tp + fp + EPSILON))
+
+
+def _label_recall_macro(gt: np.ndarray, pred: np.ndarray) -> float:
+    quantity = _label_quantity(gt, pred)
+    tp = quantity[0]
+    tp_fn = quantity[0] + quantity[3]
+    return float(np.mean(tp / (tp_fn + EPSILON)))
+
+
+def _label_recall_micro(gt: np.ndarray, pred: np.ndarray) -> float:
+    quantity = _label_quantity(gt, pred)
+    tp, _, _, fn = np.sum(quantity, axis=1)
+    return float(tp / (tp + fn + EPSILON))
+
+
+def _label_f1_macro(gt: np.ndarray, pred: np.ndarray, beta: float = 1.0) -> float:
+    quantity = _label_quantity(gt, pred)
+    tp = quantity[0]
+    fp = quantity[1]
+    fn = quantity[3]
+    return float(np.mean((1 + beta ** 2) * tp / ((1 + beta ** 2) * tp + beta ** 2 * fn + fp + EPSILON)))
+
+
+def _label_f1_micro(gt: np.ndarray, pred: np.ndarray, beta: float = 1.0) -> float:
+    quantity = _label_quantity(gt, pred)
+    tp = np.sum(quantity[0])
+    fp = np.sum(quantity[1])
+    fn = np.sum(quantity[3])
+    return float((1 + beta ** 2) * tp / ((1 + beta ** 2) * tp + beta ** 2 * fn + fp + EPSILON))
+
+
 class BinaryBondMetrics:
-    """键级别二分类评估指标。"""
+    """键级别二分类评估指标，同时输出 dbond_m 同口径指标。"""
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.threshold = config.get("threshold", 0.5)
         self.threshold_strategy = config.get("threshold_strategy", "fixed")
-        self.all_predictions = []
-        self.all_targets = []
+        self.all_valid_predictions: List[np.ndarray] = []
+        self.all_valid_targets: List[np.ndarray] = []
+        self.sample_predictions: List[np.ndarray] = []
+        self.sample_targets: List[np.ndarray] = []
 
-    def update(self, predictions: torch.Tensor, targets: torch.Tensor):
+    def update(self, predictions: torch.Tensor, targets: torch.Tensor, label_mask: torch.Tensor | None = None):
         if isinstance(predictions, torch.Tensor):
             predictions = predictions.detach().cpu().numpy()
         if isinstance(targets, torch.Tensor):
             targets = targets.detach().cpu().numpy()
+        if isinstance(label_mask, torch.Tensor):
+            label_mask = label_mask.detach().cpu().numpy()
 
-        self.all_predictions.append(predictions.reshape(-1))
-        self.all_targets.append(targets.reshape(-1))
+        predictions = np.asarray(predictions)
+        targets = np.asarray(targets)
+
+        if predictions.ndim == 1:
+            predictions = predictions.reshape(1, -1)
+            targets = targets.reshape(1, -1)
+            if label_mask is None:
+                label_mask = np.ones_like(targets, dtype=bool)
+            else:
+                label_mask = np.asarray(label_mask).reshape(1, -1).astype(bool)
+        else:
+            if label_mask is None:
+                label_mask = np.ones_like(targets, dtype=bool)
+            else:
+                label_mask = np.asarray(label_mask).astype(bool)
+
+        for pred_row, target_row, mask_row in zip(predictions, targets, label_mask):
+            mask_row = mask_row.astype(bool)
+            valid_pred = pred_row[mask_row].reshape(-1)
+            valid_target = target_row[mask_row].reshape(-1).astype(np.int32)
+            self.sample_predictions.append(valid_pred)
+            self.sample_targets.append(valid_target)
+            if valid_pred.size > 0:
+                self.all_valid_predictions.append(valid_pred)
+                self.all_valid_targets.append(valid_target)
 
     def compute(self) -> Dict[str, float]:
-        if not self.all_predictions or not self.all_targets:
+        if not self.sample_predictions or not self.sample_targets:
             return {}
 
-        predictions = np.concatenate(self.all_predictions, axis=0).astype(np.float32)
-        targets = np.concatenate(self.all_targets, axis=0).astype(np.int32)
-
-        if predictions.size == 0:
+        valid_predictions = np.concatenate(self.all_valid_predictions, axis=0).astype(np.float32) if self.all_valid_predictions else np.array([], dtype=np.float32)
+        valid_targets = np.concatenate(self.all_valid_targets, axis=0).astype(np.int32) if self.all_valid_targets else np.array([], dtype=np.int32)
+        if valid_predictions.size == 0:
             return {}
 
-        if predictions.max() > 1.0 or predictions.min() < 0.0:
-            probabilities = torch.sigmoid(torch.from_numpy(predictions)).numpy()
-        else:
-            probabilities = predictions
+        valid_probabilities = _sigmoid_if_needed(valid_predictions)
+        threshold = self._get_threshold(valid_probabilities, valid_targets)
+        binary_valid_predictions = (valid_probabilities >= threshold).astype(np.int32)
 
-        threshold = self._get_threshold(probabilities, targets)
-        binary_predictions = (probabilities >= threshold).astype(np.int32)
+        sample_probabilities = [_sigmoid_if_needed(sample.astype(np.float32)) for sample in self.sample_predictions]
+        max_len = max((sample.size for sample in sample_probabilities), default=0)
+        pred_matrix = np.zeros((len(sample_probabilities), max_len), dtype=np.int32)
+        target_matrix = np.zeros((len(self.sample_targets), max_len), dtype=np.int32)
+
+        for idx, (prob_row, target_row) in enumerate(zip(sample_probabilities, self.sample_targets)):
+            row_len = prob_row.size
+            if row_len == 0:
+                continue
+            pred_matrix[idx, :row_len] = (prob_row >= threshold).astype(np.int32)
+            target_matrix[idx, :row_len] = target_row.astype(np.int32)
 
         metrics = {
-            "accuracy": accuracy_score(targets, binary_predictions),
-            "precision": precision_score(targets, binary_predictions, zero_division=0),
-            "recall": recall_score(targets, binary_predictions, zero_division=0),
-            "f1": f1_score(targets, binary_predictions, zero_division=0),
-            "precision_micro": precision_score(targets, binary_predictions, average="binary", zero_division=0),
-            "recall_micro": recall_score(targets, binary_predictions, average="binary", zero_division=0),
-            "f1_micro": f1_score(targets, binary_predictions, average="binary", zero_division=0),
-            "hamming_loss": hamming_loss(targets, binary_predictions),
-            "positive_rate": float(np.mean(targets)),
-            "pred_positive_rate": float(np.mean(binary_predictions)),
+            "accuracy": accuracy_score(valid_targets, binary_valid_predictions),
+            "precision": precision_score(valid_targets, binary_valid_predictions, zero_division=0),
+            "recall": recall_score(valid_targets, binary_valid_predictions, zero_division=0),
+            "f1": f1_score(valid_targets, binary_valid_predictions, zero_division=0),
+            "precision_micro": precision_score(valid_targets, binary_valid_predictions, average="binary", zero_division=0),
+            "recall_micro": recall_score(valid_targets, binary_valid_predictions, average="binary", zero_division=0),
+            "f1_micro": f1_score(valid_targets, binary_valid_predictions, average="binary", zero_division=0),
+            "hamming_loss": hamming_loss(valid_targets, binary_valid_predictions),
+            "positive_rate": float(np.mean(valid_targets)),
+            "pred_positive_rate": float(np.mean(binary_valid_predictions)),
+            "subset_acc": _example_subset_accuracy(target_matrix, pred_matrix),
+            "ex_acc": _example_accuracy(target_matrix, pred_matrix),
+            "ex_precision": _example_precision(target_matrix, pred_matrix),
+            "ex_recall": _example_recall(target_matrix, pred_matrix),
+            "ex_f1": _example_f1(target_matrix, pred_matrix),
+            "lab_acc_ma": _label_accuracy_macro(target_matrix, pred_matrix),
+            "lab_acc_mi": _label_accuracy_micro(target_matrix, pred_matrix),
+            "lab_precision_ma": _label_precision_macro(target_matrix, pred_matrix),
+            "lab_precision_mi": _label_precision_micro(target_matrix, pred_matrix),
+            "lab_recall_ma": _label_recall_macro(target_matrix, pred_matrix),
+            "lab_recall_mi": _label_recall_micro(target_matrix, pred_matrix),
+            "lab_f1_ma": _label_f1_macro(target_matrix, pred_matrix),
+            "lab_f1_mi": _label_f1_micro(target_matrix, pred_matrix),
         }
 
-        if len(np.unique(targets)) > 1:
+        if len(np.unique(valid_targets)) > 1:
             try:
-                metrics["auc"] = roc_auc_score(targets, probabilities)
-                metrics["auc_macro"] = metrics["auc"]
-                metrics["auc_micro"] = metrics["auc"]
-                metrics["auc_weighted"] = metrics["auc"]
+                auc = roc_auc_score(valid_targets, valid_probabilities)
             except ValueError:
-                metrics["auc"] = 0.0
-                metrics["auc_macro"] = 0.0
-                metrics["auc_micro"] = 0.0
-                metrics["auc_weighted"] = 0.0
+                auc = 0.0
         else:
-            metrics["auc"] = 0.0
-            metrics["auc_macro"] = 0.0
-            metrics["auc_micro"] = 0.0
-            metrics["auc_weighted"] = 0.0
+            auc = 0.0
 
+        metrics["auc"] = auc
+        metrics["auc_macro"] = auc
+        metrics["auc_micro"] = auc
+        metrics["auc_weighted"] = auc
         metrics["class_0_precision"] = metrics["precision"]
         metrics["class_0_recall"] = metrics["recall"]
         metrics["class_0_f1"] = metrics["f1"]
@@ -114,8 +259,10 @@ class BinaryBondMetrics:
         return best_threshold
 
     def reset(self):
-        self.all_predictions = []
-        self.all_targets = []
+        self.all_valid_predictions = []
+        self.all_valid_targets = []
+        self.sample_predictions = []
+        self.sample_targets = []
 
 
 def compute_binary_bond_metrics(

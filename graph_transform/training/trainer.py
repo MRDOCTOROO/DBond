@@ -12,6 +12,7 @@ import time
 import logging
 import os
 import json
+import gc
 from typing import Dict, Any, Optional
 from tqdm import tqdm
 
@@ -76,6 +77,8 @@ class Trainer:
         self.profile_memory = self.debug_config.get('profile_memory', False)
         self.log_grad_norm = self.debug_config.get('log_grad_norm', True)
         self.save_nonfinite_batch = self.debug_config.get('save_nonfinite_batch', True)
+        self.force_gc_on_epoch_end = self.debug_config.get('force_gc_on_epoch_end', False)
+        self.empty_cache_on_epoch_end = self.debug_config.get('empty_cache_on_epoch_end', False)
         self.diagnostic_dir = self.debug_config.get(
             'diagnostic_dir',
             os.path.join(self.config.get('logging', {}).get('log_dir', 'logs/graph_transform'), 'diagnostics'),
@@ -114,6 +117,7 @@ class Trainer:
         total_grad_norm = 0.0
         max_grad_norm = 0.0
         last_batch_end = time.perf_counter()
+        memory_epoch_start = self._get_memory_stats(reset_peak=True)
         
         # 进度条
         pbar = tqdm(train_loader, desc=f"Epoch {epoch} Training")
@@ -192,19 +196,26 @@ class Trainer:
                             batch_idx,
                             self._format_timing_dict(model_timing),
                         )
-                    if self.profile_memory:
-                        memory_stats = self._get_memory_stats()
-                        if memory_stats is not None:
-                            self.logger.info(
-                                "Epoch %s Batch %s Memory - allocated: %.2fMB, reserved: %.2fMB, peak: %.2fMB",
-                                epoch,
-                                batch_idx,
-                                memory_stats['allocated_mb'],
-                                memory_stats['reserved_mb'],
-                                memory_stats['peak_allocated_mb'],
-                            )
                 else:
                     self.logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f}")
+
+                if self.profile_memory:
+                    memory_stats = self._get_memory_stats()
+                    if memory_stats is not None:
+                        self.logger.info(
+                            "Epoch %s Batch %s GPU Memory - allocated: %.2fMB, reserved: %.2fMB, peak_allocated: %.2fMB, peak_reserved: %.2fMB, free: %.2fMB, total: %.2fMB",
+                            epoch,
+                            batch_idx,
+                            memory_stats['allocated_mb'],
+                            memory_stats['reserved_mb'],
+                            memory_stats['peak_allocated_mb'],
+                            memory_stats['peak_reserved_mb'],
+                            memory_stats['free_mb'],
+                            memory_stats['total_mb'],
+                        )
+
+            del loss
+            del batch_data
         
         # 计算平均损失
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
@@ -220,6 +231,15 @@ class Trainer:
             metrics['avg_batch_time'] = total_batch_time / num_batches
             metrics['avg_grad_norm'] = total_grad_norm / num_batches
             metrics['max_grad_norm'] = max_grad_norm
+        memory_epoch_end = self._get_memory_stats()
+        if memory_epoch_start is not None and memory_epoch_end is not None:
+            metrics['gpu_mem_start_allocated_mb'] = memory_epoch_start['allocated_mb']
+            metrics['gpu_mem_end_allocated_mb'] = memory_epoch_end['allocated_mb']
+            metrics['gpu_mem_end_reserved_mb'] = memory_epoch_end['reserved_mb']
+            metrics['gpu_mem_peak_allocated_mb'] = memory_epoch_end['peak_allocated_mb']
+            metrics['gpu_mem_peak_reserved_mb'] = memory_epoch_end['peak_reserved_mb']
+            metrics['gpu_mem_end_free_mb'] = memory_epoch_end['free_mb']
+            metrics['gpu_mem_total_mb'] = memory_epoch_end['total_mb']
         
         # 更新指标跟踪器
         self.metric_tracker.update(epoch, metrics, mode='train')
@@ -250,9 +270,25 @@ class Trainer:
                 metrics.get('avg_grad_norm', 0.0),
                 metrics.get('max_grad_norm', 0.0),
             )
+        if memory_epoch_start is not None and memory_epoch_end is not None:
+            self.logger.info(
+                "Epoch %s GPU Memory - start_allocated: %.2fMB, end_allocated: %.2fMB, end_reserved: %.2fMB, peak_allocated: %.2fMB, peak_reserved: %.2fMB, free: %.2fMB",
+                epoch,
+                memory_epoch_start['allocated_mb'],
+                memory_epoch_end['allocated_mb'],
+                memory_epoch_end['reserved_mb'],
+                memory_epoch_end['peak_allocated_mb'],
+                memory_epoch_end['peak_reserved_mb'],
+                memory_epoch_end['free_mb'],
+            )
         if metrics:
             metric_str = ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items() if k != 'loss'])
             self.logger.info(f"Epoch {epoch} Training Metrics - {metric_str}")
+
+        if self.force_gc_on_epoch_end:
+            gc.collect()
+        if self.empty_cache_on_epoch_end and self.device.type == 'cuda' and torch.cuda.is_available():
+            torch.cuda.empty_cache()
         
         return metrics
     
@@ -274,6 +310,7 @@ class Trainer:
         
         total_loss = 0.0
         num_batches = 0
+        memory_eval_start = self._get_memory_stats(reset_peak=True)
         
         with torch.no_grad():
             pbar = tqdm(val_loader, desc=f"Epoch {epoch} Validation")
@@ -283,15 +320,19 @@ class Trainer:
                 batch_data = self._move_to_device(batch_data)
                 
                 # 前向传播
-                predictions = self.model(batch_data)
-                targets = batch_data['labels']
-                targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
+                predictions_full = self.model(batch_data)
+                targets_full = batch_data['labels']
+                targets, predictions = self._apply_label_mask(batch_data, targets_full, predictions_full)
 
                 # 计算损失
                 loss = self.criterion(predictions, targets)
                 
                 # 更新指标
-                self.metrics_calculator.update(predictions, targets)
+                self.metrics_calculator.update(
+                    predictions_full,
+                    targets_full,
+                    label_mask=batch_data.get('label_mask'),
+                )
                 total_loss += loss.item()
                 num_batches += 1
                 
@@ -300,6 +341,12 @@ class Trainer:
                     'Loss': f'{loss.item():.4f}',
                     'Avg Loss': f'{total_loss / num_batches:.4f}'
                 })
+                del loss
+                del predictions
+                del targets
+                del predictions_full
+                del targets_full
+                del batch_data
         
         # 计算平均损失
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
@@ -307,6 +354,13 @@ class Trainer:
         # 计算指标
         metrics = self.metrics_calculator.compute()
         metrics['loss'] = avg_loss
+        memory_eval_end = self._get_memory_stats()
+        if memory_eval_start is not None and memory_eval_end is not None:
+            metrics['gpu_mem_start_allocated_mb'] = memory_eval_start['allocated_mb']
+            metrics['gpu_mem_end_allocated_mb'] = memory_eval_end['allocated_mb']
+            metrics['gpu_mem_end_reserved_mb'] = memory_eval_end['reserved_mb']
+            metrics['gpu_mem_peak_allocated_mb'] = memory_eval_end['peak_allocated_mb']
+            metrics['gpu_mem_peak_reserved_mb'] = memory_eval_end['peak_reserved_mb']
         
         # 更新指标跟踪器
         self.metric_tracker.update(epoch, metrics, mode='val')
@@ -323,28 +377,32 @@ class Trainer:
         """前向传播"""
         if self.use_amp:
             with torch.amp.autocast(self.amp_device_type, enabled=True):
-                predictions = self.model(batch_data)
-                targets = batch_data['labels']
-                targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
+                predictions_full = self.model(batch_data)
+                targets_full = batch_data['labels']
+                targets, predictions = self._apply_label_mask(batch_data, targets_full, predictions_full)
                 self._ensure_finite_tensor(predictions, "predictions", batch_data)
                 loss = self.criterion(predictions, targets)
         else:
-            predictions = self.model(batch_data)
-            targets = batch_data['labels']
-            targets, predictions = self._apply_label_mask(batch_data, targets, predictions)
+            predictions_full = self.model(batch_data)
+            targets_full = batch_data['labels']
+            targets, predictions = self._apply_label_mask(batch_data, targets_full, predictions_full)
             self._ensure_finite_tensor(predictions, "predictions", batch_data)
             loss = self.criterion(predictions, targets)
 
         self._ensure_finite_tensor(loss, "loss", batch_data)
         
         # 更新训练指标
-        self.metrics_calculator.update(predictions, targets)
+        self.metrics_calculator.update(
+            predictions_full,
+            targets_full,
+            label_mask=batch_data.get('label_mask'),
+        )
         
         return loss
     
     def _backward_pass(self, loss: torch.Tensor):
         """反向传播"""
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         
         if self.use_amp:
             self.scaler.scale(loss).backward()
@@ -421,14 +479,20 @@ class Trainer:
             stats['valid_bonds'] = int(label_mask.sum().item())
         return stats
 
-    def _get_memory_stats(self) -> Optional[Dict[str, float]]:
+    def _get_memory_stats(self, reset_peak: bool = False) -> Optional[Dict[str, float]]:
         """返回当前 CUDA 显存统计。"""
         if self.device.type != 'cuda' or not torch.cuda.is_available():
             return None
+        if reset_peak:
+            torch.cuda.reset_peak_memory_stats(self.device)
+        free_bytes, total_bytes = torch.cuda.mem_get_info(self.device)
         return {
             'allocated_mb': torch.cuda.memory_allocated(self.device) / (1024 ** 2),
             'reserved_mb': torch.cuda.memory_reserved(self.device) / (1024 ** 2),
             'peak_allocated_mb': torch.cuda.max_memory_allocated(self.device) / (1024 ** 2),
+            'peak_reserved_mb': torch.cuda.max_memory_reserved(self.device) / (1024 ** 2),
+            'free_mb': free_bytes / (1024 ** 2),
+            'total_mb': total_bytes / (1024 ** 2),
         }
 
     def _format_timing_dict(self, timing: Dict[str, Any]) -> str:
@@ -470,6 +534,7 @@ class Trainer:
             'shape': tuple(tensor.shape),
             'batch_stats': batch_stats,
             'model_timing': getattr(self.model, 'last_forward_timing', {}),
+            'gpu_memory': self._get_memory_stats(),
         }
         if finite_values.numel() > 0:
             detail['finite_min'] = float(finite_values.min().detach().cpu().item())
