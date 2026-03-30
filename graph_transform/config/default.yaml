@@ -93,6 +93,7 @@ data:
   graph_strategy: "distance"  # "sequence", "distance", "hybrid", "knowledge"
   augmentation: false  # 是否使用数据增强
   cache_graphs: true #false 会让每个 epoch 都在构图/读 CSV，true启用缓存
+  cache_full_graphs: true  # 缓存完整图数据（含 edge_attr），避免每个 epoch 重复构图
   cache_dir: "cache/graph_data"
   
   # 数据增强配置
@@ -162,6 +163,11 @@ evaluation:
   test_time_augmentation: false
   ensemble_predictions: false
   num_ensemble_models: 5
+
+  # 评估结果输出
+  save_outputs: true
+  output_pred_dir: "result/pred/graph_transform"
+  output_metric_dir: "result/metric/graph_transform"
 
 # 设备配置
 device:

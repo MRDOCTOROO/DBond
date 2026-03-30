@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional
 from tqdm import tqdm
 import numpy as np
 
-from .metrics import BinaryBondMetrics
+from .metrics import BinaryBondMetrics, order_binary_bond_metric_dict, _sigmoid_if_needed
 
 try:
     from training import BinaryBondLoss
@@ -152,6 +152,7 @@ class Evaluator:
             metrics['gpu_mem_end_reserved_mb'] = memory_eval_end['reserved_mb']
             metrics['gpu_mem_peak_allocated_mb'] = memory_eval_end['peak_allocated_mb']
             metrics['gpu_mem_peak_reserved_mb'] = memory_eval_end['peak_reserved_mb']
+        metrics = order_binary_bond_metric_dict(metrics)
         
         # 记录结果
         self.logger.info(f"Evaluation - Loss: {avg_loss:.4f}")
@@ -172,6 +173,75 @@ class Evaluator:
             gc.collect()
         
         return metrics
+
+    def collect_prediction_outputs(self, data_loader: DataLoader, threshold: Optional[float] = None) -> Dict[str, Any]:
+        """收集逐样本评估输出，便于保存预测结果文件。"""
+        self.model.eval()
+
+        sample_logits = []
+        sample_targets = []
+
+        with torch.no_grad():
+            for batch_data in tqdm(data_loader, desc="Collecting evaluation outputs"):
+                batch_data = self._move_to_device(batch_data)
+
+                if self.use_amp:
+                    with torch.amp.autocast(self.amp_device_type, enabled=True):
+                        logits = self.model(batch_data)
+                else:
+                    logits = self.model(batch_data)
+
+                labels = batch_data['labels']
+                seq_lens = batch_data['seq_lens']
+
+                for row_idx, seq_len in enumerate(seq_lens.tolist()):
+                    bond_len = max(int(seq_len) - 1, 0)
+                    if bond_len == 0:
+                        sample_logits.append(np.array([], dtype=np.float32))
+                        sample_targets.append(np.array([], dtype=np.int32))
+                        continue
+
+                    sample_logits.append(
+                        logits[row_idx, :bond_len].detach().float().cpu().numpy().astype(np.float32)
+                    )
+                    sample_targets.append(
+                        labels[row_idx, :bond_len].detach().cpu().numpy().astype(np.int32)
+                    )
+
+        if threshold is None:
+            valid_logits = [row for row in sample_logits if row.size > 0]
+            valid_targets = [row for row in sample_targets if row.size > 0]
+            if valid_logits and valid_targets:
+                flat_logits = np.concatenate(valid_logits, axis=0).astype(np.float32)
+                flat_targets = np.concatenate(valid_targets, axis=0).astype(np.int32)
+                flat_probabilities = _sigmoid_if_needed(flat_logits)
+                threshold = BinaryBondMetrics(self.eval_config)._get_threshold(flat_probabilities, flat_targets)
+            else:
+                threshold = float(self.eval_config.get('threshold', 0.5))
+
+        pred_strings = []
+        true_strings = []
+        prob_strings = []
+
+        for logit_row, target_row in zip(sample_logits, sample_targets):
+            if logit_row.size == 0:
+                pred_strings.append("")
+                true_strings.append("")
+                prob_strings.append("")
+                continue
+
+            prob_row = _sigmoid_if_needed(logit_row.astype(np.float32))
+            pred_row = (prob_row >= threshold).astype(np.int32)
+            pred_strings.append(";".join(map(str, pred_row.tolist())))
+            true_strings.append(";".join(map(str, target_row.astype(np.int32).tolist())))
+            prob_strings.append(";".join(f"{value:.6f}" for value in prob_row.tolist()))
+
+        return {
+            'threshold': float(threshold),
+            'pred_strings': pred_strings,
+            'true_strings': true_strings,
+            'prob_strings': prob_strings,
+        }
     
     def evaluate_with_thresholds(self, data_loader: DataLoader, 
                                thresholds: list = None) -> Dict[str, Any]:

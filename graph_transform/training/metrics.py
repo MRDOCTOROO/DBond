@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import Any, Dict, List
 
 import numpy as np
@@ -15,6 +16,70 @@ from sklearn.metrics import accuracy_score, f1_score, hamming_loss, precision_sc
 
 
 EPSILON = 1e-8
+DBOND_M_COMPARABLE_METRIC_ORDER = (
+    "loss",
+    "subset_acc",
+    "ex_acc",
+    "ex_precision",
+    "ex_recall",
+    "ex_f1",
+    "lab_acc_ma",
+    "lab_acc_mi",
+    "lab_precision_ma",
+    "lab_precision_mi",
+    "lab_recall_ma",
+    "lab_recall_mi",
+    "lab_f1_ma",
+    "lab_f1_mi",
+)
+TASK_EXTRA_METRIC_ORDER = (
+    "accuracy",
+    "precision",
+    "recall",
+    "f1",
+    "precision_micro",
+    "recall_micro",
+    "f1_micro",
+    "auc",
+    "auc_macro",
+    "auc_micro",
+    "auc_weighted",
+    "hamming_loss",
+    "positive_rate",
+    "pred_positive_rate",
+    "class_0_precision",
+    "class_0_recall",
+    "class_0_f1",
+    "avg_fetch_wait_time",
+    "avg_move_time",
+    "avg_forward_time",
+    "avg_backward_time",
+    "avg_batch_time",
+    "avg_grad_norm",
+    "max_grad_norm",
+    "gpu_mem_start_allocated_mb",
+    "gpu_mem_end_allocated_mb",
+    "gpu_mem_end_reserved_mb",
+    "gpu_mem_peak_allocated_mb",
+    "gpu_mem_peak_reserved_mb",
+    "gpu_mem_end_free_mb",
+    "gpu_mem_total_mb",
+)
+
+
+def order_binary_bond_metric_dict(metrics: Dict[str, float]) -> Dict[str, float]:
+    ordered: OrderedDict[str, float] = OrderedDict()
+    for key in DBOND_M_COMPARABLE_METRIC_ORDER + TASK_EXTRA_METRIC_ORDER:
+        if key in metrics:
+            ordered[key] = metrics[key]
+    for key, value in metrics.items():
+        if key not in ordered:
+            ordered[key] = value
+    return ordered
+
+
+def metric_display_name(metric_name: str) -> str:
+    return "Loss" if metric_name == "loss" else metric_name
 
 
 def _sigmoid_if_needed(values: np.ndarray) -> np.ndarray:
@@ -228,7 +293,7 @@ class BinaryBondMetrics:
         metrics["class_0_precision"] = metrics["precision"]
         metrics["class_0_recall"] = metrics["recall"]
         metrics["class_0_f1"] = metrics["f1"]
-        return metrics
+        return order_binary_bond_metric_dict(metrics)
 
     def _get_threshold(self, predictions: np.ndarray, targets: np.ndarray) -> float:
         if self.threshold_strategy == "fixed":

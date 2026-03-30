@@ -29,6 +29,7 @@ PBCLA/__pycache__/**
 # 保留所有目录里的 .gitkeep 文件
 !**/.gitkeep
 
+cache/
 # 保留 dataset 中的特定文件
 !dataset/dataset.fbr.csv
 !dataset/dbond_m.test.csv

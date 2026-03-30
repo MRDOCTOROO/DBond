@@ -9,11 +9,12 @@
 import os
 import sys
 import argparse
+import re
 import yaml
 import logging
 import time
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 import torch
 import torch.nn as nn
@@ -36,6 +37,7 @@ from models.utils import ModelConfig, CheckpointManager, LearningRateScheduler
 from data import GraphDataset, GraphDataLoader, CachedGraphDataset
 from training import Trainer, BinaryBondLoss
 from evaluation import Evaluator
+from evaluation.metrics import metric_rows, metric_display_name
 
 
 def setup_logging(config: Dict[str, Any]) -> logging.Logger:
@@ -85,6 +87,88 @@ def resolve_tensorboard_dir(checkpoint_dir: str, log_config: Dict[str, Any]) -> 
     tb_dir = os.path.join(base_dir, os.path.basename(checkpoint_dir))
     os.makedirs(tb_dir, exist_ok=True)
     return tb_dir
+
+
+def create_tensorboard_writers(
+    checkpoint_dir: str,
+    log_config: Dict[str, Any],
+    config: Dict[str, Any],
+    logger: logging.Logger,
+) -> Dict[str, 'SummaryWriter']:
+    """仿照 dbond_m，为 train/val/test 分别创建 TensorBoard writer。"""
+    if SummaryWriter is None:
+        logger.warning("TensorBoard is enabled in config but tensorboard is not installed; event logging is disabled.")
+        return {}
+
+    tb_root = resolve_tensorboard_dir(checkpoint_dir, log_config)
+    config_yaml = yaml.safe_dump(config, sort_keys=False)
+    writers: Dict[str, SummaryWriter] = {}
+    for mode in ('train', 'val', 'test'):
+        mode_dir = os.path.join(tb_root, mode)
+        os.makedirs(mode_dir, exist_ok=True)
+        writers[mode] = SummaryWriter(log_dir=mode_dir)
+        writers[mode].add_text("config/yaml", config_yaml, 0)
+    logger.info(f"TensorBoard root dir: {tb_root}")
+    return writers
+
+
+def flush_tensorboard_writers(writers: Dict[str, 'SummaryWriter']) -> None:
+    for writer in writers.values():
+        writer.flush()
+
+
+def close_tensorboard_writers(writers: Dict[str, 'SummaryWriter']) -> None:
+    for writer in writers.values():
+        writer.close()
+
+
+def sanitize_filename_component(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_")
+    return sanitized or "unknown"
+
+
+def build_evaluation_id(checkpoint_reference: str, phase: str) -> str:
+    checkpoint_stem = sanitize_filename_component(os.path.splitext(os.path.basename(checkpoint_reference))[0])
+    checkpoint_parent = sanitize_filename_component(os.path.basename(os.path.dirname(checkpoint_reference)))
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    return f"{timestamp}_{checkpoint_parent}_{checkpoint_stem}_{phase}"
+
+
+def append_eval_id_to_path(filepath: str, evaluation_id: str) -> str:
+    directory, filename = os.path.split(filepath)
+    stem, ext = os.path.splitext(filename)
+    return os.path.join(directory, f"{stem}__{evaluation_id}{ext}")
+
+
+def save_evaluation_outputs(
+    *,
+    metrics: Dict[str, Any],
+    output_df: pd.DataFrame,
+    metric_csv_path: str,
+    pred_csv_path: str,
+    evaluation_id: str,
+    logger: logging.Logger,
+) -> None:
+    metric_dir = os.path.dirname(metric_csv_path)
+    pred_dir = os.path.dirname(pred_csv_path)
+    if metric_dir:
+        os.makedirs(metric_dir, exist_ok=True)
+    if pred_dir:
+        os.makedirs(pred_dir, exist_ok=True)
+
+    metric_df = pd.DataFrame(metric_rows(metrics))
+    metric_df.to_csv(metric_csv_path, index=False)
+    output_df.to_csv(pred_csv_path, index=False)
+
+    archive_metric_path = append_eval_id_to_path(metric_csv_path, evaluation_id)
+    archive_pred_path = append_eval_id_to_path(pred_csv_path, evaluation_id)
+    metric_df.to_csv(archive_metric_path, index=False)
+    output_df.to_csv(archive_pred_path, index=False)
+
+    logger.info(f"Saved latest metrics to {metric_csv_path}")
+    logger.info(f"Saved latest predictions to {pred_csv_path}")
+    logger.info(f"Archived metrics to {archive_metric_path}")
+    logger.info(f"Archived predictions to {archive_pred_path}")
 
 
 def _save_line_plot(
@@ -232,12 +316,13 @@ def save_training_curves(
 
 
 def log_metrics_to_tensorboard(
-    writer: Optional['SummaryWriter'],
+    writers: Dict[str, 'SummaryWriter'],
     mode: str,
     metrics: Dict[str, Any],
     step: int,
 ) -> None:
-    """写入TensorBoard标量。"""
+    """写入 TensorBoard 标量；按 split 分 writer，贴近 dbond_m 视图。"""
+    writer = writers.get(mode)
     if writer is None:
         return
 
@@ -245,7 +330,7 @@ def log_metrics_to_tensorboard(
         if value is None or isinstance(value, bool):
             continue
         if isinstance(value, (int, float, np.integer, np.floating)):
-            writer.add_scalar(f"{mode}/{key}", float(value), step)
+            writer.add_scalar(metric_display_name(key), float(value), step)
 
 
 def setup_device(config: Dict[str, Any]) -> torch.device:
@@ -669,15 +754,9 @@ def main():
     os.makedirs(training_config['checkpoint_dir'], exist_ok=True)
     logger.info(f"Checkpoint dir: {training_config['checkpoint_dir']}")
     log_config = config.get('logging', {})
-    writer: Optional[SummaryWriter] = None
+    tb_writers: Dict[str, SummaryWriter] = {}
     if log_config.get('use_tensorboard', False):
-        if SummaryWriter is None:
-            logger.warning("TensorBoard is enabled in config but tensorboard is not installed; event logging is disabled.")
-        else:
-            tb_dir = resolve_tensorboard_dir(training_config['checkpoint_dir'], log_config)
-            writer = SummaryWriter(log_dir=tb_dir)
-            writer.add_text("config/yaml", yaml.safe_dump(config, sort_keys=False), 0)
-            logger.info(f"TensorBoard log dir: {tb_dir}")
+        tb_writers = create_tensorboard_writers(training_config['checkpoint_dir'], log_config, config, logger)
     epochs = training_config['epochs']
     training_start = time.perf_counter()
     history = {
@@ -710,9 +789,10 @@ def main():
         train_metrics = trainer.train_epoch(train_loader, epoch + 1)
         logger.info(f"Train - Loss: {train_metrics['loss']:.4f}, "
                    f"F1: {train_metrics['f1']:.4f}")
-        log_metrics_to_tensorboard(writer, 'train', train_metrics, epoch + 1)
-        if writer is not None:
-            writer.add_scalar('train/learning_rate', epoch_lr, epoch + 1)
+        log_metrics_to_tensorboard(tb_writers, 'train', train_metrics, epoch + 1)
+        train_writer = tb_writers.get('train')
+        if train_writer is not None:
+            train_writer.add_scalar('learning_rate', epoch_lr, epoch + 1)
         history['epoch'].append(epoch + 1)
         history['train_loss'].append(train_metrics.get('loss'))
         history['train_f1'].append(train_metrics.get('f1'))
@@ -742,7 +822,7 @@ def main():
             current_val_precision = val_metrics.get('precision_micro', val_metrics.get('precision'))
             current_val_recall = val_metrics.get('recall_micro', val_metrics.get('recall'))
             current_val_auc = val_metrics.get('auc_micro', val_metrics.get('auc'))
-            log_metrics_to_tensorboard(writer, 'val', val_metrics, epoch + 1)
+            log_metrics_to_tensorboard(tb_writers, 'val', val_metrics, epoch + 1)
             
             # 保存最佳模型
             current_f1 = val_metrics['f1']
@@ -788,8 +868,8 @@ def main():
         history['val_recall'].append(current_val_recall)
         history['val_auc'].append(current_val_auc)
         save_training_curves(history, config, logger, training_config['checkpoint_dir'])
-        if writer is not None:
-            writer.flush()
+        if tb_writers:
+            flush_tensorboard_writers(tb_writers)
         
         # 定期保存检查点
         if (epoch + 1) % training_config.get('save_interval', 10) == 0:
@@ -812,17 +892,65 @@ def main():
     
     # 测试阶段
     if test_loader is not None:
+        checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints/graph_transform')
+        best_checkpoint_path = os.path.join(checkpoint_dir, 'best_model.pt')
+        if val_loader is not None:
+            if os.path.exists(best_checkpoint_path):
+                logger.info(f"Reloading best checkpoint before final test evaluation: {best_checkpoint_path}")
+                CheckpointManager.load_checkpoint(
+                    filepath=best_checkpoint_path,
+                    model=model,
+                    device=device,
+                )
+            else:
+                logger.warning(
+                    "Validation was enabled but best checkpoint was not found at %s; "
+                    "final test evaluation will use the current in-memory model.",
+                    best_checkpoint_path,
+                )
+        else:
+            logger.info("No validation loader configured; final test evaluation will use the current in-memory model.")
+
         logger.info("Starting final evaluation on test set...")
         test_start = time.perf_counter()
         test_metrics = evaluator.evaluate(test_loader)
         logger.info(f"Test - Loss: {test_metrics['loss']:.4f}, "
                    f"F1: {test_metrics['f1']:.4f}")
-        log_metrics_to_tensorboard(writer, 'test', test_metrics, epochs)
+        test_step = history['epoch'][-1] if history['epoch'] else 0
+        log_metrics_to_tensorboard(tb_writers, 'test', test_metrics, test_step)
+        if config.get('evaluation', {}).get('save_outputs', True):
+            prediction_outputs = evaluator.collect_prediction_outputs(test_loader)
+            checkpoint_reference = best_checkpoint_path if (val_loader is not None and os.path.exists(best_checkpoint_path)) else os.path.join(checkpoint_dir, 'current_in_memory_model')
+            evaluation_id = build_evaluation_id(checkpoint_reference, 'test')
+            evaluation_config = config.get('evaluation', {})
+            metric_csv_path = os.path.join(
+                evaluation_config.get('output_metric_dir', 'result/metric/graph_transform'),
+                'latest_test_metric.csv',
+            )
+            pred_csv_path = os.path.join(
+                evaluation_config.get('output_pred_dir', 'result/pred/graph_transform'),
+                'latest_test.pred.csv',
+            )
+            output_df = test_dataset.data.copy()
+            output_df['evaluation_id'] = evaluation_id
+            output_df['checkpoint_path'] = os.path.abspath(checkpoint_reference)
+            output_df['threshold'] = prediction_outputs['threshold']
+            output_df['true'] = prediction_outputs['true_strings']
+            output_df['pred'] = prediction_outputs['pred_strings']
+            output_df['pred_prob'] = prediction_outputs['prob_strings']
+            save_evaluation_outputs(
+                metrics=test_metrics,
+                output_df=output_df,
+                metric_csv_path=metric_csv_path,
+                pred_csv_path=pred_csv_path,
+                evaluation_id=evaluation_id,
+                logger=logger,
+            )
         logger.info(f"Final test evaluation took {time.perf_counter() - test_start:.2f}s")
     
     logger.info(f"Training completed in {time.perf_counter() - training_start:.2f}s")
-    if writer is not None:
-        writer.close()
+    if tb_writers:
+        close_tensorboard_writers(tb_writers)
 
 
 if __name__ == '__main__':

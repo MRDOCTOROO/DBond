@@ -16,7 +16,7 @@ import gc
 from typing import Dict, Any, Optional
 from tqdm import tqdm
 
-from .metrics import BinaryBondMetrics, MetricTracker
+from .metrics import BinaryBondMetrics, MetricTracker, order_binary_bond_metric_dict
 
 
 class Trainer:
@@ -240,6 +240,7 @@ class Trainer:
             metrics['gpu_mem_peak_reserved_mb'] = memory_epoch_end['peak_reserved_mb']
             metrics['gpu_mem_end_free_mb'] = memory_epoch_end['free_mb']
             metrics['gpu_mem_total_mb'] = memory_epoch_end['total_mb']
+        metrics = order_binary_bond_metric_dict(metrics)
         
         # 更新指标跟踪器
         self.metric_tracker.update(epoch, metrics, mode='train')
@@ -361,6 +362,7 @@ class Trainer:
             metrics['gpu_mem_end_reserved_mb'] = memory_eval_end['reserved_mb']
             metrics['gpu_mem_peak_allocated_mb'] = memory_eval_end['peak_allocated_mb']
             metrics['gpu_mem_peak_reserved_mb'] = memory_eval_end['peak_reserved_mb']
+        metrics = order_binary_bond_metric_dict(metrics)
         
         # 更新指标跟踪器
         self.metric_tracker.update(epoch, metrics, mode='val')

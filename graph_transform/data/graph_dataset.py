@@ -520,8 +520,8 @@ class CachedGraphDataset(GraphDataset):
     def _load_or_build_cache(self):
         """加载或构建缓存"""
         meta = {
-            "version": 1,
-            "csv_path": os.path.abspath(self.csv_path),
+            "version": 2,
+            "csv_path": self.csv_path,
             "graph_strategy": self.graph_strategy,
             "max_seq_len": self.max_seq_len,
             "max_distance": getattr(self.config, "max_distance", 0),
@@ -553,7 +553,12 @@ class CachedGraphDataset(GraphDataset):
                 'edge_index': sample['edge_index'],
                 'edge_attr': sample['edge_attr'],
                 'edge_types': sample['edge_types'],
-                'edge_distances': sample['edge_distances']
+                'edge_distances': sample['edge_distances'],
+                'labels': sample['labels'],
+                'state_vars': sample['state_vars'],
+                'env_vars': sample['env_vars'],
+                'seq_len': sample['seq_len'],
+                'node_len': sample['node_len'],
             }
             
             if (idx + 1) % 1000 == 0:
@@ -567,11 +572,33 @@ class CachedGraphDataset(GraphDataset):
         """获取缓存样本"""
         row = self.data.iloc[idx]
         
-        # 提取序列和标签
+        # 提取序列（始终需要，用于模型中氨基酸嵌入）
         sequence = str(row['seq'])
-        labels = self._parse_labels(str(row['true_multi']))
         
-        # 提取环境变量
+        if self.cached_data is not None:
+            # 完整图缓存命中：直接返回缓存数据，无需重复计算
+            cached = self.cached_data[idx]
+            sample = {
+                'sequence': sequence,
+                'edge_index': cached['edge_index'],
+                'edge_attr': cached['edge_attr'],
+                'edge_types': cached['edge_types'],
+                'edge_distances': cached['edge_distances'],
+                'labels': cached['labels'],
+                'charge': float(row['charge']),
+                'pep_mass': float(row['pep_mass']),
+                'intensity': float(row['intensity']),
+                'nce': float(row['nce']),
+                'rt': float(row['rt']),
+                'state_vars': cached['state_vars'],
+                'env_vars': cached['env_vars'],
+                'seq_len': cached['seq_len'],
+                'node_len': cached['node_len'],
+            }
+            return sample
+        
+        # 无完整图缓存：使用边缓存 + 实时计算 edge_attr
+        labels = self._parse_labels(str(row['true_multi']))
         sample_features = {
             'charge': float(row['charge']),
             'pep_mass': float(row['pep_mass']),
@@ -580,29 +607,15 @@ class CachedGraphDataset(GraphDataset):
             'rt': float(row['rt']),
         }
         
-        if self.cached_data is not None:
-            cached_graph = self.cached_data[idx]
-            edge_index = cached_graph['edge_index']
-            edge_attr = cached_graph['edge_attr']
-            edge_types = cached_graph['edge_types']
-            edge_distances = cached_graph['edge_distances']
-        else:
-            graph_data = self.graph_builder.build_graph(sequence, sample_features, self.graph_strategy)
-            edge_index = graph_data['edge_index']
-            edge_attr = graph_data['edge_attr']
-            edge_types = graph_data['edge_types']
-            edge_distances = graph_data['edge_distances']
-        
-        # 准备标签
+        graph_data = self.graph_builder.build_graph(sequence, sample_features, self.graph_strategy)
         label_tensor = self._prepare_labels(labels, len(sequence))
         
-        # 组合数据
         sample = {
             'sequence': sequence,
-            'edge_index': edge_index,
-            'edge_attr': edge_attr,
-            'edge_types': edge_types,
-            'edge_distances': edge_distances,
+            'edge_index': graph_data['edge_index'],
+            'edge_attr': graph_data['edge_attr'],
+            'edge_types': graph_data['edge_types'],
+            'edge_distances': graph_data['edge_distances'],
             'labels': label_tensor,
             'charge': sample_features['charge'],
             'pep_mass': sample_features['pep_mass'],
