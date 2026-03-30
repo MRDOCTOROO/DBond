@@ -18,6 +18,7 @@ from sklearn.metrics import accuracy_score, f1_score, hamming_loss, precision_sc
 EPSILON = 1e-8
 DBOND_M_COMPARABLE_METRIC_ORDER = (
     "loss",
+    "dbond_style_loss",
     "subset_acc",
     "ex_acc",
     "ex_precision",

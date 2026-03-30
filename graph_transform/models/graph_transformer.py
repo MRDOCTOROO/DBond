@@ -165,7 +165,7 @@ class NodeEncoder(nn.Module):
 
         for seq in sequences:
             try:
-                seq_bytes = np.frombuffer(seq.encode('ascii'), dtype=np.uint8)
+                seq_bytes = np.frombuffer(seq.encode('ascii'), dtype=np.uint8).copy()
             except UnicodeEncodeError as exc:
                 raise ValueError(f"Sequence contains non-ASCII amino acid symbols: {seq}") from exc
 

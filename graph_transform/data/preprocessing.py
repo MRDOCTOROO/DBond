@@ -60,7 +60,7 @@ class SequencePreprocessor:
             List[int]: 编码后的序列
         """
         try:
-            sequence_bytes = np.frombuffer(sequence.encode('ascii'), dtype=np.uint8)
+            sequence_bytes = np.frombuffer(sequence.encode('ascii'), dtype=np.uint8).copy()
         except UnicodeEncodeError as exc:
             raise ValueError(f"Sequence contains non-ASCII amino acid symbols: {sequence}") from exc
 

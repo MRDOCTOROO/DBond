@@ -4,7 +4,7 @@
 model:
   # 基础配置
   hidden_dim: 256
-  num_attention_heads: 8
+  num_attention_heads: 4
   dropout: 0.1
   leaky_relu_slope: 0.2
   
@@ -19,7 +19,7 @@ model:
   num_hierarchical_layers: 2
   
   # 序列配置
-  max_seq_len: 100
+  max_seq_len: 32
   alphabet: "#ABCDEFGHIKLMNOPQRSTVWXYZ"
   pad_char: "#"
   
@@ -57,8 +57,8 @@ model:
 training:
   # 基础训练参数
   epochs: 60
-  batch_size: 512
-  learning_rate: 0.0005
+  batch_size: 1024
+  learning_rate: 0.0001
   weight_decay: 0.0001
   gradient_clip_norm: 1.0
   
@@ -89,7 +89,7 @@ data:
   val_csv_path: null  # 如果为null，从训练集分割
   
   # 数据处理配置
-  max_seq_len: 100
+  max_seq_len: 32
   graph_strategy: "distance"  # "sequence", "distance", "hybrid", "knowledge"
   augmentation: false  # 是否使用数据增强
   cache_graphs: true #false 会让每个 epoch 都在构图/读 CSV，true启用缓存

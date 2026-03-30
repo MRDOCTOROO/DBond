@@ -74,7 +74,10 @@ class Evaluator:
         # 重置指标
         self.metrics_calculator.reset()
         
-        total_loss = 0.0
+        total_weighted_loss = 0.0
+        total_valid_bonds = 0
+        total_dbond_style_loss = 0.0
+        total_samples = 0
         num_batches = 0
         memory_eval_start = self._get_memory_stats(reset_peak=True)
         
@@ -104,6 +107,8 @@ class Evaluator:
                     self._ensure_finite_tensor(predictions, "predictions")
                     loss = criterion(predictions, targets)
                 self._ensure_finite_tensor(loss, "loss")
+                dbond_style_loss = self._compute_dbond_style_loss(criterion, batch_data, predictions_full, targets_full)
+                self._ensure_finite_tensor(dbond_style_loss, "dbond_style_loss")
                 
                 # 更新指标
                 self.metrics_calculator.update(
@@ -111,13 +116,19 @@ class Evaluator:
                     targets_full,
                     label_mask=batch_data.get('label_mask'),
                 )
-                total_loss += loss.item()
+                valid_bond_count = int(targets.numel())
+                sample_count = int(targets_full.shape[0])
+                total_weighted_loss += loss.item() * valid_bond_count
+                total_valid_bonds += valid_bond_count
+                total_dbond_style_loss += dbond_style_loss.item() * sample_count
+                total_samples += sample_count
                 num_batches += 1
                 
                 # 更新进度条
+                avg_loss = total_weighted_loss / total_valid_bonds if total_valid_bonds > 0 else 0.0
                 pbar.set_postfix({
                     'Loss': f'{loss.item():.4f}',
-                    'Avg Loss': f'{total_loss / num_batches:.4f}'
+                    'Avg Loss': f'{avg_loss:.4f}'
                 })
                 if self.profile_memory and batch_idx % self.config.get('logging', {}).get('log_interval', 10) == 0:
                     memory_stats = self._get_memory_stats()
@@ -140,11 +151,12 @@ class Evaluator:
                 del batch_data
         
         # 计算平均损失
-        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+        avg_loss = total_weighted_loss / total_valid_bonds if total_valid_bonds > 0 else 0.0
         
         # 计算指标
         metrics = self.metrics_calculator.compute()
         metrics['loss'] = avg_loss
+        metrics['dbond_style_loss'] = total_dbond_style_loss / total_samples if total_samples > 0 else 0.0
         memory_eval_end = self._get_memory_stats()
         if memory_eval_start is not None and memory_eval_end is not None:
             metrics['gpu_mem_start_allocated_mb'] = memory_eval_start['allocated_mb']
@@ -472,6 +484,20 @@ class Evaluator:
         if masked_preds.dim() == 1:
             masked_preds = masked_preds.unsqueeze(1)
         return masked_preds
+
+    def _compute_dbond_style_loss(self,
+                                  criterion: nn.Module,
+                                  batch_data: Dict[str, Any],
+                                  predictions_full: torch.Tensor,
+                                  targets_full: torch.Tensor) -> torch.Tensor:
+        """按 dbond_m 风格在固定宽度标签上计算 loss，仅用于报表对比。"""
+        label_mask = batch_data.get('label_mask')
+        if label_mask is None:
+            return criterion(predictions_full, targets_full)
+
+        invalid_mask = ~label_mask.bool()
+        padded_predictions = predictions_full.masked_fill(invalid_mask, -1e9)
+        return criterion(padded_predictions, targets_full)
     
     def _compute_metrics_threshold(self, predictions: torch.Tensor, 
                                  targets: torch.Tensor,

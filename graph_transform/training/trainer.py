@@ -107,7 +107,10 @@ class Trainer:
         # 重置指标
         self.metrics_calculator.reset()
         
-        total_loss = 0.0
+        total_weighted_loss = 0.0
+        total_valid_bonds = 0
+        total_dbond_style_loss = 0.0
+        total_samples = 0
         num_batches = 0
         total_fetch_wait_time = 0.0
         total_move_time = 0.0
@@ -136,7 +139,7 @@ class Trainer:
             
             # 前向传播
             forward_start = time.perf_counter()
-            loss = self._forward_pass(batch_data)
+            loss, loss_stats = self._forward_pass(batch_data)
             self._maybe_sync_device()
             forward_time = time.perf_counter() - forward_start
             
@@ -149,7 +152,12 @@ class Trainer:
             last_batch_end = time.perf_counter()
             
             # 更新指标
-            total_loss += loss.item()
+            valid_bond_count = loss_stats['valid_bond_count']
+            sample_count = loss_stats['sample_count']
+            total_weighted_loss += loss.item() * valid_bond_count
+            total_valid_bonds += valid_bond_count
+            total_dbond_style_loss += loss_stats['dbond_style_loss'] * sample_count
+            total_samples += sample_count
             num_batches += 1
             total_move_time += move_time
             total_forward_time += forward_time
@@ -159,9 +167,10 @@ class Trainer:
             max_grad_norm = max(max_grad_norm, self.last_grad_norm)
             
             # 更新进度条
+            avg_loss = total_weighted_loss / total_valid_bonds if total_valid_bonds > 0 else 0.0
             pbar.set_postfix({
                 'Loss': f'{loss.item():.4f}',
-                'Avg Loss': f'{total_loss / num_batches:.4f}',
+                'Avg Loss': f'{avg_loss:.4f}',
                 'Batch s': f'{batch_time:.3f}'
             })
             
@@ -218,11 +227,12 @@ class Trainer:
             del batch_data
         
         # 计算平均损失
-        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+        avg_loss = total_weighted_loss / total_valid_bonds if total_valid_bonds > 0 else 0.0
         
         # 计算指标
         metrics = self.metrics_calculator.compute()
         metrics['loss'] = avg_loss
+        metrics['dbond_style_loss'] = total_dbond_style_loss / total_samples if total_samples > 0 else 0.0
         if num_batches > 0:
             metrics['avg_fetch_wait_time'] = total_fetch_wait_time / num_batches
             metrics['avg_move_time'] = total_move_time / num_batches
@@ -375,7 +385,7 @@ class Trainer:
         
         return metrics
     
-    def _forward_pass(self, batch_data: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def _forward_pass(self, batch_data: Dict[str, torch.Tensor]) -> tuple[torch.Tensor, Dict[str, float]]:
         """前向传播"""
         if self.use_amp:
             with torch.amp.autocast(self.amp_device_type, enabled=True):
@@ -392,6 +402,9 @@ class Trainer:
             loss = self.criterion(predictions, targets)
 
         self._ensure_finite_tensor(loss, "loss", batch_data)
+        with torch.no_grad():
+            dbond_style_loss = self._compute_dbond_style_loss(batch_data, predictions_full, targets_full)
+        self._ensure_finite_tensor(dbond_style_loss, "dbond_style_loss", batch_data)
         
         # 更新训练指标
         self.metrics_calculator.update(
@@ -400,7 +413,11 @@ class Trainer:
             label_mask=batch_data.get('label_mask'),
         )
         
-        return loss
+        return loss, {
+            'valid_bond_count': int(targets.numel()),
+            'sample_count': int(targets_full.shape[0]),
+            'dbond_style_loss': float(dbond_style_loss.item()),
+        }
     
     def _backward_pass(self, loss: torch.Tensor):
         """反向传播"""
@@ -463,6 +480,19 @@ class Trainer:
             masked_targets = masked_targets.unsqueeze(1)
 
         return masked_targets, masked_preds
+
+    def _compute_dbond_style_loss(self,
+                                  batch_data: Dict[str, Any],
+                                  predictions_full: torch.Tensor,
+                                  targets_full: torch.Tensor) -> torch.Tensor:
+        """按 dbond_m 风格在固定宽度标签上计算 loss，仅用于报表对比。"""
+        label_mask = batch_data.get('label_mask')
+        if label_mask is None:
+            return self.criterion(predictions_full, targets_full)
+
+        invalid_mask = ~label_mask.bool()
+        padded_predictions = predictions_full.masked_fill(invalid_mask, -1e9)
+        return self.criterion(padded_predictions, targets_full)
 
     def _extract_batch_stats(self, batch_data: Dict[str, Any]) -> Dict[str, Any]:
         """提取当前 batch 的基础统计，方便排查数据和吞吐问题。"""
