@@ -13,7 +13,15 @@ import re
 
 def _get_config_value(config: Any, key: str, default: Any) -> Any:
     if isinstance(config, dict):
-        return config.get(key, default)
+        if key in config:
+            return config.get(key, default)
+        data_config = config.get('data', {})
+        if isinstance(data_config, dict) and key in data_config:
+            return data_config[key]
+        model_config = config.get('model', {})
+        if isinstance(model_config, dict) and key in model_config:
+            return model_config[key]
+        return default
     if hasattr(config, "get"):
         return config.get(key, default)
     if hasattr(config, key):
@@ -28,6 +36,7 @@ class SequenceAugmentation:
         self.config = config
         self.augmentation_prob = _get_config_value(config, 'augmentation_prob', 0.3)
         self.max_trials = _get_config_value(config, 'max_augmentation_trials', 3)
+        self.env_feature_name = _get_config_value(config, 'env_feature_name', 'rt')
         
         # 氨基酸替代矩阵
         self.amino_acid_groups = {
@@ -133,7 +142,7 @@ class SequenceAugmentation:
         augmented_features = sample_features.copy()
         
         # 对数值特征添加噪声
-        noise_features = ['charge', 'pep_mass', 'intensity', 'nce', 'rt']
+        noise_features = ['charge', 'pep_mass', 'intensity', 'nce', self.env_feature_name]
         
         for feature in noise_features:
             if feature in augmented_features:

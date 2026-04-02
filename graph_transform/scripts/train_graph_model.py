@@ -33,7 +33,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import GraphTransformer
 from torch.nn.parameter import UninitializedParameter
-from models.utils import ModelConfig, CheckpointManager, LearningRateScheduler
+from models.utils import build_model_config, CheckpointManager, LearningRateScheduler
 from data import GraphDataset, GraphDataLoader, CachedGraphDataset
 from training import Trainer, BinaryBondLoss
 from evaluation import Evaluator
@@ -379,7 +379,7 @@ def load_config(config_path: str, args: argparse.Namespace) -> Dict[str, Any]:
 
 def create_model(config: Dict[str, Any], device: torch.device) -> nn.Module:
     """创建模型"""
-    model_config = ModelConfig(config['model'])
+    model_config = build_model_config(config)
     
     model = GraphTransformer(model_config)
     model = model.to(device)
@@ -396,7 +396,7 @@ def create_model(config: Dict[str, Any], device: torch.device) -> nn.Module:
 def create_datasets(config: Dict[str, Any]) -> tuple:
     """创建数据集"""
     data_config = config['data']
-    model_config = ModelConfig(config['model'])
+    model_config = build_model_config(config)
 
     dataset_cls = CachedGraphDataset if data_config.get('cache_graphs', False) else GraphDataset
     

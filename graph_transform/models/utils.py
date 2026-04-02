@@ -44,6 +44,8 @@ class ModelConfig:
         self.num_physicochemical_features = 4
         self.num_state_features = 3
         self.num_env_features = 2
+        self.env_feature_name = 'rt'
+        self.env_feature_scale = 0.01
         
         # 边配置
         self.edge_types = ['sequence', 'distance', 'functional', 'long_range', 'global']
@@ -86,6 +88,24 @@ class ModelConfig:
                 if not callable(value):
                     config_dict[attr] = value
         return config_dict
+
+
+def build_model_config(config_dict: Dict[str, Any]) -> ModelConfig:
+    """从完整配置中构建模型配置，并合并数据侧环境特征设置。"""
+    if not isinstance(config_dict, dict):
+        raise TypeError(f"config_dict must be a dict, got {type(config_dict)}")
+
+    if 'model' not in config_dict:
+        return ModelConfig(config_dict)
+
+    merged_model_config = dict(config_dict.get('model', {}))
+    data_config = config_dict.get('data', {})
+    if isinstance(data_config, dict):
+        for key in ('env_feature_name', 'env_feature_scale'):
+            if key in data_config:
+                merged_model_config[key] = data_config[key]
+
+    return ModelConfig(merged_model_config)
 
 
 class WeightInitialization:

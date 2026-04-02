@@ -16,7 +16,7 @@ import yaml
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from data.graph_builder import SequenceGraphBuilder
-from models.utils import ModelConfig
+from models.utils import build_model_config
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -45,14 +45,16 @@ def select_sample_row(
 
 def build_graph_for_row(
     row: pd.Series,
-    model_config: ModelConfig,
+    model_config,
     strategy: str
 ) -> Dict[str, Any]:
     sequence = str(row["seq"])
     env_vars = {
         "charge": float(row.get("charge", 0.0)),
         "pep_mass": float(row.get("pep_mass", 0.0)),
+        "intensity": float(row.get("intensity", 0.0)),
         "nce": float(row.get("nce", 0.0)),
+        "scan_num": float(row.get("scan_num", 0.0)),
         "rt": float(row.get("rt", 0.0)),
         "fbr": float(row.get("fbr", 0.0)),
     }
@@ -171,7 +173,7 @@ def main() -> None:
 
     config = load_config(args.config)
     data_config = config["data"]
-    model_config = ModelConfig(config["model"])
+    model_config = build_model_config(config)
 
     csv_path = args.csv or data_config["train_csv_path"]
     max_seq_len = data_config.get("max_seq_len", 100)

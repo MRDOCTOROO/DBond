@@ -19,6 +19,22 @@ from .graph_builder import SequenceGraphBuilder
 from .preprocessing import SequencePreprocessor
 
 
+def _get_config_value(config: Any, key: str, default: Any) -> Any:
+    if isinstance(config, dict):
+        if key in config:
+            return config[key]
+        data_config = config.get('data', {})
+        if isinstance(data_config, dict) and key in data_config:
+            return data_config[key]
+        model_config = config.get('model', {})
+        if isinstance(model_config, dict) and key in model_config:
+            return model_config[key]
+        return default
+    if hasattr(config, key):
+        return getattr(config, key)
+    return default
+
+
 class GraphDataset(Dataset):
     """图数据集类"""
     
@@ -46,6 +62,7 @@ class GraphDataset(Dataset):
         self.graph_strategy = graph_strategy
         self.augmentation = augmentation
         self.split = split
+        self.env_feature_name = _get_config_value(config, 'env_feature_name', 'rt')
         
         # 加载数据
         self.data = self._load_data()
@@ -69,7 +86,7 @@ class GraphDataset(Dataset):
         data = pd.read_csv(self.csv_path)
         
         # 数据验证
-        required_columns = ['seq', 'charge', 'pep_mass', 'intensity', 'nce', 'rt', 'true_multi']
+        required_columns = ['seq', 'charge', 'pep_mass', 'intensity', 'nce', self.env_feature_name, 'true_multi']
         missing_columns = [col for col in required_columns if col not in data.columns]
         if missing_columns:
             raise ValueError(f"Missing required columns: {missing_columns}")
@@ -92,21 +109,16 @@ class GraphDataset(Dataset):
         labels = self._parse_labels(str(row['true_multi']))
         
         # 提取环境变量
-        sample_features = {
-            'charge': float(row['charge']),
-            'pep_mass': float(row['pep_mass']),
-            'intensity': float(row['intensity']),
-            'nce': float(row['nce']),
-            'rt': float(row['rt']),
-        }
+        sample_features, secondary_env_value = self._extract_sample_features(row)
         state_vars = [sample_features['charge'], sample_features['pep_mass'], sample_features['intensity']]
-        env_vars = [sample_features['nce'], sample_features['rt']]
+        env_vars = [sample_features['nce'], secondary_env_value]
         
         # 数据增强
         if self.augmentor is not None:
             sequence, labels, sample_features = self.augmentor.augment(sequence, labels, sample_features)
             state_vars = [sample_features['charge'], sample_features['pep_mass'], sample_features['intensity']]
-            env_vars = [sample_features['nce'], sample_features['rt']]
+            secondary_env_value = float(sample_features.get(self.env_feature_name, secondary_env_value))
+            env_vars = [sample_features['nce'], secondary_env_value]
         
         # 构建图
         graph_data = self.graph_builder.build_graph(sequence, sample_features, self.graph_strategy)
@@ -126,14 +138,33 @@ class GraphDataset(Dataset):
             'pep_mass': sample_features['pep_mass'],
             'intensity': sample_features['intensity'],
             'nce': sample_features['nce'],
-            'rt': sample_features['rt'],
+            'rt': sample_features.get('rt', secondary_env_value if self.env_feature_name == 'rt' else 0.0),
+            'env_feature_value': secondary_env_value,
             'state_vars': torch.tensor(state_vars, dtype=torch.float32),
             'env_vars': torch.tensor(env_vars, dtype=torch.float32),
             'seq_len': len(sequence),
-            'node_len': len(sequence) + (1 if getattr(self.config, 'use_global_node', False) else 0)
+            'node_len': len(sequence) + (1 if _get_config_value(self.config, 'use_global_node', False) else 0)
         }
+        if 'scan_num' in sample_features:
+            sample['scan_num'] = sample_features['scan_num']
         
         return sample
+
+    def _extract_sample_features(self, row: pd.Series) -> Tuple[Dict[str, float], float]:
+        sample_features = {
+            'charge': float(row['charge']),
+            'pep_mass': float(row['pep_mass']),
+            'intensity': float(row['intensity']),
+            'nce': float(row['nce']),
+        }
+        if 'rt' in row.index and not pd.isna(row['rt']):
+            sample_features['rt'] = float(row['rt'])
+        if 'scan_num' in row.index and not pd.isna(row['scan_num']):
+            sample_features['scan_num'] = float(row['scan_num'])
+
+        secondary_env_value = float(row[self.env_feature_name])
+        sample_features[self.env_feature_name] = secondary_env_value
+        return sample_features, secondary_env_value
     
     def _parse_labels(self, label_str: str) -> List[int]:
         """解析多标签字符串"""
@@ -250,7 +281,8 @@ class GraphDataLoader:
         pep_masses = torch.tensor([item['pep_mass'] for item in batch], dtype=torch.float32)
         intensities = torch.tensor([item['intensity'] for item in batch], dtype=torch.float32)
         nces = torch.tensor([item['nce'] for item in batch], dtype=torch.float32)
-        rts = torch.tensor([item['rt'] for item in batch], dtype=torch.float32)
+        rts = torch.tensor([item.get('rt', item['env_feature_value']) for item in batch], dtype=torch.float32)
+        secondary_envs = torch.tensor([item['env_feature_value'] for item in batch], dtype=torch.float32)
         state_vars = torch.stack([item['state_vars'] for item in batch], dim=0)
         env_vars = torch.stack([item['env_vars'] for item in batch], dim=0)
         seq_lens = torch.tensor([item['seq_len'] for item in batch], dtype=torch.long)
@@ -305,6 +337,7 @@ class GraphDataLoader:
             'intensities': intensities,
             'nces': nces,
             'rts': rts,
+            'secondary_envs': secondary_envs,
             'state_vars': state_vars,
             'env_vars': env_vars,
             'seq_lens': seq_lens,
@@ -406,10 +439,10 @@ class CachedGraphDataset(GraphDataset):
         self.cache_dir = self._resolve_cache_dir(cache_dir)
         self.rebuild_cache = rebuild_cache
         self.cache_full_graphs = cache_full_graphs
-        self.use_long_range_edges = getattr(self.config, 'use_long_range_edges', False)
-        self.long_range_stride = getattr(self.config, 'long_range_stride', 10)
-        self.long_range_hops = getattr(self.config, 'long_range_hops', 1)
-        self.use_global_node = getattr(self.config, 'use_global_node', False)
+        self.use_long_range_edges = _get_config_value(self.config, 'use_long_range_edges', False)
+        self.long_range_stride = _get_config_value(self.config, 'long_range_stride', 10)
+        self.long_range_hops = _get_config_value(self.config, 'long_range_hops', 1)
+        self.use_global_node = _get_config_value(self.config, 'use_global_node', False)
         
         # 创建缓存目录
         os.makedirs(self.cache_dir, exist_ok=True)
@@ -444,8 +477,8 @@ class CachedGraphDataset(GraphDataset):
             "version": 1,
             "graph_strategy": self.graph_strategy,
             "max_seq_len": self.max_seq_len,
-            "max_distance": getattr(self.config, "max_distance", 0),
-            "edge_types": list(getattr(self.config, "edge_types", [])),
+            "max_distance": _get_config_value(self.config, "max_distance", 0),
+            "edge_types": list(_get_config_value(self.config, "edge_types", [])),
             "use_long_range_edges": self.use_long_range_edges,
             "long_range_stride": self.long_range_stride,
             "long_range_hops": self.long_range_hops,
@@ -455,7 +488,7 @@ class CachedGraphDataset(GraphDataset):
     def _cache_suffix(self) -> str:
         parts = [
             f"maxlen{self.max_seq_len}",
-            f"maxdist{getattr(self.config, 'max_distance', 0)}",
+            f"maxdist{_get_config_value(self.config, 'max_distance', 0)}",
         ]
         if self.use_long_range_edges:
             parts.append(f"lr{self.long_range_stride}x{self.long_range_hops}")
@@ -464,7 +497,7 @@ class CachedGraphDataset(GraphDataset):
         return "_".join(parts)
 
     def _populate_edge_cache(self, edge_cache: Dict[Any, Any]):
-        max_distance = getattr(self.config, "max_distance", 0)
+        max_distance = _get_config_value(self.config, "max_distance", 0)
         for seq_len, edge_data in edge_cache.items():
             if isinstance(seq_len, str):
                 seq_len = int(seq_len)
@@ -520,16 +553,18 @@ class CachedGraphDataset(GraphDataset):
     def _load_or_build_cache(self):
         """加载或构建缓存"""
         meta = {
-            "version": 2,
+            "version": 3,
             "csv_path": self.csv_path,
             "graph_strategy": self.graph_strategy,
             "max_seq_len": self.max_seq_len,
-            "max_distance": getattr(self.config, "max_distance", 0),
-            "edge_types": list(getattr(self.config, "edge_types", [])),
+            "max_distance": _get_config_value(self.config, "max_distance", 0),
+            "edge_types": list(_get_config_value(self.config, "edge_types", [])),
             "use_long_range_edges": self.use_long_range_edges,
             "long_range_stride": self.long_range_stride,
             "long_range_hops": self.long_range_hops,
             "use_global_node": self.use_global_node,
+            "env_feature_name": self.env_feature_name,
+            "env_feature_scale": _get_config_value(self.config, 'env_feature_scale', 0.01),
         }
         if os.path.exists(self.cache_file) and not self.rebuild_cache:
             try:
@@ -589,23 +624,20 @@ class CachedGraphDataset(GraphDataset):
                 'pep_mass': float(row['pep_mass']),
                 'intensity': float(row['intensity']),
                 'nce': float(row['nce']),
-                'rt': float(row['rt']),
+                'rt': float(row['rt']) if 'rt' in row.index else 0.0,
+                'env_feature_value': float(row[self.env_feature_name]),
                 'state_vars': cached['state_vars'],
                 'env_vars': cached['env_vars'],
                 'seq_len': cached['seq_len'],
                 'node_len': cached['node_len'],
             }
+            if 'scan_num' in row.index:
+                sample['scan_num'] = float(row['scan_num'])
             return sample
         
         # 无完整图缓存：使用边缓存 + 实时计算 edge_attr
         labels = self._parse_labels(str(row['true_multi']))
-        sample_features = {
-            'charge': float(row['charge']),
-            'pep_mass': float(row['pep_mass']),
-            'intensity': float(row['intensity']),
-            'nce': float(row['nce']),
-            'rt': float(row['rt']),
-        }
+        sample_features, secondary_env_value = self._extract_sample_features(row)
         
         graph_data = self.graph_builder.build_graph(sequence, sample_features, self.graph_strategy)
         label_tensor = self._prepare_labels(labels, len(sequence))
@@ -621,14 +653,17 @@ class CachedGraphDataset(GraphDataset):
             'pep_mass': sample_features['pep_mass'],
             'intensity': sample_features['intensity'],
             'nce': sample_features['nce'],
-            'rt': sample_features['rt'],
+            'rt': sample_features.get('rt', secondary_env_value if self.env_feature_name == 'rt' else 0.0),
+            'env_feature_value': secondary_env_value,
             'state_vars': torch.tensor(
                 [sample_features['charge'], sample_features['pep_mass'], sample_features['intensity']],
                 dtype=torch.float32,
             ),
-            'env_vars': torch.tensor([sample_features['nce'], sample_features['rt']], dtype=torch.float32),
+            'env_vars': torch.tensor([sample_features['nce'], secondary_env_value], dtype=torch.float32),
             'seq_len': len(sequence),
-            'node_len': len(sequence) + (1 if getattr(self.config, 'use_global_node', False) else 0)
+            'node_len': len(sequence) + (1 if _get_config_value(self.config, 'use_global_node', False) else 0)
         }
+        if 'scan_num' in sample_features:
+            sample['scan_num'] = sample_features['scan_num']
         
         return sample

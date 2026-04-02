@@ -10,15 +10,31 @@ from typing import Dict, List, Optional, Any, Tuple
 import re
 
 
+def _get_config_value(config: Any, key: str, default: Any) -> Any:
+    if isinstance(config, dict):
+        if key in config:
+            return config[key]
+        data_config = config.get('data', {})
+        if isinstance(data_config, dict) and key in data_config:
+            return data_config[key]
+        model_config = config.get('model', {})
+        if isinstance(model_config, dict) and key in model_config:
+            return model_config[key]
+        return default
+    if hasattr(config, key):
+        return getattr(config, key)
+    return default
+
+
 class SequencePreprocessor:
     """序列预处理器"""
     
     def __init__(self, config):
         self.config = config
-        self.alphabet = config.alphabet
-        self.max_seq_len = config.max_seq_len
+        self.alphabet = _get_config_value(config, 'alphabet', "ACDEFGHIKLMNPQRSTVWY")
+        self.max_seq_len = _get_config_value(config, 'max_seq_len', 100)
         self.char_to_idx = {char: idx + 1 for idx, char in enumerate(self.alphabet)}
-        self.char_to_idx[self.config.pad_char] = 0
+        self.char_to_idx[_get_config_value(config, 'pad_char', '#')] = 0
         self.idx_to_char = {idx: char for char, idx in self.char_to_idx.items()}
         self._ascii_lookup = np.full(256, -1, dtype=np.int16)
         for char, idx in self.char_to_idx.items():
@@ -108,6 +124,7 @@ class DataPreprocessor:
     def __init__(self, config):
         self.config = config
         self.sequence_preprocessor = SequencePreprocessor(config)
+        self.env_feature_name = _get_config_value(config, 'env_feature_name', 'rt')
     
     def preprocess_sample(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -128,7 +145,7 @@ class DataPreprocessor:
             )
         
         # 标准化数值特征
-        numeric_features = ['charge', 'pep_mass', 'intensity', 'nce', 'rt']
+        numeric_features = ['charge', 'pep_mass', 'intensity', 'nce', self.env_feature_name]
         for feature in numeric_features:
             if feature in processed_sample:
                 processed_sample[feature] = self._normalize_feature(

@@ -274,7 +274,8 @@ class OptimizedGraphDataLoader:
         pep_masses = [item['pep_mass'] for item in batch]
         intensities = [item['intensity'] for item in batch]
         nces = [item['nce'] for item in batch]
-        rts = [item['rt'] for item in batch]
+        rts = [item.get('rt', item.get('env_feature_value', 0.0)) for item in batch]
+        secondary_envs = [item.get('env_feature_value', item.get('rt', 0.0)) for item in batch]
         state_vars = [item['state_vars'] for item in batch]
         env_vars = [item['env_vars'] for item in batch]
         seq_lens = [item['seq_len'] for item in batch]
@@ -343,6 +344,7 @@ class OptimizedGraphDataLoader:
             'intensities': torch.tensor(intensities, dtype=torch.float32),
             'nces': torch.tensor(nces, dtype=torch.float32),
             'rts': torch.tensor(rts, dtype=torch.float32),
+            'secondary_envs': torch.tensor(secondary_envs, dtype=torch.float32),
             'state_vars': torch.stack(state_vars, dim=0),
             'env_vars': torch.stack(env_vars, dim=0),
             'seq_lens': torch.tensor(seq_lens, dtype=torch.long),

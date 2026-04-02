@@ -239,7 +239,7 @@ class BinaryBondMetrics:
 
         valid_probabilities = _sigmoid_if_needed(valid_predictions)
         threshold = self._get_threshold(valid_probabilities, valid_targets)
-        binary_valid_predictions = (valid_probabilities >= threshold).astype(np.int32)
+        binary_valid_predictions = (valid_probabilities > threshold).astype(np.int32)
 
         sample_probabilities = [_sigmoid_if_needed(sample.astype(np.float32)) for sample in self.sample_predictions]
         max_len = max((sample.size for sample in sample_probabilities), default=0)
@@ -250,7 +250,7 @@ class BinaryBondMetrics:
             row_len = prob_row.size
             if row_len == 0:
                 continue
-            pred_matrix[idx, :row_len] = (prob_row >= threshold).astype(np.int32)
+            pred_matrix[idx, :row_len] = (prob_row > threshold).astype(np.int32)
             target_matrix[idx, :row_len] = target_row.astype(np.int32)
 
         metrics = {
@@ -310,7 +310,7 @@ class BinaryBondMetrics:
         best_threshold = self.threshold
         best_f1 = -1.0
         for threshold in thresholds:
-            binary_predictions = (predictions >= threshold).astype(np.int32)
+            binary_predictions = (predictions > threshold).astype(np.int32)
             score = f1_score(targets, binary_predictions, zero_division=0)
             if score > best_f1:
                 best_f1 = score

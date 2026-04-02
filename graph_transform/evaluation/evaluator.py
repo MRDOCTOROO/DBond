@@ -243,7 +243,7 @@ class Evaluator:
                 continue
 
             prob_row = _sigmoid_if_needed(logit_row.astype(np.float32))
-            pred_row = (prob_row >= threshold).astype(np.int32)
+            pred_row = (prob_row > threshold).astype(np.int32)
             pred_strings.append(";".join(map(str, pred_row.tolist())))
             true_strings.append(";".join(map(str, target_row.astype(np.int32).tolist())))
             prob_strings.append(";".join(f"{value:.6f}" for value in prob_row.tolist()))
@@ -297,7 +297,7 @@ class Evaluator:
         results = {}
         
         for threshold in thresholds:
-            binary_predictions = (all_predictions >= threshold).float()
+            binary_predictions = (all_predictions > threshold).float()
             
             # 计算指标
             metrics = self._compute_metrics_threshold(
@@ -346,7 +346,7 @@ class Evaluator:
         # 应用sigmoid和二值化
         all_predictions = torch.sigmoid(all_predictions)
         threshold = self.eval_config.get('threshold', 0.5)
-        binary_predictions = (all_predictions >= threshold).float()
+        binary_predictions = (all_predictions > threshold).float()
         
         # 按类别计算指标
         num_classes = all_targets.shape[1]

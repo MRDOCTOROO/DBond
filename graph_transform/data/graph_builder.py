@@ -12,6 +12,22 @@ from typing import Dict, List, Optional, Tuple, Any
 import math
 
 
+def _get_config_value(config: Any, key: str, default: Any) -> Any:
+    if isinstance(config, dict):
+        if key in config:
+            return config[key]
+        data_config = config.get('data', {})
+        if isinstance(data_config, dict) and key in data_config:
+            return data_config[key]
+        model_config = config.get('model', {})
+        if isinstance(model_config, dict) and key in model_config:
+            return model_config[key]
+        return default
+    if hasattr(config, key):
+        return getattr(config, key)
+    return default
+
+
 class GraphBuilder:
     """基础图构建器"""
     
@@ -23,13 +39,15 @@ class GraphBuilder:
             config: 配置对象
         """
         self.config = config
-        self.alphabet = config.alphabet
-        self.max_distance = getattr(config, 'max_distance', 10)
-        self.edge_types = getattr(config, 'edge_types', ['sequence', 'distance', 'functional'])
-        self.use_long_range_edges = getattr(config, 'use_long_range_edges', False)
-        self.long_range_stride = max(1, int(getattr(config, 'long_range_stride', 10)))
-        self.long_range_hops = max(1, int(getattr(config, 'long_range_hops', 1)))
-        self.use_global_node = getattr(config, 'use_global_node', False)
+        self.alphabet = _get_config_value(config, 'alphabet', "ACDEFGHIKLMNPQRSTVWY")
+        self.max_distance = _get_config_value(config, 'max_distance', 10)
+        self.edge_types = _get_config_value(config, 'edge_types', ['sequence', 'distance', 'functional'])
+        self.use_long_range_edges = _get_config_value(config, 'use_long_range_edges', False)
+        self.long_range_stride = max(1, int(_get_config_value(config, 'long_range_stride', 10)))
+        self.long_range_hops = max(1, int(_get_config_value(config, 'long_range_hops', 1)))
+        self.use_global_node = _get_config_value(config, 'use_global_node', False)
+        self.env_feature_name = _get_config_value(config, 'env_feature_name', 'rt')
+        self.env_feature_scale = float(_get_config_value(config, 'env_feature_scale', 0.01))
         self._distance_min_scale = 0.8
         self._edge_cache = {}
     
@@ -280,7 +298,10 @@ class GraphBuilder:
                 sample_features.get('pep_mass', 0.0) / 2000.0,
                 math.log1p(max(sample_features.get('intensity', 0.0), 0.0)) / 20.0,
                 sample_features.get('nce', 0.0) * 0.01,
-                sample_features.get('rt', 0.0) * 0.01,
+                sample_features.get(
+                    self.env_feature_name,
+                    sample_features.get('rt', 0.0),
+                ) * self.env_feature_scale,
             ],
             dtype=torch.float32,
             device=base_features.device,

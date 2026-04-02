@@ -21,7 +21,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import GraphTransformer
-from models.utils import ModelConfig, CheckpointManager
+from models.utils import build_model_config, CheckpointManager
 from data import GraphDataset, GraphDataLoader, CachedGraphDataset
 from evaluation import Evaluator
 from evaluation.metrics import metric_rows
@@ -168,7 +168,7 @@ def main():
     device = setup_device(config)
     logger.info(f"Using device: {device}")
 
-    model_config = ModelConfig(config["model"])
+    model_config = build_model_config(config)
     model = GraphTransformer(model_config).to(device)
     CheckpointManager.load_checkpoint(args.checkpoint, model=model, device=device)
 

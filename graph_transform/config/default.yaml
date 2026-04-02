@@ -57,7 +57,7 @@ model:
 training:
   # 基础训练参数
   epochs: 60
-  batch_size: 1024
+  batch_size: 256
   learning_rate: 0.0001
   weight_decay: 0.0001
   gradient_clip_norm: 1.0
@@ -91,6 +91,8 @@ data:
   # 数据处理配置
   max_seq_len: 32
   graph_strategy: "distance"  # "sequence", "distance", "hybrid", "knowledge"
+  env_feature_name: "scan_num"  # 可选 "scan_num" / "rt"
+  env_feature_scale: 1.0        # rt 通常用 0.01；scan_num 测试时默认保持原值
   augmentation: false  # 是否使用数据增强
   cache_graphs: true #false 会让每个 epoch 都在构图/读 CSV，true启用缓存
   # cache_full_graphs: 缓存完整图数据（含 edge_attr/labels/state_vars 等）。
