@@ -36,7 +36,14 @@ class SequenceAugmentation:
         self.config = config
         self.augmentation_prob = _get_config_value(config, 'augmentation_prob', 0.3)
         self.max_trials = _get_config_value(config, 'max_augmentation_trials', 3)
-        self.env_feature_name = _get_config_value(config, 'env_feature_name', 'rt')
+        env_feature_names = _get_config_value(config, 'env_feature_names', None)
+        if not env_feature_names:
+            env_feature_names = [_get_config_value(config, 'env_feature_name', 'rt')]
+        elif isinstance(env_feature_names, str):
+            env_feature_names = [env_feature_names]
+        else:
+            env_feature_names = list(env_feature_names)
+        self.env_feature_names = env_feature_names
         
         # 氨基酸替代矩阵
         self.amino_acid_groups = {
@@ -142,7 +149,7 @@ class SequenceAugmentation:
         augmented_features = sample_features.copy()
         
         # 对数值特征添加噪声
-        noise_features = ['charge', 'pep_mass', 'intensity', 'nce', self.env_feature_name]
+        noise_features = ['charge', 'pep_mass', 'intensity', 'nce', *self.env_feature_names]
         
         for feature in noise_features:
             if feature in augmented_features:

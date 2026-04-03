@@ -25,6 +25,22 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _get_config_value(config: Any, key: str, default: Any) -> Any:
+    if isinstance(config, dict):
+        if key in config:
+            return config[key]
+        data_config = config.get('data', {})
+        if isinstance(data_config, dict) and key in data_config:
+            return data_config[key]
+        model_config = config.get('model', {})
+        if isinstance(model_config, dict) and key in model_config:
+            return model_config[key]
+        return default
+    if hasattr(config, key):
+        return getattr(config, key)
+    return default
+
+
 class PreprocessedGraphDataset(Dataset):
     """预处理的图数据集类"""
 
@@ -46,6 +62,14 @@ class PreprocessedGraphDataset(Dataset):
         self.config = config
         self.augmentation = augmentation
         self.split = split
+        env_feature_names = _get_config_value(config, 'env_feature_names', None)
+        if not env_feature_names:
+            env_feature_names = [_get_config_value(config, 'env_feature_name', 'rt')]
+        elif isinstance(env_feature_names, str):
+            env_feature_names = [env_feature_names]
+        else:
+            env_feature_names = list(env_feature_names)
+        self.env_feature_names = env_feature_names
 
         # 验证文件存在
         if not os.path.exists(data_path):
@@ -95,18 +119,18 @@ class PreprocessedGraphDataset(Dataset):
         """验证配置与预处理数据匹配"""
         # 检查图策略
         if 'graph_strategy' in self.metadata:
-            if self.metadata['graph_strategy'] != self.config.get('data', {}).get('graph_strategy', 'distance'):
+            if self.metadata['graph_strategy'] != _get_config_value(self.config, 'graph_strategy', 'distance'):
                 logger.warning(
                     f"图策略不匹配: 预处理数据使用 {self.metadata['graph_strategy']}, "
-                    f"配置使用 {self.config.get('data', {}).get('graph_strategy', 'distance')}"
+                    f"配置使用 {_get_config_value(self.config, 'graph_strategy', 'distance')}"
                 )
 
         # 检查最大序列长度
         if 'max_seq_len' in self.metadata:
-            if self.metadata['max_seq_len'] != self.config['model']['max_seq_len']:
+            if self.metadata['max_seq_len'] != _get_config_value(self.config, 'max_seq_len', 100):
                 logger.warning(
                     f"最大序列长度不匹配: 预处理数据使用 {self.metadata['max_seq_len']}, "
-                    f"配置使用 {self.config['model']['max_seq_len']}"
+                    f"配置使用 {_get_config_value(self.config, 'max_seq_len', 100)}"
                 )
 
     def __len__(self) -> int:
@@ -115,6 +139,29 @@ class PreprocessedGraphDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         """获取单个样本"""
         sample = self.data[idx].copy()  # 避免修改原始数据
+        env_feature_values = sample.get('env_feature_values')
+        if env_feature_values is None:
+            env_feature_values = torch.tensor(
+                [float(sample.get(feature_name, 0.0)) for feature_name in self.env_feature_names],
+                dtype=torch.float32,
+            )
+            sample['env_feature_values'] = env_feature_values
+        elif not torch.is_tensor(env_feature_values):
+            sample['env_feature_values'] = torch.tensor(env_feature_values, dtype=torch.float32)
+
+        if 'state_vars' in sample and not torch.is_tensor(sample['state_vars']):
+            sample['state_vars'] = torch.tensor(sample['state_vars'], dtype=torch.float32)
+        raw_env_vars = sample.get('env_vars')
+        if raw_env_vars is not None and not torch.is_tensor(raw_env_vars):
+            raw_env_vars = torch.tensor(raw_env_vars, dtype=torch.float32)
+            sample['env_vars'] = raw_env_vars
+        if raw_env_vars is None or int(raw_env_vars.numel()) != len(self.env_feature_names) + 1:
+            sample['env_vars'] = torch.tensor(
+                [float(sample.get('nce', 0.0)), *sample['env_feature_values'].tolist()],
+                dtype=torch.float32,
+            )
+        sample.setdefault('rt', float(sample.get('rt', 0.0)))
+        sample.setdefault('scan_num', float(sample.get('scan_num', 0.0)))
 
         # 数据增强（仅训练集）
         if self.augmentor is not None:
@@ -274,9 +321,10 @@ class OptimizedGraphDataLoader:
         pep_masses = [item['pep_mass'] for item in batch]
         intensities = [item['intensity'] for item in batch]
         nces = [item['nce'] for item in batch]
-        rts = [item.get('rt', item.get('env_feature_value', 0.0)) for item in batch]
-        secondary_envs = [item.get('env_feature_value', item.get('rt', 0.0)) for item in batch]
+        rts = [item.get('rt', 0.0) for item in batch]
+        scan_nums = [item.get('scan_num', 0.0) for item in batch]
         state_vars = [item['state_vars'] for item in batch]
+        env_feature_values = [item['env_feature_values'] for item in batch]
         env_vars = [item['env_vars'] for item in batch]
         seq_lens = [item['seq_len'] for item in batch]
         node_lens = [item.get('node_len', item['seq_len']) for item in batch]
@@ -344,7 +392,8 @@ class OptimizedGraphDataLoader:
             'intensities': torch.tensor(intensities, dtype=torch.float32),
             'nces': torch.tensor(nces, dtype=torch.float32),
             'rts': torch.tensor(rts, dtype=torch.float32),
-            'secondary_envs': torch.tensor(secondary_envs, dtype=torch.float32),
+            'scan_nums': torch.tensor(scan_nums, dtype=torch.float32),
+            'env_feature_values': torch.stack(env_feature_values, dim=0),
             'state_vars': torch.stack(state_vars, dim=0),
             'env_vars': torch.stack(env_vars, dim=0),
             'seq_lens': torch.tensor(seq_lens, dtype=torch.long),

@@ -60,6 +60,8 @@ class NodeEncoder(nn.Module):
             config.num_physicochemical_features,
             self.physicochemical_dim
         )
+        self.env_feature_names = list(getattr(config, 'env_feature_names', [getattr(config, 'env_feature_name', 'rt')]))
+        self.env_feature_scales = dict(getattr(config, 'env_feature_scales', {'nce': 0.01, self.env_feature_names[0]: getattr(config, 'env_feature_scale', 0.01)}))
         self.env_feature_name = getattr(config, 'env_feature_name', 'rt')
         self.env_feature_scale = float(getattr(config, 'env_feature_scale', 0.01))
         
@@ -215,12 +217,24 @@ class NodeEncoder(nn.Module):
         if 'env_vars' in batch_data:
             env_vars = batch_data['env_vars'].to(device=device, dtype=torch.float32)
         else:
-            secondary_envs = batch_data.get('secondary_envs', batch_data['rts'])
-            env_vars = torch.stack([batch_data['nces'], secondary_envs], dim=1).to(device=device, dtype=torch.float32)
+            env_columns = [batch_data['nces']]
+            for feature_name in self.env_feature_names:
+                feature_key = f'{feature_name}s'
+                if feature_key in batch_data:
+                    env_columns.append(batch_data[feature_key])
+                elif feature_name == 'rt' and 'rts' in batch_data:
+                    env_columns.append(batch_data['rts'])
+                elif feature_name == 'scan_num' and 'scan_nums' in batch_data:
+                    env_columns.append(batch_data['scan_nums'])
+                else:
+                    raise KeyError(f"Missing batch data for environment feature: {feature_name}")
+            env_vars = torch.stack(env_columns, dim=1).to(device=device, dtype=torch.float32)
 
-        nce = env_vars[:, 0] * 0.01
-        secondary_env = env_vars[:, 1] * self.env_feature_scale
-        normalized = torch.stack([nce, secondary_env], dim=1)
+        normalized_features = [env_vars[:, 0] * float(self.env_feature_scales.get('nce', 0.01))]
+        for feature_idx, feature_name in enumerate(self.env_feature_names, start=1):
+            scale = float(self.env_feature_scales.get(feature_name, 1.0))
+            normalized_features.append(env_vars[:, feature_idx] * scale)
+        normalized = torch.stack(normalized_features, dim=1)
         return torch.nan_to_num(normalized, nan=0.0, posinf=10.0, neginf=-10.0)
 
     def _get_batch_device(self, batch_data: Dict) -> torch.device:
