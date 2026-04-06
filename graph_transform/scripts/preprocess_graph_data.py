@@ -65,13 +65,7 @@ class GraphDataPreprocessor:
         # 加载配置
         self.config = self._load_config()
         self.max_seq_len = self.config['model']['max_seq_len']
-        self.env_feature_names = self.config.get('data', {}).get('env_feature_names')
-        if not self.env_feature_names:
-            self.env_feature_names = [self.config.get('data', {}).get('env_feature_name', 'rt')]
-        elif isinstance(self.env_feature_names, str):
-            self.env_feature_names = [self.env_feature_names]
-        else:
-            self.env_feature_names = list(self.env_feature_names)
+        self.env_feature_name = self.config.get('data', {}).get('env_feature_name', 'rt')
 
         # 初始化组件
         self.graph_builder = SequenceGraphBuilder(self.config)
@@ -124,13 +118,10 @@ class GraphDataPreprocessor:
                 sample_features['rt'] = float(row['rt'])
             if 'scan_num' in row.index and not pd.isna(row['scan_num']):
                 sample_features['scan_num'] = float(row['scan_num'])
-            env_feature_values = []
-            for feature_name in self.env_feature_names:
-                feature_value = float(row[feature_name])
-                sample_features[feature_name] = feature_value
-                env_feature_values.append(feature_value)
+            secondary_env_value = float(row[self.env_feature_name])
+            sample_features[self.env_feature_name] = secondary_env_value
             state_vars = [sample_features['charge'], sample_features['pep_mass'], sample_features['intensity']]
-            env_vars = [sample_features['nce'], *env_feature_values]
+            env_vars = [sample_features['nce'], secondary_env_value]
 
             # 构建图
             graph_data = self.graph_builder.build_graph(sequence, sample_features, self.graph_strategy)
@@ -151,9 +142,8 @@ class GraphDataPreprocessor:
                 'pep_mass': sample_features['pep_mass'],
                 'intensity': sample_features['intensity'],
                 'nce': sample_features['nce'],
-                'rt': sample_features.get('rt', 0.0),
-                'scan_num': sample_features.get('scan_num', 0.0),
-                'env_feature_values': torch.tensor(env_feature_values, dtype=torch.float32),
+                'rt': sample_features.get('rt', secondary_env_value if self.env_feature_name == 'rt' else 0.0),
+                'env_feature_value': secondary_env_value,
                 'state_vars': torch.tensor(state_vars, dtype=torch.float32),
                 'env_vars': torch.tensor(env_vars, dtype=torch.float32),
                 'seq_len': len(sequence),
@@ -210,7 +200,7 @@ class GraphDataPreprocessor:
         logger.info(f"加载数据集: {len(data)} 条样本")
 
         # 验证必需列
-        required_columns = ['seq', 'charge', 'pep_mass', 'intensity', 'nce', *self.env_feature_names, 'true_multi']
+        required_columns = ['seq', 'charge', 'pep_mass', 'intensity', 'nce', self.env_feature_name, 'true_multi']
         missing_columns = [col for col in required_columns if col not in data.columns]
         if missing_columns:
             raise ValueError(f"CSV文件缺少必需列: {missing_columns}")
@@ -282,7 +272,7 @@ class GraphDataPreprocessor:
                 'config_path': str(self.config_path),
                 'graph_strategy': self.graph_strategy,
                 'max_seq_len': self.max_seq_len,
-                'env_feature_names': self.env_feature_names,
+                'env_feature_name': self.env_feature_name,
                 'preprocess_time': datetime.now().isoformat(),
                 'split_name': split_name
             },

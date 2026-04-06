@@ -38,6 +38,8 @@ class GraphAttentionLayer(nn.Module):
         # 每个头的线性变换
         self.W = nn.Parameter(torch.Tensor(self.num_heads, self.input_dim, self.head_dim))
         self.a = nn.Parameter(torch.Tensor(self.num_heads, 2 * self.head_dim, 1))
+        self.edge_attention_bias = nn.Linear(self.input_dim, self.num_heads)
+        self.edge_message_gate = nn.Linear(self.input_dim, self.num_heads * self.head_dim)
         
         # 残差连接的投影层
         if self.input_dim != self.output_dim:
@@ -58,6 +60,10 @@ class GraphAttentionLayer(nn.Module):
         """初始化参数"""
         nn.init.xavier_uniform_(self.W)
         nn.init.xavier_uniform_(self.a)
+        nn.init.xavier_uniform_(self.edge_attention_bias.weight)
+        nn.init.zeros_(self.edge_attention_bias.bias)
+        nn.init.xavier_uniform_(self.edge_message_gate.weight)
+        nn.init.zeros_(self.edge_message_gate.bias)
     
     def forward(self, x: torch.Tensor, 
                 edge_index: torch.Tensor,
@@ -91,14 +97,32 @@ class GraphAttentionLayer(nn.Module):
             _maybe_sync(x.device, True)
             project_end = time.perf_counter()
         
+        edge_bias, edge_gate = self._compute_edge_modulation(
+            edge_attr,
+            src_heads.dtype,
+            src_heads.device,
+        )
+
         # 计算注意力权重
-        attention_weights = self._compute_attention(src_heads, dst_heads, col, edge_attr, num_nodes)
+        attention_weights = self._compute_attention(
+            src_heads,
+            dst_heads,
+            col,
+            edge_bias,
+            num_nodes,
+        )
         if timing_enabled:
             _maybe_sync(x.device, True)
             attention_end = time.perf_counter()
         
         # 应用注意力权重更新节点特征
-        output_heads = self._propagate_with_attention(src_heads, col, attention_weights, num_nodes)
+        output_heads = self._propagate_with_attention(
+            src_heads,
+            col,
+            attention_weights,
+            num_nodes,
+            edge_gate=edge_gate,
+        )
         if timing_enabled:
             _maybe_sync(x.device, True)
             propagate_end = time.perf_counter()
@@ -141,7 +165,7 @@ class GraphAttentionLayer(nn.Module):
                            src_heads: torch.Tensor,
                            dst_heads: torch.Tensor,
                            target_index: torch.Tensor,
-                           edge_attr: Optional[torch.Tensor],
+                           edge_bias: Optional[torch.Tensor],
                            num_nodes: int) -> torch.Tensor:
         """计算注意力权重"""
         if src_heads.numel() == 0:
@@ -157,11 +181,8 @@ class GraphAttentionLayer(nn.Module):
         e = (src_heads_compute * a_src.unsqueeze(0)).sum(dim=-1)
         e = e + (dst_heads_compute * a_dst.unsqueeze(0)).sum(dim=-1)
         
-        # 如果有边特征，加上边特征的贡献
-        if edge_attr is not None:
-            edge_attr = edge_attr.to(compute_dtype).unsqueeze(1).expand(-1, self.num_heads, -1)
-            edge_scores = torch.sum(edge_attr, dim=-1)
-            e = e + edge_scores
+        if edge_bias is not None:
+            e = e + edge_bias.to(compute_dtype)
         
         # 应用LeakyReLU
         e = F.leaky_relu(e, negative_slope=self.alpha)
@@ -170,6 +191,24 @@ class GraphAttentionLayer(nn.Module):
         attention_weights = self._softmax_attention(e, target_index, num_nodes).to(dtype=src_heads.dtype)
         
         return attention_weights
+
+    def _compute_edge_modulation(self,
+                                 edge_attr: Optional[torch.Tensor],
+                                 dtype: torch.dtype,
+                                 device: torch.device) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """将边特征映射到每个注意力头的 bias 和 message gate。"""
+        if edge_attr is None:
+            return None, None
+
+        edge_attr = edge_attr.to(device=device)
+        compute_dtype = torch.float32 if dtype in (torch.float16, torch.bfloat16) else dtype
+        edge_attr_compute = edge_attr.to(compute_dtype)
+
+        edge_bias = self.edge_attention_bias(edge_attr_compute)
+        edge_gate = torch.sigmoid(
+            self.edge_message_gate(edge_attr_compute).view(-1, self.num_heads, self.head_dim)
+        )
+        return edge_bias, edge_gate
     
     def _softmax_attention(self, e: torch.Tensor, 
                            target_index: torch.Tensor,
@@ -201,8 +240,12 @@ class GraphAttentionLayer(nn.Module):
                                   src_heads: torch.Tensor,
                                   target_index: torch.Tensor,
                                   attention_weights: torch.Tensor,
-                                  num_nodes: int) -> torch.Tensor:
+                                  num_nodes: int,
+                                  edge_gate: Optional[torch.Tensor] = None) -> torch.Tensor:
         """使用注意力权重传播消息"""
+        if edge_gate is not None:
+            src_heads = src_heads * edge_gate.to(dtype=src_heads.dtype)
+
         # 加权的源节点特征
         weighted_features = src_heads * attention_weights.unsqueeze(-1)
         
@@ -227,7 +270,7 @@ class GraphAttentionLayer(nn.Module):
                 x_heads[row],
                 x_heads[col],
                 col,
-                edge_attr,
+                self._compute_edge_modulation(edge_attr, x_heads.dtype, x_heads.device)[0],
                 x_heads.size(0),
             )
             

@@ -124,14 +124,7 @@ class DataPreprocessor:
     def __init__(self, config):
         self.config = config
         self.sequence_preprocessor = SequencePreprocessor(config)
-        env_feature_names = _get_config_value(config, 'env_feature_names', None)
-        if not env_feature_names:
-            env_feature_names = [_get_config_value(config, 'env_feature_name', 'rt')]
-        elif isinstance(env_feature_names, str):
-            env_feature_names = [env_feature_names]
-        else:
-            env_feature_names = list(env_feature_names)
-        self.env_feature_names = env_feature_names
+        self.env_feature_name = _get_config_value(config, 'env_feature_name', 'rt')
     
     def preprocess_sample(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -152,7 +145,7 @@ class DataPreprocessor:
             )
         
         # 标准化数值特征
-        numeric_features = ['charge', 'pep_mass', 'intensity', 'nce', *self.env_feature_names]
+        numeric_features = ['charge', 'pep_mass', 'intensity', 'nce', self.env_feature_name]
         for feature in numeric_features:
             if feature in processed_sample:
                 processed_sample[feature] = self._normalize_feature(

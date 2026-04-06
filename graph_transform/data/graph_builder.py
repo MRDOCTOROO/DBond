@@ -46,22 +46,8 @@ class GraphBuilder:
         self.long_range_stride = max(1, int(_get_config_value(config, 'long_range_stride', 10)))
         self.long_range_hops = max(1, int(_get_config_value(config, 'long_range_hops', 1)))
         self.use_global_node = _get_config_value(config, 'use_global_node', False)
-        env_feature_names = _get_config_value(config, 'env_feature_names', None)
-        if not env_feature_names:
-            env_feature_names = [_get_config_value(config, 'env_feature_name', 'rt')]
-        elif isinstance(env_feature_names, str):
-            env_feature_names = [env_feature_names]
-        else:
-            env_feature_names = list(env_feature_names)
-        env_feature_scales = _get_config_value(config, 'env_feature_scales', None)
-        if env_feature_scales is None:
-            env_feature_scales = {}
-        else:
-            env_feature_scales = dict(env_feature_scales)
         self.env_feature_name = _get_config_value(config, 'env_feature_name', 'rt')
         self.env_feature_scale = float(_get_config_value(config, 'env_feature_scale', 0.01))
-        self.env_feature_names = env_feature_names
-        self.env_feature_scales = env_feature_scales
         self._distance_min_scale = 0.8
         self._edge_cache = {}
     
@@ -299,30 +285,24 @@ class GraphBuilder:
                            sample_features: Dict[str, float]) -> torch.Tensor:
         """创建边特征"""
         if edge_types.numel() == 0:
-            return torch.empty((0, 7 + len(self.env_feature_names)), dtype=torch.float32)
+            return torch.empty((0, 8), dtype=torch.float32)
 
         edge_types_f = edge_types.to(dtype=torch.float32)
         edge_distances_f = edge_distances.to(dtype=torch.float32)
         inv_distance = 1.0 / (1.0 + edge_distances_f)
 
         base_features = torch.stack([edge_types_f, edge_distances_f, inv_distance], dim=1)
-        env_feature_values = [
-            sample_features.get('charge', 0.0) * 0.1,
-            sample_features.get('pep_mass', 0.0) / 2000.0,
-            math.log1p(max(sample_features.get('intensity', 0.0), 0.0)) / 20.0,
-            sample_features.get('nce', 0.0) * float(self.env_feature_scales.get('nce', 0.01)),
-        ]
-        for feature_name in self.env_feature_names:
-            env_feature_values.append(
-                sample_features.get(feature_name, 0.0) * float(
-                    self.env_feature_scales.get(
-                        feature_name,
-                        self.env_feature_scale if feature_name == self.env_feature_name else 1.0,
-                    )
-                )
-            )
         env_features = torch.tensor(
-            env_feature_values,
+            [
+                sample_features.get('charge', 0.0) * 0.1,
+                sample_features.get('pep_mass', 0.0) / 2000.0,
+                math.log1p(max(sample_features.get('intensity', 0.0), 0.0)) / 20.0,
+                sample_features.get('nce', 0.0) * 0.01,
+                sample_features.get(
+                    self.env_feature_name,
+                    sample_features.get('rt', 0.0),
+                ) * self.env_feature_scale,
+            ],
             dtype=torch.float32,
             device=base_features.device,
         ).unsqueeze(0).expand(base_features.size(0), -1)

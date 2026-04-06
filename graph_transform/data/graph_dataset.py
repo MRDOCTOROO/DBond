@@ -62,21 +62,7 @@ class GraphDataset(Dataset):
         self.graph_strategy = graph_strategy
         self.augmentation = augmentation
         self.split = split
-        env_feature_names = _get_config_value(config, 'env_feature_names', None)
-        if not env_feature_names:
-            env_feature_names = [_get_config_value(config, 'env_feature_name', 'rt')]
-        elif isinstance(env_feature_names, str):
-            env_feature_names = [env_feature_names]
-        else:
-            env_feature_names = list(env_feature_names)
-        env_feature_scales = _get_config_value(config, 'env_feature_scales', None)
-        if env_feature_scales is None:
-            env_feature_scales = {}
-        else:
-            env_feature_scales = dict(env_feature_scales)
-        self.env_feature_names = env_feature_names
-        self.env_feature_name = env_feature_names[0]
-        self.env_feature_scales = env_feature_scales
+        self.env_feature_name = _get_config_value(config, 'env_feature_name', 'rt')
         
         # 加载数据
         self.data = self._load_data()
@@ -100,7 +86,7 @@ class GraphDataset(Dataset):
         data = pd.read_csv(self.csv_path)
         
         # 数据验证
-        required_columns = ['seq', 'charge', 'pep_mass', 'intensity', 'nce', *self.env_feature_names, 'true_multi']
+        required_columns = ['seq', 'charge', 'pep_mass', 'intensity', 'nce', self.env_feature_name, 'true_multi']
         missing_columns = [col for col in required_columns if col not in data.columns]
         if missing_columns:
             raise ValueError(f"Missing required columns: {missing_columns}")
@@ -123,16 +109,16 @@ class GraphDataset(Dataset):
         labels = self._parse_labels(str(row['true_multi']))
         
         # 提取环境变量
-        sample_features, env_feature_values = self._extract_sample_features(row)
+        sample_features, secondary_env_value = self._extract_sample_features(row)
         state_vars = [sample_features['charge'], sample_features['pep_mass'], sample_features['intensity']]
-        env_vars = [sample_features['nce'], *env_feature_values]
+        env_vars = [sample_features['nce'], secondary_env_value]
         
         # 数据增强
         if self.augmentor is not None:
             sequence, labels, sample_features = self.augmentor.augment(sequence, labels, sample_features)
             state_vars = [sample_features['charge'], sample_features['pep_mass'], sample_features['intensity']]
-            env_feature_values = [float(sample_features.get(feature_name, feature_value)) for feature_name, feature_value in zip(self.env_feature_names, env_feature_values)]
-            env_vars = [sample_features['nce'], *env_feature_values]
+            secondary_env_value = float(sample_features.get(self.env_feature_name, secondary_env_value))
+            env_vars = [sample_features['nce'], secondary_env_value]
         
         # 构建图
         graph_data = self.graph_builder.build_graph(sequence, sample_features, self.graph_strategy)
@@ -152,18 +138,19 @@ class GraphDataset(Dataset):
             'pep_mass': sample_features['pep_mass'],
             'intensity': sample_features['intensity'],
             'nce': sample_features['nce'],
-            'rt': sample_features.get('rt', 0.0),
-            'scan_num': sample_features.get('scan_num', 0.0),
-            'env_feature_values': torch.tensor(env_feature_values, dtype=torch.float32),
+            'rt': sample_features.get('rt', secondary_env_value if self.env_feature_name == 'rt' else 0.0),
+            'env_feature_value': secondary_env_value,
             'state_vars': torch.tensor(state_vars, dtype=torch.float32),
             'env_vars': torch.tensor(env_vars, dtype=torch.float32),
             'seq_len': len(sequence),
             'node_len': len(sequence) + (1 if _get_config_value(self.config, 'use_global_node', False) else 0)
         }
+        if 'scan_num' in sample_features:
+            sample['scan_num'] = sample_features['scan_num']
         
         return sample
 
-    def _extract_sample_features(self, row: pd.Series) -> Tuple[Dict[str, float], List[float]]:
+    def _extract_sample_features(self, row: pd.Series) -> Tuple[Dict[str, float], float]:
         sample_features = {
             'charge': float(row['charge']),
             'pep_mass': float(row['pep_mass']),
@@ -175,12 +162,9 @@ class GraphDataset(Dataset):
         if 'scan_num' in row.index and not pd.isna(row['scan_num']):
             sample_features['scan_num'] = float(row['scan_num'])
 
-        env_feature_values = []
-        for feature_name in self.env_feature_names:
-            feature_value = float(row[feature_name])
-            sample_features[feature_name] = feature_value
-            env_feature_values.append(feature_value)
-        return sample_features, env_feature_values
+        secondary_env_value = float(row[self.env_feature_name])
+        sample_features[self.env_feature_name] = secondary_env_value
+        return sample_features, secondary_env_value
     
     def _parse_labels(self, label_str: str) -> List[int]:
         """解析多标签字符串"""
@@ -297,10 +281,9 @@ class GraphDataLoader:
         pep_masses = torch.tensor([item['pep_mass'] for item in batch], dtype=torch.float32)
         intensities = torch.tensor([item['intensity'] for item in batch], dtype=torch.float32)
         nces = torch.tensor([item['nce'] for item in batch], dtype=torch.float32)
-        rts = torch.tensor([item.get('rt', 0.0) for item in batch], dtype=torch.float32)
-        scan_nums = torch.tensor([item.get('scan_num', 0.0) for item in batch], dtype=torch.float32)
+        rts = torch.tensor([item.get('rt', item['env_feature_value']) for item in batch], dtype=torch.float32)
+        secondary_envs = torch.tensor([item['env_feature_value'] for item in batch], dtype=torch.float32)
         state_vars = torch.stack([item['state_vars'] for item in batch], dim=0)
-        env_feature_values = torch.stack([item['env_feature_values'] for item in batch], dim=0)
         env_vars = torch.stack([item['env_vars'] for item in batch], dim=0)
         seq_lens = torch.tensor([item['seq_len'] for item in batch], dtype=torch.long)
         node_lens = torch.tensor([item.get('node_len', item['seq_len']) for item in batch], dtype=torch.long)
@@ -354,8 +337,7 @@ class GraphDataLoader:
             'intensities': intensities,
             'nces': nces,
             'rts': rts,
-            'scan_nums': scan_nums,
-            'env_feature_values': env_feature_values,
+            'secondary_envs': secondary_envs,
             'state_vars': state_vars,
             'env_vars': env_vars,
             'seq_lens': seq_lens,
@@ -571,7 +553,7 @@ class CachedGraphDataset(GraphDataset):
     def _load_or_build_cache(self):
         """加载或构建缓存"""
         meta = {
-            "version": 4,
+            "version": 3,
             "csv_path": self.csv_path,
             "graph_strategy": self.graph_strategy,
             "max_seq_len": self.max_seq_len,
@@ -581,8 +563,8 @@ class CachedGraphDataset(GraphDataset):
             "long_range_stride": self.long_range_stride,
             "long_range_hops": self.long_range_hops,
             "use_global_node": self.use_global_node,
-            "env_feature_names": self.env_feature_names,
-            "env_feature_scales": self.env_feature_scales,
+            "env_feature_name": self.env_feature_name,
+            "env_feature_scale": _get_config_value(self.config, 'env_feature_scale', 0.01),
         }
         if os.path.exists(self.cache_file) and not self.rebuild_cache:
             try:
@@ -643,18 +625,19 @@ class CachedGraphDataset(GraphDataset):
                 'intensity': float(row['intensity']),
                 'nce': float(row['nce']),
                 'rt': float(row['rt']) if 'rt' in row.index else 0.0,
-                'scan_num': float(row['scan_num']) if 'scan_num' in row.index else 0.0,
-                'env_feature_values': torch.tensor([float(row[feature_name]) for feature_name in self.env_feature_names], dtype=torch.float32),
+                'env_feature_value': float(row[self.env_feature_name]),
                 'state_vars': cached['state_vars'],
                 'env_vars': cached['env_vars'],
                 'seq_len': cached['seq_len'],
                 'node_len': cached['node_len'],
             }
+            if 'scan_num' in row.index:
+                sample['scan_num'] = float(row['scan_num'])
             return sample
         
         # 无完整图缓存：使用边缓存 + 实时计算 edge_attr
         labels = self._parse_labels(str(row['true_multi']))
-        sample_features, env_feature_values = self._extract_sample_features(row)
+        sample_features, secondary_env_value = self._extract_sample_features(row)
         
         graph_data = self.graph_builder.build_graph(sequence, sample_features, self.graph_strategy)
         label_tensor = self._prepare_labels(labels, len(sequence))
@@ -670,16 +653,17 @@ class CachedGraphDataset(GraphDataset):
             'pep_mass': sample_features['pep_mass'],
             'intensity': sample_features['intensity'],
             'nce': sample_features['nce'],
-            'rt': sample_features.get('rt', 0.0),
-            'scan_num': sample_features.get('scan_num', 0.0),
-            'env_feature_values': torch.tensor(env_feature_values, dtype=torch.float32),
+            'rt': sample_features.get('rt', secondary_env_value if self.env_feature_name == 'rt' else 0.0),
+            'env_feature_value': secondary_env_value,
             'state_vars': torch.tensor(
                 [sample_features['charge'], sample_features['pep_mass'], sample_features['intensity']],
                 dtype=torch.float32,
             ),
-            'env_vars': torch.tensor([sample_features['nce'], *env_feature_values], dtype=torch.float32),
+            'env_vars': torch.tensor([sample_features['nce'], secondary_env_value], dtype=torch.float32),
             'seq_len': len(sequence),
             'node_len': len(sequence) + (1 if _get_config_value(self.config, 'use_global_node', False) else 0)
         }
-        
+        if 'scan_num' in sample_features:
+            sample['scan_num'] = sample_features['scan_num']
+
         return sample

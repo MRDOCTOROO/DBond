@@ -44,8 +44,6 @@ class ModelConfig:
         self.num_physicochemical_features = 4
         self.num_state_features = 3
         self.num_env_features = 2
-        self.env_feature_names = ['rt']
-        self.env_feature_scales = {'nce': 0.01, 'rt': 0.01}
         self.env_feature_name = 'rt'
         self.env_feature_scale = 0.01
         
@@ -103,35 +101,9 @@ def build_model_config(config_dict: Dict[str, Any]) -> ModelConfig:
     merged_model_config = dict(config_dict.get('model', {}))
     data_config = config_dict.get('data', {})
     if isinstance(data_config, dict):
-        for key in ('env_feature_name', 'env_feature_scale', 'env_feature_names', 'env_feature_scales'):
+        for key in ('env_feature_name', 'env_feature_scale'):
             if key in data_config:
                 merged_model_config[key] = data_config[key]
-
-    env_feature_names = merged_model_config.get('env_feature_names')
-    env_feature_name = merged_model_config.get('env_feature_name')
-    env_feature_scale = merged_model_config.get('env_feature_scale', 0.01)
-    env_feature_scales = merged_model_config.get('env_feature_scales')
-
-    if not env_feature_names:
-        env_feature_names = [env_feature_name or 'rt']
-    elif isinstance(env_feature_names, str):
-        env_feature_names = [env_feature_names]
-    else:
-        env_feature_names = list(env_feature_names)
-
-    if not env_feature_scales:
-        env_feature_scales = {'nce': 0.01}
-    else:
-        env_feature_scales = dict(env_feature_scales)
-    env_feature_scales.setdefault('nce', 0.01)
-    for feature_name in env_feature_names:
-        env_feature_scales.setdefault(feature_name, env_feature_scale if feature_name == env_feature_name else 1.0)
-
-    merged_model_config['env_feature_names'] = env_feature_names
-    merged_model_config['env_feature_name'] = env_feature_names[0]
-    merged_model_config['env_feature_scales'] = env_feature_scales
-    merged_model_config['env_feature_scale'] = env_feature_scales.get(env_feature_names[0], env_feature_scale)
-    merged_model_config['num_env_features'] = 1 + len(env_feature_names)
 
     return ModelConfig(merged_model_config)
 

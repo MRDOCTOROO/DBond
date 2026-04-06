@@ -60,8 +60,6 @@ class NodeEncoder(nn.Module):
             config.num_physicochemical_features,
             self.physicochemical_dim
         )
-        self.env_feature_names = list(getattr(config, 'env_feature_names', [getattr(config, 'env_feature_name', 'rt')]))
-        self.env_feature_scales = dict(getattr(config, 'env_feature_scales', {'nce': 0.01, self.env_feature_names[0]: getattr(config, 'env_feature_scale', 0.01)}))
         self.env_feature_name = getattr(config, 'env_feature_name', 'rt')
         self.env_feature_scale = float(getattr(config, 'env_feature_scale', 0.01))
         
@@ -217,24 +215,12 @@ class NodeEncoder(nn.Module):
         if 'env_vars' in batch_data:
             env_vars = batch_data['env_vars'].to(device=device, dtype=torch.float32)
         else:
-            env_columns = [batch_data['nces']]
-            for feature_name in self.env_feature_names:
-                feature_key = f'{feature_name}s'
-                if feature_key in batch_data:
-                    env_columns.append(batch_data[feature_key])
-                elif feature_name == 'rt' and 'rts' in batch_data:
-                    env_columns.append(batch_data['rts'])
-                elif feature_name == 'scan_num' and 'scan_nums' in batch_data:
-                    env_columns.append(batch_data['scan_nums'])
-                else:
-                    raise KeyError(f"Missing batch data for environment feature: {feature_name}")
-            env_vars = torch.stack(env_columns, dim=1).to(device=device, dtype=torch.float32)
+            secondary_envs = batch_data.get('secondary_envs', batch_data['rts'])
+            env_vars = torch.stack([batch_data['nces'], secondary_envs], dim=1).to(device=device, dtype=torch.float32)
 
-        normalized_features = [env_vars[:, 0] * float(self.env_feature_scales.get('nce', 0.01))]
-        for feature_idx, feature_name in enumerate(self.env_feature_names, start=1):
-            scale = float(self.env_feature_scales.get(feature_name, 1.0))
-            normalized_features.append(env_vars[:, feature_idx] * scale)
-        normalized = torch.stack(normalized_features, dim=1)
+        nce = env_vars[:, 0] * 0.01
+        secondary_env = env_vars[:, 1] * self.env_feature_scale
+        normalized = torch.stack([nce, secondary_env], dim=1)
         return torch.nan_to_num(normalized, nan=0.0, posinf=10.0, neginf=-10.0)
 
     def _get_batch_device(self, batch_data: Dict) -> torch.device:
@@ -639,7 +625,11 @@ class GraphTransformer(nn.Module):
                 gat_layer.enable_timing = timing_enabled
             layer_start = time.perf_counter() if timing_enabled else None
             residual = node_features
-            node_features = gat_layer(node_features, batch_data['edge_index'])
+            node_features = gat_layer(
+                node_features,
+                batch_data['edge_index'],
+                edge_features,
+            )
             node_features = self.layer_norms[len(self.gcn_layers) + i](node_features + residual)
             node_features = F.dropout(node_features, p=self.config.dropout, training=self.training)
             if timing_enabled:
@@ -716,7 +706,8 @@ class GraphTransformer(nn.Module):
         edge_features = self.edge_encoder(
             batch_data['edge_index'],
             batch_data['edge_types'],
-            batch_data['edge_distances']
+            batch_data['edge_distances'],
+            batch_data.get('edge_attr')
         )
         
         # 重塑节点特征
@@ -726,9 +717,15 @@ class GraphTransformer(nn.Module):
         # 通过注意力层收集权重
         for gat_layer in self.gat_layers:
             weights = gat_layer.get_attention_weights(
-                node_features, batch_data['edge_index']
+                node_features,
+                batch_data['edge_index'],
+                edge_features,
             )
             attention_weights.append(weights)
-            node_features = gat_layer(node_features, batch_data['edge_index'])
+            node_features = gat_layer(
+                node_features,
+                batch_data['edge_index'],
+                edge_features,
+            )
         
         return attention_weights
