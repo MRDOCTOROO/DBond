@@ -10,12 +10,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import UninitializedParameter
 from torch.nn.utils.rnn import pad_sequence
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 import numpy as np
 import time
 
-from .gcn_layers import GraphConvLayer, ResidualGCNLayer
-from .attention_layers import GraphAttentionLayer, GlobalAttentionPool
+from .gcn_layers import ResidualGCNLayer
+from .attention_layers import GraphAttentionLayer
 
 
 def _maybe_sync(device: torch.device, enabled: bool) -> None:
@@ -346,114 +346,6 @@ class EdgeEncoder(nn.Module):
         return edge_features
 
 
-class MultiLabelHead(nn.Module):
-    """保留的通用预测头，当前主路径未使用。"""
-    
-    def __init__(self, config):
-        super(MultiLabelHead, self).__init__()
-        
-        self.hidden_dim = config.hidden_dim
-        self.num_classes = config.num_classes
-        self.dropout = config.dropout
-        
-        # 多层感知机
-        self.mlp = nn.Sequential(
-            nn.Linear(self.hidden_dim, self.hidden_dim * 2),
-            nn.LayerNorm(self.hidden_dim * 2),
-            nn.ReLU(),
-            nn.Dropout(self.dropout),
-            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
-            nn.LayerNorm(self.hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(self.dropout),
-            nn.Linear(self.hidden_dim, self.num_classes)
-        )
-        
-        self._init_weights()
-    
-    def _init_weights(self):
-        """初始化权重"""
-        for module in self.mlp.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
-    
-    def forward(self, node_features: torch.Tensor, 
-                batch_indices: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """
-        前向传播
-        
-        Args:
-            node_features: 节点特征 [num_nodes, hidden_dim] 或 [batch_size, seq_len, hidden_dim]
-            batch_indices: 批次索引 [num_nodes]
-            
-        Returns:
-            torch.Tensor: 预测结果 [batch_size, seq_len, num_classes] 或 [batch_size, num_classes]
-        """
-        if batch_indices is not None:
-            # 处理图级别的节点特征 [num_nodes, hidden_dim]
-            # 需要重构为序列级别 [batch_size, seq_len, hidden_dim]
-            if node_features.dim() == 2:
-                # 获取批次大小和序列长度信息
-                batch_size = batch_indices.max().item() + 1
-                seq_len = self._estimate_seq_len(batch_indices, batch_size)
-                
-                # 重构为 [batch_size, seq_len, hidden_dim]
-                reshaped_features = torch.zeros(batch_size, seq_len, node_features.size(1), 
-                                              device=node_features.device)
-                
-                # 填充特征
-                for i in range(batch_size):
-                    mask = (batch_indices == i)
-                    seq_features = node_features[mask]
-                    actual_len = min(seq_features.size(0), seq_len)
-                    reshaped_features[i, :actual_len] = seq_features[:actual_len]
-                
-                node_features = reshaped_features
-            
-            # 全局池化到序列级别
-            pooled_features = self._global_pool_sequence(node_features)
-        else:
-            # 假设已经是序列级别的特征 [batch_size, seq_len, hidden_dim]
-            pooled_features = node_features
-        
-        # 通用逐位置预测
-        predictions = self.mlp(pooled_features)
-        
-        return predictions
-    
-    def _estimate_seq_len(self, batch_indices: torch.Tensor, batch_size: int) -> int:
-        """估计序列长度"""
-        seq_lengths = []
-        for i in range(batch_size):
-            seq_lengths.append((batch_indices == i).sum().item())
-        return max(seq_lengths) if seq_lengths else 1
-    
-    def _global_pool_sequence(self, node_features: torch.Tensor) -> torch.Tensor:
-        """序列级别的全局池化"""
-        # 如果已经是 [batch_size, seq_len, hidden_dim] 格式，直接返回
-        if node_features.dim() == 3:
-            return node_features
-        
-        # 否则进行全局池化
-        return node_features.mean(dim=0, keepdim=True)
-    
-    def _global_pool(self, node_features: torch.Tensor, 
-                    batch_indices: torch.Tensor) -> torch.Tensor:
-        """全局池化操作"""
-        batch_size = batch_indices.max().item() + 1
-        pooled = torch.zeros(batch_size, node_features.size(1), 
-                           device=node_features.device)
-        
-        for i in range(batch_size):
-            mask = (batch_indices == i)
-            if mask.sum() > 0:
-                pooled[i] = node_features[mask].mean(dim=0)
-        
-        return pooled
-
-
 class GraphTransformer(nn.Module):
     """主要的图神经网络模型"""
     
@@ -488,18 +380,15 @@ class GraphTransformer(nn.Module):
             GraphAttentionLayer(config) for _ in range(config.num_gat_layers)
         ])
         
-        # 全局池化（保留，可能用于图级别任务）
-        self.global_pool = GlobalAttentionPool(config)
-        
         # 键级别断裂预测头（相邻残基对）
         self.bond_head = nn.Sequential(
-            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
+            nn.Linear(self.hidden_dim * 4, self.hidden_dim),
             nn.ReLU(),
             nn.Dropout(config.dropout),
             nn.Linear(self.hidden_dim, 1)
         )
         
-        # 层归一化
+        # 保留旧字段以兼容已有 checkpoint；前向不再使用外层残差/LN 包装。
         self.layer_norms = nn.ModuleList([
             nn.LayerNorm(config.hidden_dim) for _ in range(config.num_gcn_layers + config.num_gat_layers)
         ])
@@ -608,10 +497,7 @@ class GraphTransformer(nn.Module):
         gcn_timings = {}
         for i, gcn_layer in enumerate(self.gcn_layers):
             layer_start = time.perf_counter() if timing_enabled else None
-            residual = node_features
             node_features = gcn_layer(node_features, batch_data['edge_index'], edge_features)
-            node_features = self.layer_norms[i](node_features + residual)
-            node_features = F.dropout(node_features, p=self.config.dropout, training=self.training)
             if timing_enabled:
                 _maybe_sync(node_features.device, True)
                 gcn_timings[f'gcn_layer_{i}'] = time.perf_counter() - layer_start
@@ -624,14 +510,11 @@ class GraphTransformer(nn.Module):
             if hasattr(gat_layer, 'enable_timing'):
                 gat_layer.enable_timing = timing_enabled
             layer_start = time.perf_counter() if timing_enabled else None
-            residual = node_features
             node_features = gat_layer(
                 node_features,
                 batch_data['edge_index'],
                 edge_features,
             )
-            node_features = self.layer_norms[len(self.gcn_layers) + i](node_features + residual)
-            node_features = F.dropout(node_features, p=self.config.dropout, training=self.training)
             if timing_enabled:
                 _maybe_sync(node_features.device, True)
                 gat_timings[f'gat_layer_{i}_total'] = time.perf_counter() - layer_start
@@ -657,8 +540,16 @@ class GraphTransformer(nn.Module):
             )
             bond_src = (node_offsets.unsqueeze(1) + bond_positions.unsqueeze(0))[valid_bond_mask]
             bond_dst = bond_src + 1
+            h_src = node_features[bond_src]
+            h_dst = node_features[bond_dst]
             bond_features = torch.cat(
-                [node_features[bond_src], node_features[bond_dst]], dim=-1
+                [
+                    h_src,
+                    h_dst,
+                    h_src - h_dst,
+                    h_src * h_dst,
+                ],
+                dim=-1
             )
             bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
             predictions[valid_bond_mask] = bond_logits_flat

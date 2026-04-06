@@ -16,7 +16,6 @@ model:
   # 网络结构配置
   num_gcn_layers: 3
   num_gat_layers: 2
-  num_hierarchical_layers: 2
   
   # 序列配置
   max_seq_len: 32
@@ -49,15 +48,11 @@ model:
   num_classes: 1  # 键级别断裂为二分类
   
   # 其他配置
-  aggregator_type: "mean"
-  diffusion_steps: 3
-  num_attention_types: 3
-
 # 训练配置
 training:
   # 基础训练参数
   epochs: 60
-  batch_size: 256
+  batch_size: 1024
   learning_rate: 0.0001
   weight_decay: 0.0001
   gradient_clip_norm: 1.0

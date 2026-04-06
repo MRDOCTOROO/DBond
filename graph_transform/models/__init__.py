@@ -11,7 +11,7 @@
 
 from .graph_transformer import GraphTransformer, NodeEncoder, EdgeEncoder
 from .gcn_layers import GraphConvLayer, ResidualGCNLayer
-from .attention_layers import GraphAttentionLayer, MultiHeadAttention
+from .attention_layers import GraphAttentionLayer
 from .utils import *
 
 __all__ = [
@@ -21,5 +21,4 @@ __all__ = [
     'GraphConvLayer',
     'ResidualGCNLayer',
     'GraphAttentionLayer',
-    'MultiHeadAttention'
 ]

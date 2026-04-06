@@ -30,7 +30,6 @@ class ModelConfig:
         # 网络结构配置
         self.num_gcn_layers = 3
         self.num_gat_layers = 2
-        self.num_hierarchical_layers = 2
         
         # 序列配置
         self.max_seq_len = 100
@@ -63,10 +62,6 @@ class ModelConfig:
         self.num_classes = 20
         
         # 其他配置
-        self.aggregator_type = 'mean'
-        self.diffusion_steps = 3
-        self.num_attention_types = 3
-        
         # 更新配置
         if config_dict:
             self.update_config(config_dict)
