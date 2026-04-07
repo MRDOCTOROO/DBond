@@ -382,7 +382,7 @@ class GraphTransformer(nn.Module):
         
         # 键级别断裂预测头（相邻残基对）
         self.bond_head = nn.Sequential(
-            nn.Linear(self.hidden_dim * 4, self.hidden_dim),
+            nn.Linear(self.hidden_dim * 5, self.hidden_dim),
             nn.ReLU(),
             nn.Dropout(config.dropout),
             nn.Linear(self.hidden_dim, 1)
@@ -542,10 +542,18 @@ class GraphTransformer(nn.Module):
             bond_dst = bond_src + 1
             h_src = node_features[bond_src]
             h_dst = node_features[bond_dst]
+            e_ij = self._lookup_edge_features(
+                batch_data['edge_index'],
+                edge_features,
+                bond_src,
+                bond_dst,
+                num_nodes=node_features.size(0),
+            )
             bond_features = torch.cat(
                 [
                     h_src,
                     h_dst,
+                    e_ij,
                     h_src - h_dst,
                     h_src * h_dst,
                 ],
@@ -585,6 +593,43 @@ class GraphTransformer(nn.Module):
             if torch.is_tensor(value):
                 return value.device
         return self.global_node_embedding.device if self.use_global_node else next(self.parameters()).device
+
+    def _lookup_edge_features(
+        self,
+        edge_index: torch.Tensor,
+        edge_features: torch.Tensor,
+        src_nodes: torch.Tensor,
+        dst_nodes: torch.Tensor,
+        num_nodes: int,
+    ) -> torch.Tensor:
+        """按 (src, dst) 从 packed edge_index 中查找对应的边表示。"""
+        if src_nodes.numel() == 0:
+            return edge_features.new_empty((0, edge_features.size(-1)))
+        if edge_index.numel() == 0:
+            raise RuntimeError("Cannot look up bond edge features from an empty edge_index.")
+
+        key_stride = max(int(num_nodes), 1)
+        edge_src = edge_index[0].to(device=src_nodes.device, dtype=torch.long)
+        edge_dst = edge_index[1].to(device=src_nodes.device, dtype=torch.long)
+        edge_keys = edge_src * key_stride + edge_dst
+        bond_keys = src_nodes * key_stride + dst_nodes
+
+        sorted_edge_keys, sorted_edge_order = torch.sort(edge_keys)
+        lookup_pos = torch.searchsorted(sorted_edge_keys, bond_keys)
+        matched = torch.zeros_like(bond_keys, dtype=torch.bool)
+        valid_pos = lookup_pos < sorted_edge_keys.numel()
+        if valid_pos.any():
+            matched[valid_pos] = sorted_edge_keys[lookup_pos[valid_pos]] == bond_keys[valid_pos]
+        if not matched.all():
+            missing_idx = int((~matched).nonzero(as_tuple=False)[0].item())
+            missing_src = int(src_nodes[missing_idx].item())
+            missing_dst = int(dst_nodes[missing_idx].item())
+            raise RuntimeError(
+                f"Missing edge representation for bond ({missing_src}, {missing_dst})."
+            )
+
+        edge_feature_indices = sorted_edge_order[lookup_pos]
+        return edge_features[edge_feature_indices]
     
     def get_attention_weights(self, batch_data: Dict) -> List[torch.Tensor]:
         """获取注意力权重用于可视化"""
