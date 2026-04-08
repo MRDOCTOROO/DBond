@@ -219,7 +219,10 @@ class NodeEncoder(nn.Module):
             env_vars = torch.stack([batch_data['nces'], secondary_envs], dim=1).to(device=device, dtype=torch.float32)
 
         nce = env_vars[:, 0] * 0.01
-        secondary_env = env_vars[:, 1] * self.env_feature_scale
+        if self.env_feature_name == 'scan_num':
+            secondary_env = torch.log1p(torch.clamp_min(env_vars[:, 1], 0.0)) / 20.0
+        else:
+            secondary_env = env_vars[:, 1] * self.env_feature_scale
         normalized = torch.stack([nce, secondary_env], dim=1)
         return torch.nan_to_num(normalized, nan=0.0, posinf=10.0, neginf=-10.0)
 

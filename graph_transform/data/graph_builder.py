@@ -50,6 +50,12 @@ class GraphBuilder:
         self.env_feature_scale = float(_get_config_value(config, 'env_feature_scale', 0.01))
         self._distance_min_scale = 0.8
         self._edge_cache = {}
+
+    def _normalize_secondary_env_feature(self, value: float) -> float:
+        """对第二环境变量做与节点编码器一致的归一化。"""
+        if self.env_feature_name == 'scan_num':
+            return math.log1p(max(value, 0.0)) / 20.0
+        return value * self.env_feature_scale
     
     def build_graph(self, 
                    sequence: str,
@@ -298,10 +304,12 @@ class GraphBuilder:
                 sample_features.get('pep_mass', 0.0) / 2000.0,
                 math.log1p(max(sample_features.get('intensity', 0.0), 0.0)) / 20.0,
                 sample_features.get('nce', 0.0) * 0.01,
-                sample_features.get(
-                    self.env_feature_name,
-                    sample_features.get('rt', 0.0),
-                ) * self.env_feature_scale,
+                self._normalize_secondary_env_feature(
+                    sample_features.get(
+                        self.env_feature_name,
+                        sample_features.get('rt', 0.0),
+                    )
+                ),
             ],
             dtype=torch.float32,
             device=base_features.device,

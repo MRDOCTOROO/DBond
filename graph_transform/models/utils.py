@@ -441,16 +441,28 @@ class LearningRateScheduler:
                                    max_epochs: int,
                                    min_lr: float = 0.0):
         """余弦退火与预热"""
-        def lr_lambda(current_epoch):
-            if current_epoch < warmup_epochs:
-                # 预热阶段
-                return float(current_epoch) / float(max(1, warmup_epochs))
+        lr_lambdas = []
+        for param_group in optimizer.param_groups:
+            base_lr = float(param_group.get('lr', 0.0))
+            if base_lr <= 0.0:
+                min_lr_ratio = 0.0
             else:
-                # 余弦退火阶段
+                min_lr_ratio = min(max(min_lr / base_lr, 0.0), 1.0)
+
+            def lr_lambda(current_epoch, min_lr_ratio=min_lr_ratio):
+                if current_epoch < warmup_epochs:
+                    # 预热阶段
+                    return float(current_epoch + 1) / float(max(1, warmup_epochs))
+
+                # 余弦退火阶段；LambdaLR 需要的是相对 base_lr 的倍率，而不是绝对 lr。
                 progress = float(current_epoch - warmup_epochs) / float(max(1, max_epochs - warmup_epochs))
-                return max(min_lr, 0.5 * (1.0 + math.cos(math.pi * progress)))
+                progress = min(max(progress, 0.0), 1.0)
+                cosine_ratio = 0.5 * (1.0 + math.cos(math.pi * progress))
+                return max(min_lr_ratio, cosine_ratio)
+
+            lr_lambdas.append(lr_lambda)
         
-        return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambdas)
     
     @staticmethod
     def step_with_warmup(optimizer: torch.optim.Optimizer,
