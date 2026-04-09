@@ -462,9 +462,7 @@ class GraphTransformer(nn.Module):
             node_lens_tensor = node_lens_tensor.to(device=node_features.device, dtype=torch.long)
         else:
             node_lens_tensor = seq_lens_tensor + (1 if self.use_global_node else 0)
-        seq_lens = seq_lens_tensor.tolist()
-        node_lens = node_lens_tensor.tolist()
-        batch_size = len(seq_lens)
+        batch_size = int(seq_lens_tensor.numel())
         hidden_dim = node_features.size(-1)
         max_seq_len = node_features.size(1)
         seq_positions = torch.arange(max_seq_len, device=node_features.device)
@@ -480,18 +478,8 @@ class GraphTransformer(nn.Module):
             node_positions = torch.arange(max_node_len, device=node_features.device)
             valid_node_mask = node_positions.unsqueeze(0) < node_lens_tensor.unsqueeze(1)
             node_features = packed_nodes[valid_node_mask]
-            batch_indices = torch.repeat_interleave(
-                torch.arange(batch_size, device=node_features.device),
-                node_lens_tensor,
-                output_size=int(node_lens_tensor.sum().item()),
-            )
         else:
             node_features = node_features[valid_seq_mask]
-            batch_indices = torch.repeat_interleave(
-                torch.arange(batch_size, device=node_features.device),
-                seq_lens_tensor,
-                output_size=int(seq_lens_tensor.sum().item()),
-            )
         if timing_enabled:
             _maybe_sync(node_features.device, True)
             trim_end = time.perf_counter()
@@ -545,13 +533,17 @@ class GraphTransformer(nn.Module):
             bond_dst = bond_src + 1
             h_src = node_features[bond_src]
             h_dst = node_features[bond_dst]
-            e_ij = self._lookup_edge_features(
-                batch_data['edge_index'],
-                edge_features,
-                bond_src,
-                bond_dst,
-                num_nodes=node_features.size(0),
-            )
+            bond_edge_map = batch_data.get('bond_edge_map')
+            if bond_edge_map is not None:
+                e_ij = edge_features[bond_edge_map.to(device=edge_features.device, dtype=torch.long)]
+            else:
+                e_ij = self._lookup_edge_features(
+                    batch_data['edge_index'],
+                    edge_features,
+                    bond_src,
+                    bond_dst,
+                    num_nodes=node_features.size(0),
+                )
             bond_features = torch.cat(
                 [
                     h_src,

@@ -133,6 +133,7 @@ class GraphDataset(Dataset):
             'edge_attr': graph_data['edge_attr'],
             'edge_types': graph_data['edge_types'],
             'edge_distances': graph_data['edge_distances'],
+            'bond_edge_map': graph_data['bond_edge_map'],
             'labels': label_tensor,
             'charge': sample_features['charge'],
             'pep_mass': sample_features['pep_mass'],
@@ -296,6 +297,11 @@ class GraphDataLoader:
             torch.cat([node_lens.new_zeros(1), node_lens[:-1]], dim=0),
             dim=0,
         )
+        edge_counts = torch.tensor([item['edge_attr'].size(0) for item in batch], dtype=torch.long)
+        edge_offsets = torch.cumsum(
+            torch.cat([edge_counts.new_zeros(1), edge_counts[:-1]], dim=0),
+            dim=0,
+        )
         batch_edge_indices = [
             item['edge_index'] + int(offset.item())
             for item, offset in zip(batch, node_offsets)
@@ -303,6 +309,13 @@ class GraphDataLoader:
         batch_edge_attrs = [item['edge_attr'] for item in batch]
         batch_edge_types = [item['edge_types'] for item in batch]
         batch_edge_distances = [item['edge_distances'] for item in batch]
+        batch_bond_edge_map = torch.cat(
+            [
+                item['bond_edge_map'] + int(edge_offset.item())
+                for item, edge_offset in zip(batch, edge_offsets)
+            ],
+            dim=0,
+        ) if batch else torch.empty((0,), dtype=torch.long)
         
         # 拼接所有边
         batch_edge_index = torch.cat(batch_edge_indices, dim=1)
@@ -314,11 +327,8 @@ class GraphDataLoader:
         max_bonds = max(max_seq_len - 1, 0)
         if max_bonds > 0:
             batch_labels = pad_sequence(labels_list, batch_first=True, padding_value=0.0)
-            batch_label_masks = pad_sequence(
-                [torch.ones_like(labels, dtype=torch.float32) for labels in labels_list],
-                batch_first=True,
-                padding_value=0.0,
-            )
+            bond_positions = torch.arange(max_bonds, dtype=torch.long)
+            batch_label_masks = (bond_positions.unsqueeze(0) < (seq_lens - 1).clamp_min(0).unsqueeze(1)).to(dtype=torch.float32)
         else:
             batch_labels = torch.zeros((batch_size, 0), dtype=torch.float32)
             batch_label_masks = torch.zeros((batch_size, 0), dtype=torch.float32)
@@ -330,6 +340,7 @@ class GraphDataLoader:
             'edge_attr': batch_edge_attr,
             'edge_types': batch_edge_types,
             'edge_distances': batch_edge_distances,
+            'bond_edge_map': batch_bond_edge_map,
             'labels': batch_labels,
             'label_mask': batch_label_masks,
             'charges': charges,
@@ -474,7 +485,7 @@ class CachedGraphDataset(GraphDataset):
 
     def _edge_cache_meta(self) -> Dict[str, Any]:
         return {
-            "version": 1,
+            "version": 2,
             "graph_strategy": self.graph_strategy,
             "max_seq_len": self.max_seq_len,
             "max_distance": _get_config_value(self.config, "max_distance", 0),
@@ -505,8 +516,15 @@ class CachedGraphDataset(GraphDataset):
                 edge_index = edge_data["edge_index"]
                 edge_types = edge_data["edge_types"]
                 edge_distances = edge_data["edge_distances"]
+                bond_edge_map = edge_data.get("bond_edge_map")
             else:
-                edge_index, edge_types, edge_distances = edge_data
+                if len(edge_data) == 4:
+                    edge_index, edge_types, edge_distances, bond_edge_map = edge_data
+                else:
+                    edge_index, edge_types, edge_distances = edge_data
+                    bond_edge_map = None
+            if bond_edge_map is None:
+                bond_edge_map = self.graph_builder._build_bond_edge_map(edge_index, seq_len)
             key = (
                 self.graph_strategy,
                 seq_len,
@@ -516,7 +534,7 @@ class CachedGraphDataset(GraphDataset):
                 self.long_range_hops,
                 self.use_global_node,
             )
-            self.graph_builder._edge_cache[key] = (edge_index, edge_types, edge_distances)
+            self.graph_builder._edge_cache[key] = (edge_index, edge_types, edge_distances, bond_edge_map)
 
     def _load_or_build_edge_cache(self):
         """加载或构建按序列长度缓存的边结构"""
@@ -537,13 +555,14 @@ class CachedGraphDataset(GraphDataset):
         print("Building edge cache (by sequence length)...")
         edge_cache: Dict[int, Any] = {}
         for seq_len in range(1, self.max_seq_len + 1):
-            edge_index, edge_types, edge_distances = self.graph_builder._get_or_build_edges(
+            edge_index, edge_types, edge_distances, bond_edge_map = self.graph_builder._get_or_build_edges(
                 seq_len, self.graph_strategy
             )
             edge_cache[seq_len] = {
                 "edge_index": edge_index,
                 "edge_types": edge_types,
                 "edge_distances": edge_distances,
+                "bond_edge_map": bond_edge_map,
             }
 
         self._populate_edge_cache(edge_cache)
@@ -553,7 +572,7 @@ class CachedGraphDataset(GraphDataset):
     def _load_or_build_cache(self):
         """加载或构建缓存"""
         meta = {
-            "version": 3,
+            "version": 4,
             "csv_path": self.csv_path,
             "graph_strategy": self.graph_strategy,
             "max_seq_len": self.max_seq_len,
@@ -589,6 +608,7 @@ class CachedGraphDataset(GraphDataset):
                 'edge_attr': sample['edge_attr'],
                 'edge_types': sample['edge_types'],
                 'edge_distances': sample['edge_distances'],
+                'bond_edge_map': sample['bond_edge_map'],
                 'labels': sample['labels'],
                 'state_vars': sample['state_vars'],
                 'env_vars': sample['env_vars'],
@@ -619,6 +639,7 @@ class CachedGraphDataset(GraphDataset):
                 'edge_attr': cached['edge_attr'],
                 'edge_types': cached['edge_types'],
                 'edge_distances': cached['edge_distances'],
+                'bond_edge_map': cached['bond_edge_map'],
                 'labels': cached['labels'],
                 'charge': float(row['charge']),
                 'pep_mass': float(row['pep_mass']),
@@ -648,6 +669,7 @@ class CachedGraphDataset(GraphDataset):
             'edge_attr': graph_data['edge_attr'],
             'edge_types': graph_data['edge_types'],
             'edge_distances': graph_data['edge_distances'],
+            'bond_edge_map': graph_data['bond_edge_map'],
             'labels': label_tensor,
             'charge': sample_features['charge'],
             'pep_mass': sample_features['pep_mass'],

@@ -84,43 +84,46 @@ class GraphBuilder:
     def _build_sequence_graph(self, sequence: str, sample_features: Dict[str, float]) -> Dict[str, torch.Tensor]:
         """构建基于序列连接的图"""
         seq_len = len(sequence)
-        edge_index, edge_type_tensor, edge_distance_tensor = self._get_or_build_edges(seq_len, 'sequence')
+        edge_index, edge_type_tensor, edge_distance_tensor, bond_edge_map = self._get_or_build_edges(seq_len, 'sequence')
         edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, sample_features)
 
         return {
             'edge_index': edge_index,
             'edge_attr': edge_attr,
             'edge_types': edge_type_tensor,
-            'edge_distances': edge_distance_tensor
+            'edge_distances': edge_distance_tensor,
+            'bond_edge_map': bond_edge_map,
         }
     
     def _build_distance_graph(self, sequence: str, sample_features: Dict[str, float]) -> Dict[str, torch.Tensor]:
         """构建基于距离的图"""
         seq_len = len(sequence)
-        edge_index, edge_type_tensor, edge_distance_tensor = self._get_or_build_edges(seq_len, 'distance')
+        edge_index, edge_type_tensor, edge_distance_tensor, bond_edge_map = self._get_or_build_edges(seq_len, 'distance')
         edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, sample_features)
 
         return {
             'edge_index': edge_index,
             'edge_attr': edge_attr,
             'edge_types': edge_type_tensor,
-            'edge_distances': edge_distance_tensor
+            'edge_distances': edge_distance_tensor,
+            'bond_edge_map': bond_edge_map,
         }
     
     def _build_hybrid_graph(self, sequence: str, sample_features: Dict[str, float]) -> Dict[str, torch.Tensor]:
         """构建混合图"""
         seq_len = len(sequence)
-        edge_index, edge_type_tensor, edge_distance_tensor = self._get_or_build_edges(seq_len, 'hybrid')
+        edge_index, edge_type_tensor, edge_distance_tensor, bond_edge_map = self._get_or_build_edges(seq_len, 'hybrid')
         edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, sample_features)
 
         return {
             'edge_index': edge_index,
             'edge_attr': edge_attr,
             'edge_types': edge_type_tensor,
-            'edge_distances': edge_distance_tensor
+            'edge_distances': edge_distance_tensor,
+            'bond_edge_map': bond_edge_map,
         }
 
-    def _get_or_build_edges(self, seq_len: int, strategy: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _get_or_build_edges(self, seq_len: int, strategy: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         key = (
             strategy,
             seq_len,
@@ -135,18 +138,18 @@ class GraphBuilder:
             return cached
 
         if strategy == 'sequence':
-            edge_index, edge_types, edge_distances = self._build_sequence_edges(seq_len)
+            edge_index, edge_types, edge_distances, bond_edge_map = self._build_sequence_edges(seq_len)
         elif strategy == 'distance':
-            edge_index, edge_types, edge_distances = self._build_distance_edges(seq_len)
+            edge_index, edge_types, edge_distances, bond_edge_map = self._build_distance_edges(seq_len)
         elif strategy == 'hybrid':
-            edge_index, edge_types, edge_distances = self._build_hybrid_edges(seq_len)
+            edge_index, edge_types, edge_distances, bond_edge_map = self._build_hybrid_edges(seq_len)
         else:
             raise ValueError(f"Unknown graph building strategy: {strategy}")
 
-        self._edge_cache[key] = (edge_index, edge_types, edge_distances)
-        return edge_index, edge_types, edge_distances
+        self._edge_cache[key] = (edge_index, edge_types, edge_distances, bond_edge_map)
+        return edge_index, edge_types, edge_distances, bond_edge_map
 
-    def _build_sequence_edges(self, seq_len: int, include_optional: bool = True) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _build_sequence_edges(self, seq_len: int, include_optional: bool = True) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         edge_indices = []
         edge_types = []
         edge_distances = []
@@ -159,7 +162,7 @@ class GraphBuilder:
 
         return self._finalize_edges(edge_indices, edge_types, edge_distances, seq_len, include_optional)
 
-    def _build_distance_edges(self, seq_len: int, include_optional: bool = True) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _build_distance_edges(self, seq_len: int, include_optional: bool = True) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         max_seq_dist = int(math.ceil(self.max_distance / self._distance_min_scale))
 
         edge_indices = []
@@ -187,9 +190,9 @@ class GraphBuilder:
 
         return self._finalize_edges(edge_indices, edge_types, edge_distances, seq_len, include_optional)
 
-    def _build_hybrid_edges(self, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        seq_edge_index, seq_edge_types, seq_edge_distances = self._build_sequence_edges(seq_len, include_optional=False)
-        dist_edge_index, dist_edge_types, dist_edge_distances = self._build_distance_edges(seq_len, include_optional=False)
+    def _build_hybrid_edges(self, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        seq_edge_index, seq_edge_types, seq_edge_distances, _ = self._build_sequence_edges(seq_len, include_optional=False)
+        dist_edge_index, dist_edge_types, dist_edge_distances, _ = self._build_distance_edges(seq_len, include_optional=False)
 
         all_edges = torch.cat([seq_edge_index, dist_edge_index], dim=1)
         all_types = torch.cat([seq_edge_types, dist_edge_types])
@@ -206,7 +209,7 @@ class GraphBuilder:
                         edge_types: List[int],
                         edge_distances: List[int],
                         seq_len: int,
-                        include_optional: bool) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                        include_optional: bool) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         if include_optional:
             if self.use_long_range_edges:
                 self._add_long_range_edges(edge_indices, edge_types, edge_distances, seq_len)
@@ -231,8 +234,28 @@ class GraphBuilder:
             edge_index = torch.empty((2, 0), dtype=torch.long)
             edge_type_tensor = torch.empty((0,), dtype=torch.long)
             edge_distance_tensor = torch.empty((0,), dtype=torch.long)
+        bond_edge_map = self._build_bond_edge_map(edge_index, seq_len)
 
-        return edge_index, edge_type_tensor, edge_distance_tensor
+        return edge_index, edge_type_tensor, edge_distance_tensor, bond_edge_map
+
+    def _build_bond_edge_map(self, edge_index: torch.Tensor, seq_len: int) -> torch.Tensor:
+        """为每个相邻 bond 记录其在 edge_index / edge_attr 中的行号。"""
+        bond_len = max(seq_len - 1, 0)
+        if bond_len == 0:
+            return torch.empty((0,), dtype=torch.long)
+
+        edge_lookup = {
+            (int(src), int(dst)): edge_idx
+            for edge_idx, (src, dst) in enumerate(edge_index.t().tolist())
+        }
+        bond_edge_indices = []
+        for src in range(bond_len):
+            key = (src, src + 1)
+            edge_idx = edge_lookup.get(key)
+            if edge_idx is None:
+                raise RuntimeError(f"Missing sequential edge {key} in graph construction.")
+            bond_edge_indices.append(edge_idx)
+        return torch.tensor(bond_edge_indices, dtype=torch.long)
 
     def _add_long_range_edges(self,
                               edge_indices: List[List[int]],
