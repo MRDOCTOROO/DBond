@@ -45,12 +45,24 @@ class ModelConfig:
         self.num_env_features = 2
         self.env_feature_name = 'rt'
         self.env_feature_scale = 0.01
+        self.use_position_embedding = True
+        self.use_physicochemical_features = True
+        self.use_state_features = True
+        self.use_env_features = True
         
         # 边配置
         self.edge_types = ['sequence', 'distance', 'functional', 'long_range', 'global']
         self.edge_embedding_dim = 16
         self.distance_embedding_dim = 16
         self.max_distance = 10
+        self.use_edge_type_embedding = True
+        self.use_distance_embedding = True
+        self.use_raw_edge_attr = True
+        self.gat_use_edge_bias = True
+        self.gat_use_edge_gate = True
+        self.bond_use_edge_repr = True
+        self.bond_use_diff_feature = True
+        self.bond_use_product_feature = True
 
         # 图结构增强
         self.use_long_range_edges = False

@@ -30,6 +30,8 @@ class GraphAttentionLayer(nn.Module):
         self.dropout = config.dropout
         self.alpha = config.leaky_relu_slope
         self.concat = config.concat_heads  # 是否拼接多头输出
+        self.use_edge_bias = getattr(config, 'gat_use_edge_bias', True)
+        self.use_edge_gate = getattr(config, 'gat_use_edge_gate', True)
         
         # 多头注意力参数
         self.head_dim = self.output_dim // self.num_heads
@@ -203,10 +205,14 @@ class GraphAttentionLayer(nn.Module):
         compute_dtype = torch.float32 if dtype in (torch.float16, torch.bfloat16) else dtype
         edge_attr_compute = edge_attr.to(compute_dtype)
 
-        edge_bias = self.edge_attention_bias(edge_attr_compute)
-        edge_gate = torch.sigmoid(
-            self.edge_message_gate(edge_attr_compute).view(-1, self.num_heads, self.head_dim)
-        )
+        edge_bias = None
+        edge_gate = None
+        if self.use_edge_bias:
+            edge_bias = self.edge_attention_bias(edge_attr_compute)
+        if self.use_edge_gate:
+            edge_gate = torch.sigmoid(
+                self.edge_message_gate(edge_attr_compute).view(-1, self.num_heads, self.head_dim)
+            )
         return edge_bias, edge_gate
     
     def _softmax_attention(self, e: torch.Tensor, 

@@ -41,6 +41,10 @@ class NodeEncoder(nn.Module):
         self.aa_embedding_dim = config.aa_embedding_dim
         self.position_embedding_dim = config.position_embedding_dim
         self.physicochemical_dim = config.physicochemical_dim
+        self.use_position_embedding = getattr(config, 'use_position_embedding', True)
+        self.use_physicochemical_features = getattr(config, 'use_physicochemical_features', True)
+        self.use_state_features = getattr(config, 'use_state_features', True)
+        self.use_env_features = getattr(config, 'use_env_features', True)
         
         # 嵌入层
         self.aa_embedding = nn.Embedding(
@@ -133,18 +137,36 @@ class NodeEncoder(nn.Module):
             seq_tokens.size(1), 
             device=seq_tokens.device
         ).unsqueeze(0).expand(seq_tokens.size(0), -1)
-        pos_features = self.position_embedding(positions)
+        if self.use_position_embedding:
+            pos_features = self.position_embedding(positions)
+        else:
+            pos_features = aa_features.new_zeros(
+                seq_tokens.size(0),
+                seq_tokens.size(1),
+                self.position_embedding_dim,
+            )
         
         # 物理化学性质编码
-        physico_features = self._encode_physicochemical(seq_tokens)
-        physico_features = self.physicochemical_encoder(physico_features)
+        if self.use_physicochemical_features:
+            physico_features = self._encode_physicochemical(seq_tokens)
+            physico_features = self.physicochemical_encoder(physico_features)
+        else:
+            physico_features = aa_features.new_zeros(
+                seq_tokens.size(0),
+                seq_tokens.size(1),
+                self.physicochemical_dim,
+            )
         
         # 状态变量与环境变量编码
         state_features = self._encode_state(batch_data, device)
         state_features = self.state_encoder(state_features)
+        if not self.use_state_features:
+            state_features = state_features.new_zeros(state_features.shape)
 
         env_features = self._encode_environmental(batch_data, device)
         env_features = self.env_encoder(env_features)
+        if not self.use_env_features:
+            env_features = env_features.new_zeros(env_features.shape)
         
         # 扩展样本级特征到每个位置
         state_features = state_features.unsqueeze(1).expand(-1, seq_tokens.size(1), -1)
@@ -287,6 +309,9 @@ class EdgeEncoder(nn.Module):
         self.edge_types = config.edge_types
         self.edge_embedding_dim = config.edge_embedding_dim
         self.distance_embedding_dim = config.distance_embedding_dim
+        self.use_edge_type_embedding = getattr(config, 'use_edge_type_embedding', True)
+        self.use_distance_embedding = getattr(config, 'use_distance_embedding', True)
+        self.use_raw_edge_attr = getattr(config, 'use_raw_edge_attr', True)
         
         # 边类型嵌入
         self.edge_type_embedding = nn.Embedding(
@@ -336,12 +361,16 @@ class EdgeEncoder(nn.Module):
             torch.Tensor: 边特征 [num_edges, hidden_dim]
         """
         type_features = self.edge_type_embedding(edge_types)
+        if not self.use_edge_type_embedding:
+            type_features = type_features.new_zeros(type_features.shape)
         distance_features = self.distance_embedding(distances)
+        if not self.use_distance_embedding:
+            distance_features = distance_features.new_zeros(distance_features.shape)
         
         combined_features = torch.cat([type_features, distance_features], dim=-1)
         edge_features = self.edge_encoder(combined_features)
 
-        if edge_attr is not None:
+        if self.use_raw_edge_attr and edge_attr is not None:
             attr_features = self.edge_attr_encoder(edge_attr.to(dtype=edge_features.dtype))
             attr_features = self.edge_attr_norm(attr_features)
             edge_features = self.edge_attr_fuse(torch.cat([edge_features, attr_features], dim=-1))
@@ -357,6 +386,11 @@ class GraphTransformer(nn.Module):
         
         self.config = config
         self.hidden_dim = config.hidden_dim
+        self.use_state_features = getattr(config, 'use_state_features', True)
+        self.use_env_features = getattr(config, 'use_env_features', True)
+        self.bond_use_edge_repr = getattr(config, 'bond_use_edge_repr', True)
+        self.bond_use_diff_feature = getattr(config, 'bond_use_diff_feature', True)
+        self.bond_use_product_feature = getattr(config, 'bond_use_product_feature', True)
         
         # 编码器
         self.node_encoder = NodeEncoder(config)
@@ -382,10 +416,18 @@ class GraphTransformer(nn.Module):
         self.gat_layers = nn.ModuleList([
             GraphAttentionLayer(config) for _ in range(config.num_gat_layers)
         ])
+
+        bond_feature_dim = self.hidden_dim * 2
+        if self.bond_use_edge_repr:
+            bond_feature_dim += self.hidden_dim
+        if self.bond_use_diff_feature:
+            bond_feature_dim += self.hidden_dim
+        if self.bond_use_product_feature:
+            bond_feature_dim += self.hidden_dim
         
         # 键级别断裂预测头（相邻残基对）
         self.bond_head = nn.Sequential(
-            nn.Linear(self.hidden_dim * 5, self.hidden_dim),
+            nn.Linear(bond_feature_dim, self.hidden_dim),
             nn.ReLU(),
             nn.Dropout(config.dropout),
             nn.Linear(self.hidden_dim, 1)
@@ -436,8 +478,12 @@ class GraphTransformer(nn.Module):
         if self.use_global_node:
             state_raw = self.node_encoder._encode_state(batch_data, node_features.device)
             state_embed = self.node_encoder.state_encoder(state_raw)
+            if not self.use_state_features:
+                state_embed = state_embed.new_zeros(state_embed.shape)
             env_raw = self.node_encoder._encode_environmental(batch_data, node_features.device)
             env_embed = self.node_encoder.env_encoder(env_raw)
+            if not self.use_env_features:
+                env_embed = env_embed.new_zeros(env_embed.shape)
             global_context = torch.cat([state_embed, env_embed], dim=-1)
             global_nodes = self.global_node_embedding + self.global_node_proj(global_context)
         if timing_enabled:
@@ -544,16 +590,14 @@ class GraphTransformer(nn.Module):
                     bond_dst,
                     num_nodes=node_features.size(0),
                 )
-            bond_features = torch.cat(
-                [
-                    h_src,
-                    h_dst,
-                    e_ij,
-                    h_src - h_dst,
-                    h_src * h_dst,
-                ],
-                dim=-1
-            )
+            bond_feature_parts = [h_src, h_dst]
+            if self.bond_use_edge_repr:
+                bond_feature_parts.append(e_ij)
+            if self.bond_use_diff_feature:
+                bond_feature_parts.append(h_src - h_dst)
+            if self.bond_use_product_feature:
+                bond_feature_parts.append(h_src * h_dst)
+            bond_features = torch.cat(bond_feature_parts, dim=-1)
             bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
             predictions[valid_bond_mask] = bond_logits_flat
         else:

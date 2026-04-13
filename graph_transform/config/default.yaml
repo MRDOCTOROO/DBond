@@ -29,16 +29,28 @@ model:
   num_physicochemical_features: 4
   num_state_features: 3
   num_env_features: 2
+  use_position_embedding: true
+  use_physicochemical_features: true
+  use_state_features: true
+  use_env_features: true
   
   # 边配置
   edge_types: ["sequence", "distance", "functional", "long_range", "global"]
   edge_embedding_dim: 16
   distance_embedding_dim: 16
   max_distance: 10
+  use_edge_type_embedding: true
+  use_distance_embedding: true
+  use_raw_edge_attr: true
+  gat_use_edge_bias: true
+  gat_use_edge_gate: true
+  bond_use_edge_repr: true
+  bond_use_diff_feature: true
+  bond_use_product_feature: true
 
   # 图结构增强
 
-  use_long_range_edges: true      # 开启稀疏长程边
+  use_long_range_edges: false      # 开启稀疏长程边
   long_range_stride: 10           # 间隔
   long_range_hops: 1              # 每个节点连接几跳
   use_global_node: true           # 开关全局虚拟节点

@@ -106,16 +106,15 @@ class GraphConvLayer(nn.Module):
         # 度归一化
         deg = torch.zeros(x.size(0), device=x.device, dtype=compute_dtype)
 
-        # 原实现直接 sum(hidden_dim) 作为边权，训练后期容易数值爆炸。
-        # 这里改成有界的 sigmoid(mean) 权重，让边特征只做门控，不做无界放大。
-        edge_logits = edge_attr.mean(dim=1, keepdim=True)
-        edge_weights = torch.sigmoid(edge_logits).clamp(1e-4, 1.0)
-        deg.index_add_(0, col, edge_weights.squeeze())
+        # 使用逐元素门控保留边表征的通道信息，同时用标量强度做度归一化保持稳定。
+        edge_gate = torch.sigmoid(edge_attr).clamp(1e-4, 1.0)
+        edge_strength = edge_gate.mean(dim=1)
+        deg.index_add_(0, col, edge_strength)
         deg_inv_sqrt = deg.pow(-0.5)
         deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
         
         norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
-        node_messages = x_compute[row] * edge_weights * norm.unsqueeze(1)
+        node_messages = x_compute[row] * edge_gate * norm.unsqueeze(1)
         
         # 聚合消息
         out = torch.zeros_like(x_compute)
