@@ -50,6 +50,29 @@ def setup_logging() -> logging.Logger:
     return logging.getLogger("graph_transform_5fold")
 
 
+def resolve_folds_dir(folds_dir: str) -> str:
+    if os.path.isdir(folds_dir):
+        return os.path.abspath(folds_dir)
+
+    normalized = folds_dir.replace("\\", "/").rstrip("/")
+    parent_dir = os.path.dirname(normalized) or "."
+    basename = os.path.basename(normalized)
+    alternatives = []
+
+    if basename in {"5_fold", "5fold", "5-fold"}:
+        for candidate_name in ("5fold", "5_fold", "5-fold"):
+            candidate = os.path.normpath(os.path.join(parent_dir, candidate_name))
+            if candidate not in alternatives:
+                alternatives.append(candidate)
+
+    for candidate in alternatives:
+        if os.path.isdir(candidate):
+            return os.path.abspath(candidate)
+
+    tried = [folds_dir] + alternatives
+    raise FileNotFoundError(f"Fold dataset directory not found. Tried: {tried}")
+
+
 def _extract_fold_id(text: str) -> str | None:
     for pattern in FOLD_PATTERNS:
         match = pattern.search(text)
@@ -65,20 +88,40 @@ def _extract_split(text: str) -> str | None:
     return None
 
 
+def _extract_fold_id_from_filename(filename: str) -> str | None:
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    parts = [part for part in re.split(r"[._\-]+", stem) if part]
+    split_aliases = {"train", "test", "val", "valid", "validation"}
+
+    for index, part in enumerate(parts):
+        if part.lower() in split_aliases:
+            if index > 0:
+                prefix = "_".join(parts[:index])
+                if prefix:
+                    return prefix
+            if index + 1 < len(parts):
+                suffix = "_".join(parts[index + 1:])
+                if suffix:
+                    return suffix
+    return None
+
+
 def discover_folds(folds_dir: str) -> Dict[str, Dict[str, str]]:
-    if not os.path.isdir(folds_dir):
-        raise FileNotFoundError(f"Fold dataset directory not found: {folds_dir}")
+    resolved_dir = resolve_folds_dir(folds_dir)
 
     fold_map: Dict[str, Dict[str, str]] = {}
-    for root, _, files in os.walk(folds_dir):
+    for root, _, files in os.walk(resolved_dir):
         for filename in files:
             if not filename.lower().endswith(".csv"):
                 continue
 
             full_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(full_path, folds_dir).replace("\\", "/")
+            rel_path = os.path.relpath(full_path, resolved_dir).replace("\\", "/")
             fold_id = _extract_fold_id(rel_path)
             split = _extract_split(rel_path)
+
+            if fold_id is None:
+                fold_id = _extract_fold_id_from_filename(filename)
 
             if fold_id is None or split is None:
                 continue
@@ -86,7 +129,7 @@ def discover_folds(folds_dir: str) -> Dict[str, Dict[str, str]]:
             fold_entry = fold_map.setdefault(fold_id, {})
             fold_entry[split] = os.path.abspath(full_path)
 
-    return dict(sorted(fold_map.items(), key=lambda item: int(item[0])))
+    return dict(sorted(fold_map.items(), key=lambda item: item[0]))
 
 
 def validate_folds(fold_map: Dict[str, Dict[str, str]], expected_folds: int | None) -> None:
@@ -194,7 +237,7 @@ def build_summary_rows(per_fold_df: pd.DataFrame) -> List[Dict[str, Any]]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="GraphTransformer 五折交叉验证训练")
     parser.add_argument("--config", type=str, required=True, help="基础配置文件路径")
-    parser.add_argument("--folds_dir", type=str, default="dataset/5_fold", help="五折数据目录")
+    parser.add_argument("--folds_dir", type=str, default="dataset/5fold", help="五折数据目录")
     parser.add_argument("--expected_folds", type=int, default=5, help="期望发现的 fold 数量")
     parser.add_argument("--epochs", type=int, help="覆盖训练轮数")
     parser.add_argument("--batch_size", type=int, help="覆盖批大小")
@@ -217,7 +260,8 @@ def main() -> None:
     base_config = load_config(args.config, config_args)
     base_config = apply_overrides(base_config, args)
 
-    fold_map = discover_folds(args.folds_dir)
+    resolved_folds_dir = resolve_folds_dir(args.folds_dir)
+    fold_map = discover_folds(resolved_folds_dir)
     validate_folds(fold_map, args.expected_folds)
 
     base_checkpoint_root = base_config.get("training", {}).get("checkpoint_dir", "checkpoints/graph_transform")
@@ -232,7 +276,7 @@ def main() -> None:
     os.makedirs(pred_root, exist_ok=True)
     os.makedirs(log_root, exist_ok=True)
 
-    logger.info("Discovered %s folds under %s", len(fold_map), os.path.abspath(args.folds_dir))
+    logger.info("Discovered %s folds under %s", len(fold_map), resolved_folds_dir)
     for fold_id, split_map in fold_map.items():
         logger.info(
             "Fold %s -> train=%s, val=%s, test=%s",
