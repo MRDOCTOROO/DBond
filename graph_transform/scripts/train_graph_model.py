@@ -635,30 +635,14 @@ def create_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any]) -> opti
     return scheduler
 
 
-def main():
-    """主函数"""
-    parser = argparse.ArgumentParser(description='训练图神经网络键级别二分类模型')
-    
-    # 必需参数
-    parser.add_argument('--config', type=str, required=True,
-                       help='配置文件路径')
-    
-    # 可选参数
-    parser.add_argument('--epochs', type=int, help='训练轮数')
-    parser.add_argument('--batch_size', type=int, help='批大小')
-    parser.add_argument('--learning_rate', type=float, help='学习率')
-    parser.add_argument('--device', type=str, choices=['cpu', 'cuda', 'mps'],
-                       help='计算设备')
-    parser.add_argument('--resume', type=str, help='恢复训练的检查点路径')
-    parser.add_argument('--seed', type=int, help='随机种子')
-    
-    args = parser.parse_args()
-    
-    # 加载配置
-    config = load_config(args.config, args)
-    
-    # 设置随机种子
-    seed = args.seed or config['experiment'].get('seed', 42)
+def run_training(
+    config: Dict[str, Any],
+    *,
+    resume: str | None = None,
+    seed: int | None = None,
+) -> Dict[str, Any]:
+    """运行单次训练/验证/测试流程，并返回关键结果。"""
+    seed = seed or config['experiment'].get('seed', 42)
     torch.manual_seed(seed)
     np.random.seed(seed)
     if torch.cuda.is_available():
@@ -726,9 +710,10 @@ def main():
     # 恢复训练（如果指定）
     start_epoch = 0
     best_metric = 0.0
-    if args.resume:
+    best_checkpoint_path = None
+    if resume:
         checkpoint = CheckpointManager.load_checkpoint(
-            filepath=args.resume,
+            filepath=resume,
             model=model,
             optimizer=optimizer
         )
@@ -742,11 +727,11 @@ def main():
     early_stopping_enabled = training_config.get('early_stopping', False)
     patience = training_config.get('patience', 10)
     min_delta = training_config.get('min_delta', 0.0)
-    best_metric = best_metric if args.resume else float('-inf')
+    best_metric = best_metric if resume else float('-inf')
     best_epoch = start_epoch
     no_improve_epochs = 0
-    if args.resume:
-        training_config['checkpoint_dir'] = os.path.dirname(args.resume)
+    if resume:
+        training_config['checkpoint_dir'] = os.path.dirname(resume)
     else:
         base_checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints/graph_transform')
         run_id = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -834,6 +819,7 @@ def main():
                 os.makedirs(checkpoint_dir, exist_ok=True)
                 
                 checkpoint_path = os.path.join(checkpoint_dir, 'best_model.pt')
+                best_checkpoint_path = checkpoint_path
                 CheckpointManager.save_checkpoint(
                     model=model,
                     optimizer=optimizer,
@@ -893,7 +879,7 @@ def main():
     # 测试阶段
     if test_loader is not None:
         checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints/graph_transform')
-        best_checkpoint_path = os.path.join(checkpoint_dir, 'best_model.pt')
+        best_checkpoint_path = best_checkpoint_path or os.path.join(checkpoint_dir, 'best_model.pt')
         if val_loader is not None:
             if os.path.exists(best_checkpoint_path):
                 logger.info(f"Reloading best checkpoint before final test evaluation: {best_checkpoint_path}")
@@ -951,6 +937,40 @@ def main():
     logger.info(f"Training completed in {time.perf_counter() - training_start:.2f}s")
     if tb_writers:
         close_tensorboard_writers(tb_writers)
+
+    return {
+        'checkpoint_dir': training_config['checkpoint_dir'],
+        'best_checkpoint_path': best_checkpoint_path,
+        'best_val_f1': best_metric if best_metric != float('-inf') else None,
+        'best_epoch': best_epoch,
+        'history': history,
+        'test_metrics': test_metrics if test_loader is not None else None,
+        'test_dataset_size': len(test_dataset) if test_dataset is not None else 0,
+    }
+
+
+def main():
+    """主函数"""
+    parser = argparse.ArgumentParser(description='训练图神经网络键级别二分类模型')
+    
+    # 必需参数
+    parser.add_argument('--config', type=str, required=True,
+                       help='配置文件路径')
+    
+    # 可选参数
+    parser.add_argument('--epochs', type=int, help='训练轮数')
+    parser.add_argument('--batch_size', type=int, help='批大小')
+    parser.add_argument('--learning_rate', type=float, help='学习率')
+    parser.add_argument('--device', type=str, choices=['cpu', 'cuda', 'mps'],
+                       help='计算设备')
+    parser.add_argument('--resume', type=str, help='恢复训练的检查点路径')
+    parser.add_argument('--seed', type=int, help='随机种子')
+    
+    args = parser.parse_args()
+    
+    # 加载配置
+    config = load_config(args.config, args)
+    run_training(config, resume=args.resume, seed=args.seed)
 
 
 if __name__ == '__main__':
