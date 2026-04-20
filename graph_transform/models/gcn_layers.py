@@ -103,13 +103,9 @@ class GraphConvLayer(nn.Module):
         x_compute = x.to(compute_dtype)
         edge_attr = edge_attr.to(dtype=compute_dtype)
         
-        # 度归一化
         deg = torch.zeros(x.size(0), device=x.device, dtype=compute_dtype)
-
-        # 使用逐元素门控保留边表征的通道信息，同时用标量强度做度归一化保持稳定。
         edge_gate = torch.sigmoid(edge_attr).clamp(1e-4, 1.0)
-        edge_strength = edge_gate.mean(dim=1)
-        deg.index_add_(0, col, edge_strength)
+        deg.index_add_(0, col, edge_gate.mean(dim=1))
         deg_inv_sqrt = deg.pow(-0.5)
         deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
         

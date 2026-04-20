@@ -266,12 +266,21 @@ class NodeEncoder(nn.Module):
         return lookup
 
     def _build_physicochemical_lookup_table(self, num_features: int) -> torch.Tensor:
-        """构建 token 到物化属性的查找表。"""
+        """构建 token 到物化属性的查找表（逐列 min-max 归一化）。"""
+        props_dict = self._get_aa_properties()
         table = torch.zeros(self.vocab_size, num_features, dtype=torch.float32)
-        for aa, props in self._get_aa_properties().items():
+        for aa, props in props_dict.items():
             idx = self.char_to_idx.get(aa)
             if idx is not None:
                 table[idx] = torch.tensor(props, dtype=torch.float32)
+        aa_indices = [self.char_to_idx[aa] for aa in props_dict if aa in self.char_to_idx]
+        if aa_indices:
+            aa_data = table[aa_indices]
+            col_min = aa_data.min(dim=0).values
+            col_max = aa_data.max(dim=0).values
+            col_range = col_max - col_min
+            col_range[col_range == 0] = 1.0
+            table[aa_indices] = (aa_data - col_min) / col_range
         return table
     
     def _get_aa_properties(self) -> Dict[str, List[float]]:
@@ -336,7 +345,7 @@ class EdgeEncoder(nn.Module):
         )
 
         # 物理环境等原始边特征编码（延迟推断输入维度）
-        self.edge_attr_encoder = nn.LazyLinear(config.hidden_dim)
+        self.edge_attr_encoder = nn.Linear(8, config.hidden_dim)
         self.edge_attr_norm = nn.LayerNorm(config.hidden_dim)
         self.edge_attr_fuse = nn.Sequential(
             nn.Linear(config.hidden_dim * 2, config.hidden_dim),

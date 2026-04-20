@@ -396,6 +396,7 @@ def create_model(config: Dict[str, Any], device: torch.device) -> nn.Module:
 def create_datasets(config: Dict[str, Any]) -> tuple:
     """创建数据集"""
     data_config = config['data']
+    training_config = config.get('training', {})
     model_config = build_model_config(config)
 
     dataset_cls = CachedGraphDataset if data_config.get('cache_graphs', False) else GraphDataset
@@ -435,14 +436,25 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
             })
         val_dataset = dataset_cls(**val_kwargs)
     else:
-        # 从训练集分割验证集
-        val_split = data_config.get('validation_split', 0.2)
-        train_size = int((1 - val_split) * len(train_dataset))
-        val_size = len(train_dataset) - train_size
-        
-        train_dataset, val_dataset = torch.utils.data.random_split(
-            train_dataset, [train_size, val_size]
+        # 从训练集分割验证集；优先读取 training.validation_split
+        val_split = training_config.get(
+            'validation_split',
+            data_config.get('validation_split', 0.2),
         )
+        if val_split and val_split > 0:
+            train_size = int((1 - val_split) * len(train_dataset))
+            val_size = len(train_dataset) - train_size
+            if train_size <= 0 or val_size <= 0:
+                raise ValueError(
+                    f"Invalid validation_split={val_split} for dataset size {len(train_dataset)}"
+                )
+            split_seed = config.get('experiment', {}).get('seed', 42)
+            split_generator = torch.Generator().manual_seed(split_seed)
+            train_dataset, val_dataset = torch.utils.data.random_split(
+                train_dataset, [train_size, val_size], generator=split_generator
+            )
+        else:
+            val_dataset = None
     
     # 测试数据集
     test_dataset = None
@@ -659,6 +671,7 @@ def main():
     
     # 设置随机种子
     seed = args.seed or config['experiment'].get('seed', 42)
+    config.setdefault('experiment', {})['seed'] = seed
     torch.manual_seed(seed)
     np.random.seed(seed)
     if torch.cuda.is_available():
