@@ -113,7 +113,7 @@ data:
   max_augmentation_trials: 3
   
   # 批处理配置
-  num_workers: 32 #最低尝试的4线程
+  num_workers: 32  # 32 workers + 大 batch 容易触发主机内存压力
   pin_memory: true
   drop_last: true
   
@@ -266,8 +266,8 @@ performance:
   use_torch_compile: false
   
   # I/O优化
-  prefetch_factor: 4
-  persistent_workers: true
+  prefetch_factor: 2
+  persistent_workers: false
 
 # 调试配置
 debug:
@@ -280,9 +280,9 @@ debug:
   log_grad_norm: true
   save_nonfinite_batch: true
   diagnostic_dir: "logs/graph_transform/diagnostics"
-  force_gc_on_epoch_end: false
-  force_gc_on_eval_end: false
-  empty_cache_on_epoch_end: false
+  force_gc_on_epoch_end: true
+  force_gc_on_eval_end: true
+  empty_cache_on_epoch_end: true
   
   # 可视化
   save_attention_weights: false

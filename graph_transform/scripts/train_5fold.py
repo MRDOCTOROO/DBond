@@ -9,7 +9,6 @@ import time
 from copy import deepcopy
 from datetime import datetime
 
-import numpy as np
 import pandas as pd
 import torch
 import yaml
@@ -17,6 +16,8 @@ import yaml
 TRAIN_SUFFIX = ".train.fbr.shuffle.multi.csv"
 TEST_SUFFIX = ".test.fbr.multi.csv"
 DEFAULT_FOLD_DIR = "dataset/5fold"
+SUMMARY_COLUMNS = ["metric", "mean", "std", "min", "max", "num_folds"]
+SUMMARY_METRIC_EXCLUDE_PREFIXES = ("gpu_mem_",)
 
 
 def discover_folds(fold_dir: str):
@@ -43,7 +44,18 @@ def latest_subdir(base_dir: str) -> str:
 
 def load_metric_csv(metric_path: str):
     df = pd.read_csv(metric_path)
-    return {str(row["metric"]).strip().lower(): float(row["value"]) for _, row in df.iterrows()}
+    metrics = {}
+    for _, row in df.iterrows():
+        metric_name = str(row["metric"]).strip().lower()
+        metric_value = row["value"]
+        if pd.isna(metric_value):
+            continue
+        metrics[metric_name] = float(metric_value)
+    return metrics
+
+
+def should_aggregate_metric(metric_name: str) -> bool:
+    return not any(metric_name.startswith(prefix) for prefix in SUMMARY_METRIC_EXCLUDE_PREFIXES)
 
 
 def load_best_metrics(checkpoint_path: str):
@@ -112,6 +124,7 @@ def main():
 
     train_script = os.path.join(os.path.dirname(__file__), "train_graph_model.py")
     results = []
+    summary_metric_order = []
     overall_start = time.perf_counter()
 
     for fold_index, fold_id in enumerate(fold_ids):
@@ -128,33 +141,50 @@ def main():
         run_dir = latest_subdir(checkpoint_root)
         best_epoch, best_metrics = load_best_metrics(os.path.join(run_dir, "best_model.pt"))
         test_metrics = load_metric_csv(os.path.join(run_root, "metrics", "latest_test_metric.csv"))
-        results.append({
+        fold_result = {
             "fold_id": fold_id,
             "seed": fold_seed,
             "best_epoch": best_epoch,
             "best_val_f1": best_metrics.get("f1"),
-            "test_loss": test_metrics.get("loss"),
-            "test_f1": test_metrics.get("f1"),
-            "test_precision": test_metrics.get("precision_micro", test_metrics.get("precision")),
-            "test_recall": test_metrics.get("recall_micro", test_metrics.get("recall")),
-            "test_auc": test_metrics.get("auc_micro", test_metrics.get("auc")),
             "checkpoint_dir": run_dir,
-        })
-        print(f"[5fold] done fold={fold_id} test_f1={results[-1]['test_f1']:.4f}")
+        }
+        for metric_name, metric_value in test_metrics.items():
+            fold_result[metric_name] = metric_value
+            if should_aggregate_metric(metric_name) and metric_name not in summary_metric_order:
+                summary_metric_order.append(metric_name)
+        results.append(fold_result)
 
-    summary_df = pd.DataFrame(results)
+        fold_f1 = fold_result.get("f1")
+        if fold_f1 is not None:
+            print(f"[5fold] done fold={fold_id} f1={fold_f1:.4f}")
+        else:
+            print(f"[5fold] done fold={fold_id}")
+
+    per_fold_df = pd.DataFrame(results)
     agg_rows = []
-    for metric in ["best_val_f1", "test_loss", "test_f1", "test_precision", "test_recall", "test_auc"]:
-        series = pd.to_numeric(summary_df[metric], errors="coerce").dropna()
+    for metric in summary_metric_order:
+        if metric not in per_fold_df.columns:
+            continue
+        series = pd.to_numeric(per_fold_df[metric], errors="coerce").dropna()
         if not series.empty:
-            agg_rows.append({"metric": metric, "mean": float(series.mean()), "std": float(series.std(ddof=0))})
-    agg_df = pd.DataFrame(agg_rows)
+            agg_rows.append({
+                "metric": metric,
+                "mean": float(series.mean()),
+                "std": float(series.std(ddof=0)),
+                "min": float(series.min()),
+                "max": float(series.max()),
+                "num_folds": int(series.shape[0]),
+            })
+    agg_df = pd.DataFrame(agg_rows, columns=SUMMARY_COLUMNS)
 
+    metrics_path = os.path.join(cv_root, "5fold_metrics.csv")
     summary_path = os.path.join(cv_root, "5fold_summary.csv")
     aggregate_path = os.path.join(cv_root, "5fold_aggregate.csv")
-    summary_df.to_csv(summary_path, index=False)
+    per_fold_df.to_csv(metrics_path, index=False)
+    agg_df.to_csv(summary_path, index=False)
     agg_df.to_csv(aggregate_path, index=False)
 
+    print(f"[5fold] per-fold metrics saved to {metrics_path}")
     print(f"[5fold] summary saved to {summary_path}")
     print(f"[5fold] aggregate saved to {aggregate_path}")
     print(f"[5fold] total_time={time.perf_counter() - overall_start:.2f}s")
