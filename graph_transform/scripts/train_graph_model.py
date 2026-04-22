@@ -127,6 +127,80 @@ def sanitize_filename_component(value: str) -> str:
     return sanitized or "unknown"
 
 
+def build_ablation_tag(config: Dict[str, Any]) -> str:
+    """根据配置生成消融实验标签。"""
+    ablation_config = config.get('ablation', {})
+    explicit_tag = ablation_config.get('tag')
+    if explicit_tag:
+        return sanitize_filename_component(explicit_tag)
+
+    tags: List[str] = []
+    if ablation_config.get('use_sequence_graph', False):
+        tags.append('sequence_graph')
+    elif ablation_config.get('use_hybrid_graph', False):
+        tags.append('hybrid_graph')
+
+    if ablation_config.get('disable_global_node', False):
+        tags.append('no_global_node')
+    if ablation_config.get('gcn_only', False):
+        tags.append('gcn_only')
+    elif ablation_config.get('gat_only', False):
+        tags.append('gat_only')
+
+    return "_".join(tags) if tags else "baseline"
+
+
+def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """将统一的 ablation 开关映射到实际模型/数据配置，并整理输出目录。"""
+    ablation_config = config.setdefault('ablation', {})
+    model_config = config.setdefault('model', {})
+    data_config = config.setdefault('data', {})
+    training_config = config.setdefault('training', {})
+    evaluation_config = config.setdefault('evaluation', {})
+    logging_config = config.setdefault('logging', {})
+    experiment_config = config.setdefault('experiment', {})
+
+    if ablation_config.get('use_sequence_graph', False) and ablation_config.get('use_hybrid_graph', False):
+        raise ValueError("ablation.use_sequence_graph and ablation.use_hybrid_graph cannot both be true.")
+    if ablation_config.get('gcn_only', False) and ablation_config.get('gat_only', False):
+        raise ValueError("ablation.gcn_only and ablation.gat_only cannot both be true.")
+
+    if ablation_config.get('use_sequence_graph', False):
+        data_config['graph_strategy'] = 'sequence'
+    elif ablation_config.get('use_hybrid_graph', False):
+        data_config['graph_strategy'] = 'hybrid'
+
+    if ablation_config.get('disable_global_node', False):
+        model_config['use_global_node'] = False
+
+    if ablation_config.get('gcn_only', False):
+        model_config['num_gat_layers'] = 0
+    elif ablation_config.get('gat_only', False):
+        model_config['num_gcn_layers'] = 0
+
+    if ablation_config.get('rebuild_cache', False):
+        data_config['rebuild_cache'] = True
+
+    ablation_tag = build_ablation_tag(config)
+    ablation_config['resolved_tag'] = ablation_tag
+
+    base_experiment_name = ablation_config.get('base_experiment_name') or experiment_config.get('name', 'graph_transform_binary_bond')
+    experiment_config['base_name'] = base_experiment_name
+    experiment_config['name'] = f"{base_experiment_name}_{ablation_tag}"
+
+    for section_config, key in (
+        (training_config, 'checkpoint_dir'),
+        (evaluation_config, 'output_metric_dir'),
+        (evaluation_config, 'output_pred_dir'),
+        (logging_config, 'log_dir'),
+    ):
+        base_dir = section_config.get(key)
+        if base_dir:
+            section_config[key] = os.path.join(base_dir, ablation_tag)
+
+    return config
+
+
 def build_evaluation_id(checkpoint_reference: str, phase: str) -> str:
     checkpoint_stem = sanitize_filename_component(os.path.splitext(os.path.basename(checkpoint_reference))[0])
     checkpoint_parent = sanitize_filename_component(os.path.basename(os.path.dirname(checkpoint_reference)))
@@ -373,8 +447,8 @@ def load_config(config_path: str, args: argparse.Namespace) -> Dict[str, Any]:
         config['training']['learning_rate'] = args.learning_rate
     if args.device:
         config['device']['device_type'] = args.device
-    
-    return config
+
+    return apply_ablation_config(config)
 
 
 def create_model(config: Dict[str, Any], device: torch.device) -> nn.Module:

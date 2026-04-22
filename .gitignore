@@ -7,7 +7,7 @@ best_model/*
 result/*
 dataset/*
 PBCLA/__pycache__/**
-
+REDEME.md
 # 先取消忽略 result 目录本身
 !result/
 

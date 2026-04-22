@@ -230,36 +230,6 @@ experiment:
   # 可重现性
   benchmark: true
 
-# 消融实验配置
-ablation:
-  # 建议始终给每个实验一个唯一 tag；会自动拼到 checkpoint/result/log 目录下
-  # 例如 checkpoints/graph_transform/sequence_graph/20260422_123456/
-  # 设为 null 时，会根据下方开关自动推导 baseline / sequence_graph / hybrid_graph / no_global_node / gcn_only / gat_only
-  tag: base
-  # 如不填写，则默认使用 experiment.name 作为基名，再自动拼接 tag
-  base_experiment_name: null
-
-  # 第一类：图结构是否真的有用
-  # baseline: 两个都 false，沿用 data.graph_strategy
-  # sequence_graph: use_sequence_graph=true
-  # hybrid_graph: use_hybrid_graph=true
-  use_sequence_graph: false
-  use_hybrid_graph: false
-
-  # 第二类：全局建模是否有用
-  # no_global_node: true
-  disable_global_node: false
-
-  # 第三类：主干到底是谁在起作用
-  # baseline: 两个都 false
-  # GCN-only: gcn_only=true
-  # GAT-only: gat_only=true
-  gcn_only: false
-  gat_only: false
-
-  # 图结构相关消融切换后如需强制重建缓存可开启
-  rebuild_cache: false
-
 # 高级配置
 advanced:
   # 模型集成
