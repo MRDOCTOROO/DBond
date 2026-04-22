@@ -13,6 +13,8 @@ import pandas as pd
 import torch
 import yaml
 
+from train_graph_model import apply_ablation_config
+
 TRAIN_SUFFIX = ".train.fbr.shuffle.multi.csv"
 TEST_SUFFIX = ".test.fbr.multi.csv"
 DEFAULT_FOLD_DIR = "dataset/5fold"
@@ -82,6 +84,21 @@ def make_fold_config(base_config, fold_id: str, fold_dir: str, cv_root: str, fol
     return config, run_root, checkpoint_root
 
 
+def resolve_fold_runtime_paths(fold_config, checkpoint_root: str, run_root: str):
+    """按 train_graph_model 的 ablation 规则推导实际运行输出路径。"""
+    resolved_config = apply_ablation_config(deepcopy(fold_config))
+    checkpoint_search_root = resolved_config["training"]["checkpoint_dir"]
+    metric_csv_path = os.path.join(
+        resolved_config.get("evaluation", {}).get("output_metric_dir", os.path.join(run_root, "metrics")),
+        "latest_test_metric.csv",
+    )
+    pred_csv_path = os.path.join(
+        resolved_config.get("evaluation", {}).get("output_pred_dir", os.path.join(run_root, "preds")),
+        "latest_test.pred.csv",
+    )
+    return checkpoint_search_root, metric_csv_path, pred_csv_path
+
+
 def build_command(train_script: str, fold_config_path: str, args, fold_seed: int):
     cmd = [sys.executable, train_script, "--config", fold_config_path, "--seed", str(fold_seed)]
     if args.epochs is not None:
@@ -130,6 +147,11 @@ def main():
     for fold_index, fold_id in enumerate(fold_ids):
         fold_seed = base_seed + fold_index
         fold_config, run_root, checkpoint_root = make_fold_config(base_config, fold_id, args.fold_data_dir, cv_root, fold_seed)
+        checkpoint_search_root, metric_csv_path, pred_csv_path = resolve_fold_runtime_paths(
+            fold_config,
+            checkpoint_root,
+            run_root,
+        )
         os.makedirs(run_root, exist_ok=True)
         fold_config_path = os.path.join(run_root, "config.yaml")
         with open(fold_config_path, "w", encoding="utf-8") as f:
@@ -138,15 +160,17 @@ def main():
         print(f"[5fold] start fold={fold_id} seed={fold_seed}")
         subprocess.run(build_command(train_script, fold_config_path, args, fold_seed), check=True)
 
-        run_dir = latest_subdir(checkpoint_root)
+        run_dir = latest_subdir(checkpoint_search_root)
         best_epoch, best_metrics = load_best_metrics(os.path.join(run_dir, "best_model.pt"))
-        test_metrics = load_metric_csv(os.path.join(run_root, "metrics", "latest_test_metric.csv"))
+        test_metrics = load_metric_csv(metric_csv_path)
         fold_result = {
             "fold_id": fold_id,
             "seed": fold_seed,
             "best_epoch": best_epoch,
             "best_val_f1": best_metrics.get("f1"),
             "checkpoint_dir": run_dir,
+            "metric_csv_path": metric_csv_path,
+            "pred_csv_path": pred_csv_path,
         }
         for metric_name, metric_value in test_metrics.items():
             fold_result[metric_name] = metric_value
