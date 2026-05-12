@@ -136,6 +136,12 @@ def plot_peptide_attention_graph(sequence: str,
         weights = attention_weights.cpu().numpy()
         title = f"Peptide Attention - Layer {layer_index}"
     
+    # 获取权重矩阵的实际大小（可能是裁剪后的节点数）
+    num_nodes = weights.shape[0]
+    
+    # 使用序列长度和权重矩阵大小的最小值
+    effective_len = min(seq_len, num_nodes)
+    
     # 创建图形
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
     
@@ -143,7 +149,7 @@ def plot_peptide_attention_graph(sequence: str,
     G = nx.DiGraph()
     
     # 添加节点（氨基酸）
-    for i in range(seq_len):
+    for i in range(effective_len):
         G.add_node(i, label=sequence[i])
     
     # 添加边（肽键和注意力权重）
@@ -152,10 +158,10 @@ def plot_peptide_attention_graph(sequence: str,
     edge_colors = []
     
     # 只考虑相邻节点之间的注意力权重（肽键）
-    for i in range(seq_len - 1):
+    for i in range(effective_len - 1):
         # 注意力权重（从i到i+1和从i+1到i）
-        weight_forward = weights[i, i + 1] if i + 1 < weights.shape[0] else 0
-        weight_backward = weights[i + 1, i] if i + 1 < weights.shape[0] else 0
+        weight_forward = weights[i, i + 1]
+        weight_backward = weights[i + 1, i]
         avg_weight = (weight_forward + weight_backward) / 2
         
         edges.append((i, i + 1))
@@ -176,7 +182,7 @@ def plot_peptide_attention_graph(sequence: str,
     
     # 绘制图形
     pos = nx.spring_layout(G, seed=42)  # 使用弹簧布局
-    pos = {i: (i, 0) for i in range(seq_len)}  # 线性布局
+    pos = {i: (i, 0) for i in range(effective_len)}  # 线性布局
     
     # 绘制节点
     nx.draw_networkx_nodes(G, pos, ax=ax1, node_size=node_size, 
@@ -191,28 +197,27 @@ def plot_peptide_attention_graph(sequence: str,
                           arrows=True, arrowsize=10)
     
     # 添加节点标签（氨基酸）
-    labels = {i: sequence[i] for i in range(seq_len)}
+    labels = {i: sequence[i] for i in range(effective_len)}
     nx.draw_networkx_labels(G, pos, labels, ax=ax1, font_size=10)
     
     ax1.set_title(f"Peptide Sequence Graph\n{title}", fontsize=12, fontweight='bold')
     ax1.axis('off')
     
     # 右图：注意力权重矩阵（只显示相邻位置）
-    adjacent_weights = np.zeros((seq_len, seq_len))
-    for i in range(seq_len - 1):
-        if i + 1 < weights.shape[0]:
-            adjacent_weights[i, i + 1] = weights[i, i + 1]
-            adjacent_weights[i + 1, i] = weights[i + 1, i]
+    adjacent_weights = np.zeros((effective_len, effective_len))
+    for i in range(effective_len - 1):
+        adjacent_weights[i, i + 1] = weights[i, i + 1]
+        adjacent_weights[i + 1, i] = weights[i + 1, i]
     
     im = ax2.imshow(adjacent_weights, cmap='YlOrRd', aspect='auto')
     plt.colorbar(im, ax=ax2, label='Attention Weight')
     
     # 设置刻度
-    if seq_len <= 30:
-        ax2.set_xticks(range(seq_len))
-        ax2.set_xticklabels(list(sequence), fontsize=9, rotation=45)
-        ax2.set_yticks(range(seq_len))
-        ax2.set_yticklabels(list(sequence), fontsize=9)
+    if effective_len <= 30:
+        ax2.set_xticks(range(effective_len))
+        ax2.set_xticklabels(list(sequence[:effective_len]), fontsize=9, rotation=45)
+        ax2.set_yticks(range(effective_len))
+        ax2.set_yticklabels(list(sequence[:effective_len]), fontsize=9)
     
     ax2.set_title("Adjacent Attention Weights", fontsize=12, fontweight='bold')
     ax2.set_xlabel("Key Position", fontsize=10)
