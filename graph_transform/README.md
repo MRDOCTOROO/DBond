@@ -483,6 +483,13 @@ debug:
 - **检查点管理**：支持断点续训
 - **TensorBoard**：实时监控训练过程
 
+##### 注意力可视化
+- **注意力权重提取**：从训练好的模型中提取多头注意力权重
+- **热力图可视化**：展示注意力权重矩阵，分析模型关注区域
+- **肽段结构图**：在肽段序列图上叠加注意力权重，直观显示模型关注点
+- **注意力头分析**：比较不同注意力头的模式，分析其对键断裂的预测能力
+- **综合报告**：自动生成可视化报告，包含统计分析和图表
+
 ### 9. 输出文件说明
 
 #### 9.1 检查点文件
@@ -585,11 +592,80 @@ graph_transform/
 ├── scripts/
 │   ├── train_graph_model.py      # 训练脚本
 │   ├── evaluate_graph_model.py  # 评估脚本
-│   └── visualize_sample_graph.py # 可视化脚本
+│   ├── visualize_sample_graph.py # 可视化脚本
+│   └── attention_visualization.py # 注意力可视化脚本
+├── utils/
+│   ├── attention_extractor.py   # 注意力权重提取
+│   └── visualization.py         # 可视化工具
 └── README.md                    # 本文档
 ```
 
-### 12. 引用
+### 12. 注意力可视化使用指南
+
+#### 12.1 功能概述
+注意力可视化工具用于分析GraphTransformer模型的可解释性，包括：
+- 注意力权重热力图
+- 肽段结构图叠加注意力
+- 注意力头模式分析
+- 综合分析报告
+
+#### 12.2 使用步骤
+
+##### 步骤1：准备文件
+1. 训练好的模型检查点文件（.pt格式）
+2. 测试数据CSV文件（与训练数据格式相同）
+3. 配置文件（YAML格式）
+
+##### 步骤2：运行可视化脚本
+```bash
+python graph_transform/scripts/attention_visualization.py \
+    --config graph_transform/config/default.yaml \
+    --checkpoint path/to/model.pt \
+    --input_csv path/to/test_data.csv \
+    --output_dir results/attention_viz \
+    --num_samples 5
+```
+
+##### 步骤3：查看结果
+可视化结果将保存在指定的输出目录中，包括：
+- `sample_X/`：每个样本的可视化结果
+  - `attention_heatmap_layerY.png`：注意力热力图
+  - `peptide_attention_layerY.png`：肽段结构图
+  - `attention_heads_layerY.png`：注意力头比较图
+  - `attention_analysis_layerY.txt`：分析结果
+- `comprehensive_analysis.png`：综合分析图
+
+#### 12.3 参数说明
+- `--config`：配置文件路径
+- `--checkpoint`：模型检查点路径
+- `--input_csv`：输入CSV文件路径
+- `--output_dir`：输出目录（默认：results/attention_viz）
+- `--num_samples`：要可视化的样本数量（默认：5）
+- `--sample_indices`：指定样本索引，逗号分隔（如：0,5,10）
+- `--batch_size`：批处理大小（默认：1）
+- `--device`：计算设备（cpu/cuda/mps）
+- `--max_seq_len`：最大序列长度
+
+#### 12.4 注意事项
+1. **模型兼容性**：确保检查点与配置文件匹配
+2. **数据格式**：CSV文件需包含`seq`列（序列）和`labels`列（键断裂标签）
+3. **GPU内存**：可视化过程需要较多GPU内存，建议使用batch_size=1
+4. **字符显示**：所有图表使用英文标签，确保兼容性
+
+#### 12.5 示例输出
+```
+results/attention_viz/
+├── sample_0/
+│   ├── attention_heatmap_layer0.png
+│   ├── peptide_attention_layer0.png
+│   ├── attention_heads_layer0.png
+│   └── attention_analysis_layer0.txt
+├── sample_1/
+│   └── ...
+└── comprehensive_analysis.png
+```
+
+### 13. 引用
 
 如果您在研究中使用了本代码，请引用：
 
@@ -602,11 +678,11 @@ graph_transform/
 }
 ```
 
-### 13. 许可证
+### 14. 许可证
 
 本项目采用 MIT 许可证。详见 LICENSE 文件。
 
-### 14. 联系方式
+### 15. 联系方式
 
 如有问题或建议，请通过以下方式联系：
 - 提交 Issue：https://github.com/yourusername/DBond/issues
@@ -614,4 +690,4 @@ graph_transform/
 
 ---
 
-**最后更新**：2026年3月26日
+**最后更新**：2026年5月12日
