@@ -129,15 +129,22 @@ class AttentionExtractor:
         if 'sequence' in sample_data and 'sequences' not in sample_data:
             batch_data['sequences'] = [sample_data['sequence']]
         
+        # 不需要添加batch维度的字段（边相关字段）
+        no_batch_keys = {'edge_index', 'edge_types', 'edge_distances', 'edge_attr', 'bond_edge_map'}
+        
         # 处理其他字段
         for key, value in sample_data.items():
             if key == 'sequence':
                 continue  # 已经处理过
             
             if isinstance(value, torch.Tensor):
-                batch_data[key] = value.unsqueeze(0).to(self.device)
+                if key in no_batch_keys:
+                    # 边相关字段不添加batch维度，但需要移动到设备
+                    batch_data[key] = value.to(self.device)
+                else:
+                    batch_data[key] = value.unsqueeze(0).to(self.device)
             elif isinstance(value, list):
-                # 列表类型保持不变（如 edge_index）
+                # 列表类型保持不变
                 batch_data[key] = value
             else:
                 # 标量类型转换为张量
