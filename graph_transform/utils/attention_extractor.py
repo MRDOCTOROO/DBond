@@ -122,13 +122,67 @@ class AttentionExtractor:
         Returns:
             List[torch.Tensor]: 每个注意力层的权重列表
         """
-        # 添加batch维度
+        # 添加batch维度并转换键名
         batch_data = {}
+        
+        # 处理序列键名（单个样本使用 'sequence'，批处理使用 'sequences'）
+        if 'sequence' in sample_data and 'sequences' not in sample_data:
+            batch_data['sequences'] = [sample_data['sequence']]
+        
+        # 处理其他字段
         for key, value in sample_data.items():
+            if key == 'sequence':
+                continue  # 已经处理过
+            
             if isinstance(value, torch.Tensor):
                 batch_data[key] = value.unsqueeze(0).to(self.device)
-            else:
+            elif isinstance(value, list):
+                # 列表类型保持不变（如 edge_index）
                 batch_data[key] = value
+            else:
+                # 标量类型转换为张量
+                if isinstance(value, (int, float)):
+                    batch_data[key] = torch.tensor([value], dtype=torch.float32).to(self.device)
+                else:
+                    batch_data[key] = value
+        
+        # 确保必要的字段存在
+        if 'seq_lens' not in batch_data and 'seq_len' in sample_data:
+            batch_data['seq_lens'] = torch.tensor([sample_data['seq_len']], dtype=torch.long).to(self.device)
+        
+        if 'node_lens' not in batch_data and 'node_len' in sample_data:
+            batch_data['node_lens'] = torch.tensor([sample_data['node_len']], dtype=torch.long).to(self.device)
+        
+        # 确保 charges, pep_masses, intensities 等字段存在（复数形式）
+        for singular, plural in [('charge', 'charges'), ('pep_mass', 'pep_masses'), 
+                                 ('intensity', 'intensities'), ('nce', 'nces'), ('rt', 'rts')]:
+            if singular in sample_data and plural not in batch_data:
+                batch_data[plural] = torch.tensor([sample_data[singular]], dtype=torch.float32).to(self.device)
+        
+        # 确保 state_vars 存在
+        if 'state_vars' not in batch_data:
+            if 'charge' in sample_data and 'pep_mass' in sample_data and 'intensity' in sample_data:
+                state_vars = torch.tensor([
+                    [sample_data['charge'], sample_data['pep_mass'], sample_data['intensity']]
+                ], dtype=torch.float32).to(self.device)
+                batch_data['state_vars'] = state_vars
+        
+        # 确保 env_vars 存在
+        if 'env_vars' not in batch_data:
+            if 'nce' in sample_data:
+                # 获取环境变量值
+                env_value = sample_data.get('env_feature_value', sample_data.get('rt', 0.0))
+                env_vars = torch.tensor([
+                    [sample_data['nce'], env_value]
+                ], dtype=torch.float32).to(self.device)
+                batch_data['env_vars'] = env_vars
+        
+        # 确保 secondary_envs 存在
+        if 'secondary_envs' not in batch_data:
+            if 'env_feature_value' in sample_data:
+                batch_data['secondary_envs'] = torch.tensor([sample_data['env_feature_value']], dtype=torch.float32).to(self.device)
+            elif 'rt' in sample_data:
+                batch_data['secondary_envs'] = torch.tensor([sample_data['rt']], dtype=torch.float32).to(self.device)
         
         return self.extract_attention_weights(batch_data)
     
