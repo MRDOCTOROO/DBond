@@ -93,6 +93,83 @@ def parse_sample_indices(indices_text: str) -> List[int]:
     return indices
 
 
+def infer_model_config_from_checkpoint(checkpoint_path: str, base_config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    从检查点推断模型配置
+    
+    Args:
+        checkpoint_path: 检查点路径
+        base_config: 基础配置
+        
+    Returns:
+        Dict[str, Any]: 推断的配置
+    """
+    logger = logging.getLogger("attention_visualization")
+    
+    # 加载检查点
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    state_dict = checkpoint.get('model_state_dict', checkpoint)
+    
+    # 推断配置
+    inferred_config = base_config.copy()
+    model_config = inferred_config.setdefault('model', {})
+    
+    # 从 bond_head.0.weight 推断 bond_feature_dim
+    if 'bond_head.0.weight' in state_dict:
+        bond_weight_shape = state_dict['bond_head.0.weight'].shape
+        bond_feature_dim = bond_weight_shape[1]  # [hidden_dim, bond_feature_dim]
+        hidden_dim = bond_weight_shape[0]
+        
+        logger.info(f"Inferred from checkpoint: hidden_dim={hidden_dim}, bond_feature_dim={bond_feature_dim}")
+        
+        # 推断哪些特征被启用
+        # bond_feature_dim = hidden_dim * 2 + (edge_repr ? hidden_dim : 0) + (diff ? hidden_dim : 0) + (product ? hidden_dim : 0)
+        base_dim = hidden_dim * 2
+        remaining_dim = bond_feature_dim - base_dim
+        
+        # 默认都启用
+        bond_use_edge_repr = True
+        bond_use_diff_feature = True
+        bond_use_product_feature = True
+        
+        # 根据剩余维度推断
+        if remaining_dim == hidden_dim * 2:
+            # 只启用了两个特征
+            # 默认禁用 product feature
+            bond_use_product_feature = False
+            logger.info("Inferred: bond_use_product_feature=False")
+        elif remaining_dim == hidden_dim:
+            # 只启用了一个特征
+            bond_use_diff_feature = False
+            bond_use_product_feature = False
+            logger.info("Inferred: bond_use_diff_feature=False, bond_use_product_feature=False")
+        elif remaining_dim == 0:
+            # 没有启用额外特征
+            bond_use_edge_repr = False
+            bond_use_diff_feature = False
+            bond_use_product_feature = False
+            logger.info("Inferred: all bond features disabled")
+        elif remaining_dim == hidden_dim * 3:
+            # 所有特征都启用
+            logger.info("Inferred: all bond features enabled")
+        else:
+            logger.warning(f"Unexpected bond_feature_dim: {bond_feature_dim}, using defaults")
+        
+        model_config['bond_use_edge_repr'] = bond_use_edge_repr
+        model_config['bond_use_diff_feature'] = bond_use_diff_feature
+        model_config['bond_use_product_feature'] = bond_use_product_feature
+        model_config['hidden_dim'] = hidden_dim
+    
+    # 从其他权重推断更多配置
+    # 例如从 node_encoder 推断 alphabet 大小
+    if 'node_encoder.aa_embedding.weight' in state_dict:
+        aa_embedding_shape = state_dict['node_encoder.aa_embedding.weight'].shape
+        vocab_size = aa_embedding_shape[0]
+        logger.info(f"Inferred vocab_size: {vocab_size}")
+    
+    return inferred_config
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
@@ -134,6 +211,8 @@ def main():
                        help="计算设备")
     parser.add_argument("--max_seq_len", type=int, default=None,
                        help="最大序列长度")
+    parser.add_argument("--infer_config", action="store_true",
+                       help="从检查点自动推断模型配置（解决配置不匹配问题）")
     
     args = parser.parse_args()
     
@@ -153,6 +232,12 @@ def main():
     # 加载配置
     config = load_config(args.config)
     
+    # 从检查点推断配置（如果启用）
+    if args.infer_config:
+        logger.info("Inferring model config from checkpoint...")
+        config = infer_model_config_from_checkpoint(args.checkpoint, config)
+        logger.info("Using inferred config from checkpoint")
+    
     # 设置设备
     if args.device:
         config.setdefault("device", {})["auto_detect"] = False
@@ -164,8 +249,19 @@ def main():
     # 加载模型
     model_config = build_model_config(config)
     model = GraphTransformer(model_config).to(device)
-    CheckpointManager.load_checkpoint(args.checkpoint, model=model, device=device)
-    logger.info(f"Loaded checkpoint: {args.checkpoint}")
+    
+    # 加载检查点（使用 strict=False 以处理可能的配置差异）
+    try:
+        CheckpointManager.load_checkpoint(args.checkpoint, model=model, device=device)
+        logger.info(f"Loaded checkpoint: {args.checkpoint}")
+    except RuntimeError as e:
+        if "size mismatch" in str(e) and not args.infer_config:
+            logger.warning(f"Config mismatch detected: {e}")
+            logger.warning("Try using --infer_config to automatically infer model config from checkpoint")
+            logger.warning("Or use the correct config file that matches the checkpoint")
+            raise
+        else:
+            raise
     
     # 创建注意力提取器
     extractor = AttentionExtractor(model, device)
