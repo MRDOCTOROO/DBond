@@ -100,6 +100,7 @@ def plot_attention_heatmap(attention_weights: torch.Tensor,
 def plot_peptide_attention_graph(sequence: str,
                                 attention_weights: torch.Tensor,
                                 layer_index: int,
+                                edge_index: Optional[torch.Tensor] = None,
                                 head_index: Optional[int] = None,
                                 bond_labels: Optional[torch.Tensor] = None,
                                 save_path: Optional[str] = None,
@@ -111,8 +112,9 @@ def plot_peptide_attention_graph(sequence: str,
     
     Args:
         sequence: 肽段序列
-        attention_weights: 注意力权重张量 [num_nodes, num_nodes] 或 [num_heads, num_nodes, num_nodes]
+        attention_weights: 注意力权重张量 [num_edges, num_heads] 或 [num_edges]
         layer_index: 注意力层索引
+        edge_index: 边索引 [2, num_edges]，用于映射边权重到节点对
         head_index: 注意力头索引
         bond_labels: 键断裂标签（0或1）
         save_path: 保存路径
@@ -125,22 +127,46 @@ def plot_peptide_attention_graph(sequence: str,
     """
     seq_len = len(sequence)
     
-    if attention_weights.dim() == 3:
+    # 处理注意力权重
+    if attention_weights.dim() == 2:
+        # [num_edges, num_heads]
         if head_index is not None:
-            weights = attention_weights[head_index].cpu().numpy()
+            edge_weights_np = attention_weights[:, head_index].cpu().numpy()
             title = f"Peptide Attention - Layer {layer_index}, Head {head_index}"
         else:
-            weights = attention_weights.mean(dim=0).cpu().numpy()
+            edge_weights_np = attention_weights.mean(dim=1).cpu().numpy()
             title = f"Peptide Attention - Layer {layer_index}, Average of All Heads"
     else:
-        weights = attention_weights.cpu().numpy()
+        # [num_edges]
+        edge_weights_np = attention_weights.cpu().numpy()
         title = f"Peptide Attention - Layer {layer_index}"
     
-    # 获取权重矩阵的实际大小（可能是裁剪后的节点数）
-    num_nodes = weights.shape[0]
+    # 构建节点到节点的注意力矩阵
+    num_nodes = seq_len
+    if edge_index is not None:
+        # 从 edge_index 获取节点数
+        num_nodes = int(edge_index.max().item()) + 1
     
-    # 使用序列长度和权重矩阵大小的最小值
+    # 使用序列长度和节点数的最小值
     effective_len = min(seq_len, num_nodes)
+    
+    # 创建节点到节点的注意力矩阵
+    attention_matrix = np.zeros((effective_len, effective_len))
+    
+    if edge_index is not None:
+        # 使用 edge_index 映射边权重到节点对
+        edge_index_np = edge_index.cpu().numpy()
+        for i in range(edge_index_np.shape[1]):
+            src, dst = int(edge_index_np[0, i]), int(edge_index_np[1, i])
+            if src < effective_len and dst < effective_len:
+                # 累加权重（可能有多条边连接同一对节点）
+                attention_matrix[src, dst] += edge_weights_np[i]
+    else:
+        # 如果没有 edge_index，假设是顺序连接
+        for i in range(effective_len - 1):
+            if i < len(edge_weights_np):
+                attention_matrix[i, i + 1] = edge_weights_np[i]
+                attention_matrix[i + 1, i] = edge_weights_np[i]
     
     # 创建图形
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
@@ -154,18 +180,18 @@ def plot_peptide_attention_graph(sequence: str,
     
     # 添加边（肽键和注意力权重）
     edges = []
-    edge_weights = []
+    edge_weights_list = []
     edge_colors = []
     
     # 只考虑相邻节点之间的注意力权重（肽键）
     for i in range(effective_len - 1):
         # 注意力权重（从i到i+1和从i+1到i）
-        weight_forward = weights[i, i + 1]
-        weight_backward = weights[i + 1, i]
+        weight_forward = attention_matrix[i, i + 1]
+        weight_backward = attention_matrix[i + 1, i]
         avg_weight = (weight_forward + weight_backward) / 2
         
         edges.append((i, i + 1))
-        edge_weights.append(avg_weight)
+        edge_weights_list.append(avg_weight)
         
         # 根据键断裂标签设置颜色
         if bond_labels is not None and i < bond_labels.size(0):
@@ -178,7 +204,7 @@ def plot_peptide_attention_graph(sequence: str,
     
     # 添加边到图
     for i, (src, dst) in enumerate(edges):
-        G.add_edge(src, dst, weight=edge_weights[i], color=edge_colors[i])
+        G.add_edge(src, dst, weight=edge_weights_list[i], color=edge_colors[i])
     
     # 绘制图形
     pos = nx.spring_layout(G, seed=42)  # 使用弹簧布局
@@ -189,7 +215,7 @@ def plot_peptide_attention_graph(sequence: str,
                           node_color='lightblue', alpha=0.8)
     
     # 绘制边（宽度根据注意力权重）
-    edge_widths = [w * edge_scale for w in edge_weights]
+    edge_widths = [w * edge_scale for w in edge_weights_list]
     edge_colors_list = [G[u][v]['color'] for u, v in G.edges()]
     
     nx.draw_networkx_edges(G, pos, ax=ax1, width=edge_widths, 
@@ -206,8 +232,8 @@ def plot_peptide_attention_graph(sequence: str,
     # 右图：注意力权重矩阵（只显示相邻位置）
     adjacent_weights = np.zeros((effective_len, effective_len))
     for i in range(effective_len - 1):
-        adjacent_weights[i, i + 1] = weights[i, i + 1]
-        adjacent_weights[i + 1, i] = weights[i + 1, i]
+        adjacent_weights[i, i + 1] = attention_matrix[i, i + 1]
+        adjacent_weights[i + 1, i] = attention_matrix[i + 1, i]
     
     im = ax2.imshow(adjacent_weights, cmap='YlOrRd', aspect='auto')
     plt.colorbar(im, ax=ax2, label='Attention Weight')
@@ -234,6 +260,7 @@ def plot_peptide_attention_graph(sequence: str,
 
 def plot_attention_head_comparison(attention_weights: torch.Tensor,
                                  layer_index: int,
+                                 edge_index: Optional[torch.Tensor] = None,
                                  sequence: Optional[str] = None,
                                  save_path: Optional[str] = None,
                                  figsize: Tuple[int, int] = (15, 10),
@@ -242,8 +269,9 @@ def plot_attention_head_comparison(attention_weights: torch.Tensor,
     比较不同注意力头的权重
     
     Args:
-        attention_weights: 注意力权重张量 [num_heads, num_nodes, num_nodes]
+        attention_weights: 注意力权重张量 [num_edges, num_heads] 或 [num_edges]
         layer_index: 注意力层索引
+        edge_index: 边索引 [2, num_edges]
         sequence: 肽段序列
         save_path: 保存路径
         figsize: 图形大小
@@ -252,11 +280,16 @@ def plot_attention_head_comparison(attention_weights: torch.Tensor,
     Returns:
         plt.Figure: matplotlib图形对象
     """
-    if attention_weights.dim() != 3:
-        raise ValueError("Attention weights must have 3 dimensions [num_heads, num_nodes, num_nodes]")
-    
-    num_heads = attention_weights.shape[0]
-    num_heads = min(num_heads, max_heads)
+    # 处理注意力权重
+    if attention_weights.dim() == 2:
+        # [num_edges, num_heads]
+        num_heads = attention_weights.shape[1]
+        num_heads = min(num_heads, max_heads)
+        edge_weights_np = attention_weights.cpu().numpy()
+    else:
+        # [num_edges] - 单头情况
+        num_heads = 1
+        edge_weights_np = attention_weights.cpu().numpy().reshape(-1, 1)
     
     # 计算子图布局
     cols = min(4, num_heads)
@@ -273,14 +306,38 @@ def plot_attention_head_comparison(attention_weights: torch.Tensor,
     fig.suptitle(f"Attention Heads Comparison - Layer {layer_index}", 
                 fontsize=16, fontweight='bold')
     
+    # 确定节点数
+    num_nodes = 0
+    if sequence is not None:
+        num_nodes = len(sequence)
+    if edge_index is not None:
+        num_nodes = max(num_nodes, int(edge_index.max().item()) + 1)
+    if num_nodes == 0:
+        # 无法确定节点数，使用边数估计
+        num_nodes = int(np.sqrt(edge_weights_np.shape[0])) + 1
+    
     for head_idx in range(num_heads):
         row = head_idx // cols
         col = head_idx % cols
         ax = axes[row, col]
         
-        weights = attention_weights[head_idx].cpu().numpy()
+        # 构建节点到节点的注意力矩阵
+        attention_matrix = np.zeros((num_nodes, num_nodes))
         
-        im = ax.imshow(weights, cmap='viridis', aspect='auto')
+        if edge_index is not None:
+            # 使用 edge_index 映射边权重到节点对
+            edge_index_np = edge_index.cpu().numpy()
+            for i in range(edge_index_np.shape[1]):
+                src, dst = int(edge_index_np[0, i]), int(edge_index_np[1, i])
+                if src < num_nodes and dst < num_nodes:
+                    attention_matrix[src, dst] += edge_weights_np[i, head_idx]
+        else:
+            # 如果没有 edge_index，假设是顺序连接
+            for i in range(min(num_nodes - 1, edge_weights_np.shape[0])):
+                attention_matrix[i, i + 1] = edge_weights_np[i, head_idx]
+                attention_matrix[i + 1, i] = edge_weights_np[i, head_idx]
+        
+        im = ax.imshow(attention_matrix, cmap='viridis', aspect='auto')
         plt.colorbar(im, ax=ax)
         
         ax.set_title(f"Head {head_idx}", fontsize=12, fontweight='bold')
@@ -312,38 +369,62 @@ def plot_attention_head_comparison(attention_weights: torch.Tensor,
 def analyze_attention_patterns(attention_weights: torch.Tensor,
                               bond_labels: torch.Tensor,
                               layer_index: int,
+                              edge_index: Optional[torch.Tensor] = None,
                               head_index: Optional[int] = None) -> Dict[str, Any]:
     """
     分析注意力模式与键断裂的关系
     
     Args:
-        attention_weights: 注意力权重张量
+        attention_weights: 注意力权重张量 [num_edges, num_heads] 或 [num_edges]
         bond_labels: 键断裂标签（0或1）
         layer_index: 注意力层索引
+        edge_index: 边索引 [2, num_edges]
         head_index: 注意力头索引
         
     Returns:
         Dict[str, Any]: 分析结果
     """
-    if attention_weights.dim() == 3:
+    # 处理注意力权重
+    if attention_weights.dim() == 2:
+        # [num_edges, num_heads]
         if head_index is not None:
-            weights = attention_weights[head_index].cpu().numpy()
+            edge_weights_np = attention_weights[:, head_index].cpu().numpy()
         else:
-            weights = attention_weights.mean(dim=0).cpu().numpy()
+            edge_weights_np = attention_weights.mean(dim=1).cpu().numpy()
     else:
-        weights = attention_weights.cpu().numpy()
+        # [num_edges]
+        edge_weights_np = attention_weights.cpu().numpy()
     
     bond_labels_np = bond_labels.cpu().numpy()
     seq_len = len(bond_labels_np)
     
+    # 构建节点到节点的注意力矩阵
+    num_nodes = seq_len
+    if edge_index is not None:
+        num_nodes = int(edge_index.max().item()) + 1
+    
+    attention_matrix = np.zeros((num_nodes, num_nodes))
+    
+    if edge_index is not None:
+        # 使用 edge_index 映射边权重到节点对
+        edge_index_np = edge_index.cpu().numpy()
+        for i in range(edge_index_np.shape[1]):
+            src, dst = int(edge_index_np[0, i]), int(edge_index_np[1, i])
+            if src < num_nodes and dst < num_nodes:
+                attention_matrix[src, dst] += edge_weights_np[i]
+    else:
+        # 如果没有 edge_index，假设是顺序连接
+        for i in range(min(seq_len - 1, len(edge_weights_np))):
+            attention_matrix[i, i + 1] = edge_weights_np[i]
+            attention_matrix[i + 1, i] = edge_weights_np[i]
+    
     # 计算相邻位置的注意力权重
     adjacent_weights = []
     for i in range(seq_len - 1):
-        if i + 1 < weights.shape[0]:
-            # 取两个方向的平均值
-            w1 = weights[i, i + 1]
-            w2 = weights[i + 1, i]
-            adjacent_weights.append((w1 + w2) / 2)
+        # 取两个方向的平均值
+        w1 = attention_matrix[i, i + 1]
+        w2 = attention_matrix[i + 1, i]
+        adjacent_weights.append((w1 + w2) / 2)
     
     adjacent_weights = np.array(adjacent_weights)
     

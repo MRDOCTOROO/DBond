@@ -358,19 +358,24 @@ def main():
             # 肽段结构图
             peptide_path = os.path.join(sample_dir, f"peptide_attention_layer{layer_idx}.png")
             plot_peptide_attention_graph(
-                sequence, layer_weights, layer_idx, bond_labels=bond_labels, save_path=peptide_path
+                sequence, layer_weights, layer_idx, 
+                edge_index=sample_data.get('edge_index'),
+                bond_labels=bond_labels, save_path=peptide_path
             )
             
             # 如果是多头注意力，生成头比较图
-            if layer_weights.dim() == 3:
+            if layer_weights.dim() == 2 and layer_weights.shape[1] > 1:
                 heads_path = os.path.join(sample_dir, f"attention_heads_layer{layer_idx}.png")
                 plot_attention_head_comparison(
-                    layer_weights, layer_idx, sequence=sequence, save_path=heads_path
+                    layer_weights, layer_idx, 
+                    edge_index=sample_data.get('edge_index'),
+                    sequence=sequence, save_path=heads_path
                 )
             
             # 分析注意力模式
             analysis = analyze_attention_patterns(
-                layer_weights, bond_labels, layer_idx
+                layer_weights, bond_labels, layer_idx,
+                edge_index=sample_data.get('edge_index')
             )
             
             # 保存分析结果
