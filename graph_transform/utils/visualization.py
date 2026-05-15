@@ -468,7 +468,7 @@ def analyze_attention_patterns(attention_weights: torch.Tensor,
 
 def plot_attention_analysis(analysis_results: List[Dict[str, Any]],
                            save_path: Optional[str] = None,
-                           figsize: Tuple[int, int] = (12, 8)) -> plt.Figure:
+                           figsize: Tuple[int, int] = (12, 10)) -> plt.Figure:
     """
     绘制注意力分析结果
     
@@ -489,6 +489,9 @@ def plot_attention_analysis(analysis_results: List[Dict[str, Any]],
     intact_means = [r['intact_bond_attention_mean'] for r in analysis_results]
     correlations = [r.get('correlation', 0) for r in analysis_results]
     
+    # 子图标签
+    subplot_labels = ['(a)', '(b)', '(c)', '(d)']
+    
     # 图1：断裂键vs完整键的注意力权重
     ax1 = axes[0, 0]
     x = range(len(analysis_results))
@@ -499,7 +502,7 @@ def plot_attention_analysis(analysis_results: List[Dict[str, Any]],
     
     ax1.set_xlabel('Layer/Head', fontsize=12)
     ax1.set_ylabel('Mean Attention Weight', fontsize=12)
-    ax1.set_title('Attention on Broken vs Intact Bonds', fontsize=14, fontweight='bold')
+    ax1.set_title(f'{subplot_labels[0]} Attention on Broken vs Intact Bonds', fontsize=14, fontweight='bold')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     
@@ -512,7 +515,7 @@ def plot_attention_analysis(analysis_results: List[Dict[str, Any]],
     ax2.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
     ax2.set_xlabel('Layer/Head', fontsize=12)
     ax2.set_ylabel('Attention Difference (Broken - Intact)', fontsize=12)
-    ax2.set_title('Attention Preference for Broken Bonds', fontsize=14, fontweight='bold')
+    ax2.set_title(f'{subplot_labels[1]} Attention Preference for Broken Bonds', fontsize=14, fontweight='bold')
     ax2.grid(True, alpha=0.3)
     
     # 图3：相关性
@@ -523,7 +526,7 @@ def plot_attention_analysis(analysis_results: List[Dict[str, Any]],
     ax3.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
     ax3.set_xlabel('Layer/Head', fontsize=12)
     ax3.set_ylabel('Correlation Coefficient', fontsize=12)
-    ax3.set_title('Attention-Breakage Correlation', fontsize=14, fontweight='bold')
+    ax3.set_title(f'{subplot_labels[2]} Attention-Breakage Correlation', fontsize=14, fontweight='bold')
     ax3.grid(True, alpha=0.3)
     
     # 图4：键数量统计
@@ -536,7 +539,7 @@ def plot_attention_analysis(analysis_results: List[Dict[str, Any]],
     
     ax4.set_xlabel('Layer/Head', fontsize=12)
     ax4.set_ylabel('Number of Bonds', fontsize=12)
-    ax4.set_title('Bond Distribution in Analysis', fontsize=14, fontweight='bold')
+    ax4.set_title(f'{subplot_labels[3]} Bond Distribution in Analysis', fontsize=14, fontweight='bold')
     ax4.legend()
     ax4.grid(True, alpha=0.3)
     

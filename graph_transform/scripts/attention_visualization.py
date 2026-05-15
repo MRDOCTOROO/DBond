@@ -202,9 +202,13 @@ def main():
     parser.add_argument("--output_dir", type=str, default="results/attention_viz",
                        help="输出目录")
     parser.add_argument("--num_samples", type=int, default=5,
-                       help="要可视化的样本数量")
+                       help="要可视化的样本数量（用于案例研究）")
+    parser.add_argument("--num_stat_samples", type=int, default=500,
+                       help="用于统计分析的样本数量（建议500-1000）")
     parser.add_argument("--sample_indices", type=str, default=None,
                        help="指定样本索引，逗号分隔，如 0,5,10")
+    parser.add_argument("--skip_case_study", action="store_true",
+                       help="跳过案例研究，只进行统计分析")
     parser.add_argument("--batch_size", type=int, default=1,
                        help="批处理大小")
     parser.add_argument("--device", type=str, choices=["cpu", "cuda", "mps"], default=None,
@@ -410,6 +414,66 @@ def main():
             analysis_plot_path = os.path.join(args.output_dir, "comprehensive_analysis.png")
             plot_attention_analysis(all_analysis_results, save_path=analysis_plot_path)
     
+    # 统计分析（使用更多样本）
+    if args.num_stat_samples > args.num_samples:
+        logger.info(f"Running statistical analysis with {args.num_stat_samples} samples...")
+        
+        # 随机选择样本进行统计分析
+        import random
+        random.seed(42)  # 固定随机种子以便复现
+        
+        total_samples = len(test_dataset)
+        stat_sample_count = min(args.num_stat_samples, total_samples)
+        stat_indices = sorted(random.sample(range(total_samples), stat_sample_count))
+        
+        logger.info(f"Selected {stat_sample_count} random samples for statistical analysis")
+        
+        # 存储统计分析结果
+        stat_analysis_results = []
+        
+        # 处理每个统计样本
+        for idx, sample_idx in enumerate(stat_indices):
+            if idx % 100 == 0:
+                logger.info(f"Processing statistical sample {idx}/{stat_sample_count}")
+            
+            try:
+                sample_data = test_dataset[sample_idx]
+                
+                # 提取键断裂标签
+                if 'labels' in sample_data:
+                    bond_labels = sample_data['labels']
+                else:
+                    continue
+                
+                # 提取注意力权重
+                attention_weights = extractor.extract_attention_for_sample(sample_data)
+                
+                # 为每个层进行分析
+                for layer_idx, layer_weights in enumerate(attention_weights):
+                    analysis = analyze_attention_patterns(
+                        layer_weights, bond_labels, layer_idx,
+                        edge_index=sample_data.get('edge_index')
+                    )
+                    analysis['sample_index'] = sample_idx
+                    stat_analysis_results.append(analysis)
+                    
+            except Exception as e:
+                logger.warning(f"Error processing sample {sample_idx}: {e}")
+                continue
+        
+        # 绘制统计分析图
+        if stat_analysis_results:
+            stat_analysis_path = os.path.join(args.output_dir, "comprehensive_analysis_statistical.png")
+            plot_attention_analysis(stat_analysis_results, save_path=stat_analysis_path)
+            logger.info(f"Statistical analysis saved to {stat_analysis_path}")
+            
+            # 保存统计结果到CSV
+            stat_csv_path = os.path.join(args.output_dir, "statistical_analysis_results.csv")
+            import pandas as pd
+            stat_df = pd.DataFrame(stat_analysis_results)
+            stat_df.to_csv(stat_csv_path, index=False)
+            logger.info(f"Statistical results saved to {stat_csv_path}")
+    
     logger.info(f"Attention visualization completed. Results saved to {args.output_dir}")
     
     # 打印输出文件列表
@@ -429,7 +493,8 @@ def main():
     print("\n" + "="*60)
     print("SUMMARY")
     print("="*60)
-    print(f"Samples visualized: {len(sample_indices)}")
+    print(f"Case study samples: {len(sample_indices)}")
+    print(f"Statistical analysis samples: {args.num_stat_samples}")
     print(f"Output directory: {args.output_dir}")
     print("="*60)
 
