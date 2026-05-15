@@ -209,6 +209,11 @@ def main():
                        help="指定样本索引，逗号分隔，如 0,5,10")
     parser.add_argument("--skip_case_study", action="store_true",
                        help="跳过案例研究，只进行统计分析")
+    parser.add_argument("--sampling_strategy", type=str, choices=["random", "stratified"], 
+                       default="stratified",
+                       help="抽样策略：random=随机抽样，stratified=按序列长度分层抽样（推荐）")
+    parser.add_argument("--num_length_bins", type=int, default=5,
+                       help="分层抽样时的序列长度分组数（默认5组）")
     parser.add_argument("--batch_size", type=int, default=1,
                        help="批处理大小")
     parser.add_argument("--device", type=str, choices=["cpu", "cuda", "mps"], default=None,
@@ -418,15 +423,79 @@ def main():
     if args.num_stat_samples > args.num_samples:
         logger.info(f"Running statistical analysis with {args.num_stat_samples} samples...")
         
-        # 随机选择样本进行统计分析
         import random
         random.seed(42)  # 固定随机种子以便复现
         
         total_samples = len(test_dataset)
         stat_sample_count = min(args.num_stat_samples, total_samples)
-        stat_indices = sorted(random.sample(range(total_samples), stat_sample_count))
         
-        logger.info(f"Selected {stat_sample_count} random samples for statistical analysis")
+        # 根据抽样策略选择样本
+        if args.sampling_strategy == "stratified":
+            # 按序列长度分层抽样
+            logger.info(f"Using stratified sampling by sequence length ({args.num_length_bins} bins)")
+            
+            # 获取所有样本的序列长度
+            if hasattr(test_dataset, 'data') and 'seq' in test_dataset.data.columns:
+                seq_lengths = test_dataset.data['seq'].astype(str).apply(len).values
+            else:
+                # 如果无法获取序列长度，使用随机抽样
+                logger.warning("Cannot access sequence lengths, falling back to random sampling")
+                seq_lengths = None
+            
+            if seq_lengths is not None:
+                # 将序列长度分组
+                import numpy as np
+                length_bins = np.percentile(seq_lengths, np.linspace(0, 100, args.num_length_bins + 1))
+                length_bins = np.unique(length_bins)  # 去除重复值
+                
+                # 为每个分组分配样本数
+                bin_counts = np.histogram(seq_lengths, bins=length_bins)[0]
+                bin_proportions = bin_counts / bin_counts.sum()
+                bin_sample_counts = np.round(bin_proportions * stat_sample_count).astype(int)
+                
+                # 调整样本数以匹配总数
+                diff = stat_sample_count - bin_sample_counts.sum()
+                if diff > 0:
+                    bin_sample_counts[:int(diff)] += 1
+                elif diff < 0:
+                    bin_sample_counts[:int(-diff)] -= 1
+                
+                # 从每个分组中抽样
+                stat_indices = []
+                for i in range(len(length_bins) - 1):
+                    # 获取当前分组的样本索引
+                    bin_mask = (seq_lengths >= length_bins[i]) & (seq_lengths < length_bins[i + 1])
+                    if i == len(length_bins) - 2:  # 最后一个分组包含右边界
+                        bin_mask = (seq_lengths >= length_bins[i]) & (seq_lengths <= length_bins[i + 1])
+                    
+                    bin_indices = np.where(bin_mask)[0].tolist()
+                    
+                    # 从当前分组中抽样
+                    n_samples = min(bin_sample_counts[i], len(bin_indices))
+                    if n_samples > 0:
+                        sampled = random.sample(bin_indices, n_samples)
+                        stat_indices.extend(sampled)
+                
+                stat_indices = sorted(stat_indices)
+                logger.info(f"Stratified sampling: selected {len(stat_indices)} samples from {len(length_bins)-1} length bins")
+                
+                # 打印每个分组的样本数
+                for i in range(len(length_bins) - 1):
+                    bin_mask = (seq_lengths >= length_bins[i]) & (seq_lengths < length_bins[i + 1])
+                    if i == len(length_bins) - 2:
+                        bin_mask = (seq_lengths >= length_bins[i]) & (seq_lengths <= length_bins[i + 1])
+                    bin_count = bin_mask.sum()
+                    logger.info(f"  Bin {i}: length [{length_bins[i]:.0f}-{length_bins[i+1]:.0f}], "
+                              f"total={bin_count}, sampled={bin_sample_counts[i]}")
+            else:
+                # 随机抽样
+                stat_indices = sorted(random.sample(range(total_samples), stat_sample_count))
+        else:
+            # 随机抽样
+            logger.info("Using random sampling")
+            stat_indices = sorted(random.sample(range(total_samples), stat_sample_count))
+        
+        logger.info(f"Selected {len(stat_indices)} samples for statistical analysis")
         
         # 存储统计分析结果
         stat_analysis_results = []
