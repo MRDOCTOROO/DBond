@@ -636,7 +636,8 @@ def plot_peptide_attention_combined(sequence: str,
                                    save_path: Optional[str] = None,
                                    figsize: Tuple[int, int] = (14, 6),
                                    node_size: int = 250,
-                                   edge_scale: float = 4.0) -> plt.Figure:
+                                   edge_scale: float = 4.0,
+                                   show_sequence: bool = False) -> plt.Figure:
     """
     绘制多层肽段注意力图的合并版本（横向排列，减少留白）
     
@@ -649,6 +650,7 @@ def plot_peptide_attention_combined(sequence: str,
         figsize: 图形大小（宽, 高）
         node_size: 节点大小
         edge_scale: 边宽度缩放因子
+        show_sequence: 是否在图片下方显示序列（默认False，因为坐标轴已经有序列）
         
     Returns:
         plt.Figure: matplotlib图形对象
@@ -657,10 +659,21 @@ def plot_peptide_attention_combined(sequence: str,
     seq_len = len(sequence)
     
     # 创建子图布局：每层2个图（序列图 + 热力图），横向排列
-    fig, axes = plt.subplots(1, num_layers * 2, figsize=figsize)
+    # 使用 gridspec 使布局更紧凑
+    fig = plt.figure(figsize=figsize)
     
-    # 调整子图间距
-    plt.subplots_adjust(wspace=0.3, left=0.05, right=0.95, top=0.85, bottom=0.15)
+    if show_sequence:
+        # 如果显示序列，需要额外空间
+        gs = fig.add_gridspec(2, num_layers * 2, height_ratios=[5, 0.3], 
+                             hspace=0.15, wspace=0.3, 
+                             left=0.05, right=0.92, top=0.88, bottom=0.12)
+    else:
+        # 不显示序列，布局更紧凑
+        gs = fig.add_gridspec(1, num_layers * 2, 
+                             wspace=0.3, 
+                             left=0.05, right=0.92, top=0.88, bottom=0.08)
+    
+    im = None  # 用于存储最后一个 imshow 对象，用于 colorbar
     
     for layer_idx, attention_weights in enumerate(attention_weights_list):
         # 处理注意力权重
@@ -692,8 +705,8 @@ def plot_peptide_attention_combined(sequence: str,
                     attention_matrix[i + 1, i] = edge_weights_np[i]
         
         # 获取子图轴
-        ax_graph = axes[layer_idx * 2]      # 序列图
-        ax_heatmap = axes[layer_idx * 2 + 1]  # 热力图
+        ax_graph = fig.add_subplot(gs[0, layer_idx * 2])      # 序列图
+        ax_heatmap = fig.add_subplot(gs[0, layer_idx * 2 + 1])  # 热力图
         
         # === 左侧：肽段序列图 ===
         G = nx.DiGraph()
@@ -736,10 +749,12 @@ def plot_peptide_attention_combined(sequence: str,
                               edge_color=edge_colors_list, alpha=0.7,
                               arrows=True, arrowsize=8)
         
+        # 节点标签（氨基酸单字母）- 使用更小的字体
         labels = {i: sequence[i] for i in range(effective_len)}
-        nx.draw_networkx_labels(G, pos, labels, ax=ax_graph, font_size=9)
+        nx.draw_networkx_labels(G, pos, labels, ax=ax_graph, font_size=8, font_weight='bold')
         
-        ax_graph.set_title(f"Layer {layer_idx}", fontsize=11, fontweight='bold')
+        # 标题放在上方
+        ax_graph.set_title(f"(a) Layer {layer_idx} Sequence Graph", fontsize=10, fontweight='bold', pad=5)
         ax_graph.axis('off')
         
         # === 右侧：注意力热力图 ===
@@ -750,25 +765,44 @@ def plot_peptide_attention_combined(sequence: str,
         
         im = ax_heatmap.imshow(adjacent_weights, cmap='YlOrRd', aspect='auto')
         
-        # 设置刻度
-        if effective_len <= 20:
+        # 设置刻度标签为氨基酸序列
+        if effective_len <= 30:
             ax_heatmap.set_xticks(range(effective_len))
-            ax_heatmap.set_xticklabels(list(sequence[:effective_len]), fontsize=7, rotation=45)
+            ax_heatmap.set_xticklabels(list(sequence[:effective_len]), fontsize=7, rotation=0)
             ax_heatmap.set_yticks(range(effective_len))
             ax_heatmap.set_yticklabels(list(sequence[:effective_len]), fontsize=7)
+        else:
+            # 序列太长时只显示部分刻度
+            tick_interval = max(1, effective_len // 20)
+            ticks = list(range(0, effective_len, tick_interval))
+            ax_heatmap.set_xticks(ticks)
+            ax_heatmap.set_xticklabels([sequence[i] if i < len(sequence) else '' for i in ticks], 
+                                       fontsize=7, rotation=0)
+            ax_heatmap.set_yticks(ticks)
+            ax_heatmap.set_yticklabels([sequence[i] if i < len(sequence) else '' for i in ticks], 
+                                       fontsize=7)
         
-        ax_heatmap.set_title(f"Layer {layer_idx} Attention", fontsize=11, fontweight='bold')
+        # 标题放在上方
+        ax_heatmap.set_title(f"(b) Layer {layer_idx} Attention Weights", fontsize=10, fontweight='bold', pad=5)
         ax_heatmap.set_xlabel("Position", fontsize=9)
         if layer_idx == 0:
             ax_heatmap.set_ylabel("Position", fontsize=9)
+        
+        # 在热力图下方显示序列（可选）
+        if show_sequence:
+            ax_seq = fig.add_subplot(gs[1, layer_idx * 2 + 1])
+            ax_seq.text(0.5, 0.5, sequence[:effective_len], fontsize=8, 
+                       fontfamily='monospace', ha='center', va='center', transform=ax_seq.transAxes)
+            ax_seq.axis('off')
     
-    # 添加总标题
-    fig.suptitle(f"Peptide: {sequence[:30]}{'...' if len(sequence) > 30 else ''}", 
-                fontsize=12, fontweight='bold', y=0.98)
+    # 添加总标题（简洁版，只显示序列前20个字符）
+    seq_display = sequence[:20] + ('...' if len(sequence) > 20 else '')
+    fig.suptitle(f"Peptide: {seq_display}", fontsize=11, fontweight='bold', y=0.98)
     
-    # 添加颜色条（共享）
-    cbar_ax = fig.add_axes([0.96, 0.15, 0.015, 0.7])
-    plt.colorbar(im, cax=cbar_ax, label='Attention Weight')
+    # 添加颜色条（共享，放在右侧）
+    if im is not None:
+        cbar_ax = fig.add_axes([0.94, 0.08, 0.015, 0.8])
+        plt.colorbar(im, cax=cbar_ax, label='Attention Weight')
     
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')

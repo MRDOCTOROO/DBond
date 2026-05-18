@@ -131,13 +131,19 @@ results/attention_viz_paper/
 - `peptide_attention_combined.png`：将所有层的肽段注意力图横向排列，减少留白，适合论文展示
 - `attention_heads_combined.png`：将所有层的多头注意力图横向排列，便于对比不同层的注意力头
 
+**布局优化选项**：
+- `show_sequence=False`（默认）：不显示序列文本，因为坐标轴已有序列标签，布局更紧凑
+- `show_sequence=True`：在图片下方显示完整序列，适合序列较短的情况
+
 ### 3.2 各文件用途
 
 | 文件名 | 用途 | 论文使用建议 |
 |-------|------|-------------|
 | `comprehensive_analysis_statistical.png` | 统计分析主图，展示模型整体机制 | **主图**，基于大样本统计（500-1000个） |
 | `comprehensive_analysis.png` | 案例研究综合图 | 补充材料（3-5个样本） |
-| `peptide_attention_layerX.png` | 展示模型对具体序列的关注点 | 案例研究图（选取1-2个典型序列） |
+| `peptide_attention_combined.png` | **多层肽段注意力合并图（推荐）** | **主图或补充材料**，紧凑布局，适合论文 |
+| `attention_heads_combined.png` | **多层多头注意力合并图（推荐）** | 补充材料，便于对比不同层 |
+| `peptide_attention_layerX.png` | 展示模型对具体序列的关注点 | 补充材料（单独层详细图） |
 | `attention_heads_layerX.png` | 展示不同注意力头的功能分化 | 补充材料 |
 | `attention_heatmap_layerX.png` | 展示注意力权重分布 | 补充材料 |
 | `attention_analysis_layerX.txt` | 单个样本的数值分析结果 | 参考 |
