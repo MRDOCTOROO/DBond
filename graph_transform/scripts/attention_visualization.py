@@ -40,6 +40,8 @@ from utils.visualization import (
     plot_attention_heatmap,
     plot_peptide_attention_graph,
     plot_attention_head_comparison,
+    plot_peptide_attention_combined,
+    plot_attention_heads_combined,
     analyze_attention_patterns,
     plot_attention_analysis,
     create_attention_report,
@@ -435,6 +437,27 @@ def main():
                         f.write(f"{key}: {value}\n")
             
             logger.info(f"  Layer {layer_idx}: Generated visualizations")
+        
+        # 生成合并图（所有层在一个图中，横向排列）
+        if len(attention_weights) > 1:
+            # 合并肽段注意力图
+            combined_peptide_path = os.path.join(sample_dir, "peptide_attention_combined.png")
+            plot_peptide_attention_combined(
+                sequence, attention_weights,
+                edge_index=sample_data.get('edge_index'),
+                bond_labels=bond_labels, save_path=combined_peptide_path
+            )
+            
+            # 合并多头注意力比较图
+            if any(w.dim() == 2 and w.shape[1] > 1 for w in attention_weights):
+                combined_heads_path = os.path.join(sample_dir, "attention_heads_combined.png")
+                plot_attention_heads_combined(
+                    attention_weights,
+                    edge_index=sample_data.get('edge_index'),
+                    sequence=sequence, save_path=combined_heads_path
+                )
+            
+            logger.info(f"  Combined figures generated")
     
     # 生成综合分析报告
     if len(all_attention_weights) > 1:

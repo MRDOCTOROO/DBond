@@ -627,3 +627,241 @@ def create_attention_report(attention_weights_list: List[torch.Tensor],
     
     logger.info(f"Generated attention report in {output_dir}")
     return generated_files
+
+
+def plot_peptide_attention_combined(sequence: str,
+                                   attention_weights_list: List[torch.Tensor],
+                                   edge_index: Optional[torch.Tensor] = None,
+                                   bond_labels: Optional[torch.Tensor] = None,
+                                   save_path: Optional[str] = None,
+                                   figsize: Tuple[int, int] = (14, 6),
+                                   node_size: int = 250,
+                                   edge_scale: float = 4.0) -> plt.Figure:
+    """
+    绘制多层肽段注意力图的合并版本（横向排列，减少留白）
+    
+    Args:
+        sequence: 肽段序列
+        attention_weights_list: 各层注意力权重列表 [layer0_weights, layer1_weights, ...]
+        edge_index: 边索引 [2, num_edges]
+        bond_labels: 键断裂标签（0或1）
+        save_path: 保存路径
+        figsize: 图形大小（宽, 高）
+        node_size: 节点大小
+        edge_scale: 边宽度缩放因子
+        
+    Returns:
+        plt.Figure: matplotlib图形对象
+    """
+    num_layers = len(attention_weights_list)
+    seq_len = len(sequence)
+    
+    # 创建子图布局：每层2个图（序列图 + 热力图），横向排列
+    fig, axes = plt.subplots(1, num_layers * 2, figsize=figsize)
+    
+    # 调整子图间距
+    plt.subplots_adjust(wspace=0.3, left=0.05, right=0.95, top=0.85, bottom=0.15)
+    
+    for layer_idx, attention_weights in enumerate(attention_weights_list):
+        # 处理注意力权重
+        if attention_weights.dim() == 2:
+            edge_weights_np = attention_weights.mean(dim=1).cpu().numpy()
+        else:
+            edge_weights_np = attention_weights.cpu().numpy()
+        
+        # 构建节点到节点的注意力矩阵
+        num_nodes = seq_len
+        if edge_index is not None:
+            num_nodes = int(edge_index.max().item()) + 1
+        
+        effective_len = min(seq_len, num_nodes)
+        
+        # 创建注意力矩阵
+        attention_matrix = np.zeros((effective_len, effective_len))
+        
+        if edge_index is not None:
+            edge_index_np = edge_index.cpu().numpy()
+            for i in range(edge_index_np.shape[1]):
+                src, dst = int(edge_index_np[0, i]), int(edge_index_np[1, i])
+                if src < effective_len and dst < effective_len:
+                    attention_matrix[src, dst] += edge_weights_np[i]
+        else:
+            for i in range(effective_len - 1):
+                if i < len(edge_weights_np):
+                    attention_matrix[i, i + 1] = edge_weights_np[i]
+                    attention_matrix[i + 1, i] = edge_weights_np[i]
+        
+        # 获取子图轴
+        ax_graph = axes[layer_idx * 2]      # 序列图
+        ax_heatmap = axes[layer_idx * 2 + 1]  # 热力图
+        
+        # === 左侧：肽段序列图 ===
+        G = nx.DiGraph()
+        
+        for i in range(effective_len):
+            G.add_node(i, label=sequence[i])
+        
+        edges = []
+        edge_weights_list = []
+        edge_colors = []
+        
+        for i in range(effective_len - 1):
+            weight_forward = attention_matrix[i, i + 1]
+            weight_backward = attention_matrix[i + 1, i]
+            avg_weight = (weight_forward + weight_backward) / 2
+            
+            edges.append((i, i + 1))
+            edge_weights_list.append(avg_weight)
+            
+            if bond_labels is not None and i < bond_labels.size(0):
+                if bond_labels[i].item() == 1:
+                    edge_colors.append('red')
+                else:
+                    edge_colors.append('blue')
+            else:
+                edge_colors.append('blue')
+        
+        for i, (src, dst) in enumerate(edges):
+            G.add_edge(src, dst, weight=edge_weights_list[i], color=edge_colors[i])
+        
+        pos = {i: (i, 0) for i in range(effective_len)}
+        
+        nx.draw_networkx_nodes(G, pos, ax=ax_graph, node_size=node_size, 
+                              node_color='lightblue', alpha=0.8)
+        
+        edge_widths = [w * edge_scale for w in edge_weights_list]
+        edge_colors_list = [G[u][v]['color'] for u, v in G.edges()]
+        
+        nx.draw_networkx_edges(G, pos, ax=ax_graph, width=edge_widths, 
+                              edge_color=edge_colors_list, alpha=0.7,
+                              arrows=True, arrowsize=8)
+        
+        labels = {i: sequence[i] for i in range(effective_len)}
+        nx.draw_networkx_labels(G, pos, labels, ax=ax_graph, font_size=9)
+        
+        ax_graph.set_title(f"Layer {layer_idx}", fontsize=11, fontweight='bold')
+        ax_graph.axis('off')
+        
+        # === 右侧：注意力热力图 ===
+        adjacent_weights = np.zeros((effective_len, effective_len))
+        for i in range(effective_len - 1):
+            adjacent_weights[i, i + 1] = attention_matrix[i, i + 1]
+            adjacent_weights[i + 1, i] = attention_matrix[i + 1, i]
+        
+        im = ax_heatmap.imshow(adjacent_weights, cmap='YlOrRd', aspect='auto')
+        
+        # 设置刻度
+        if effective_len <= 20:
+            ax_heatmap.set_xticks(range(effective_len))
+            ax_heatmap.set_xticklabels(list(sequence[:effective_len]), fontsize=7, rotation=45)
+            ax_heatmap.set_yticks(range(effective_len))
+            ax_heatmap.set_yticklabels(list(sequence[:effective_len]), fontsize=7)
+        
+        ax_heatmap.set_title(f"Layer {layer_idx} Attention", fontsize=11, fontweight='bold')
+        ax_heatmap.set_xlabel("Position", fontsize=9)
+        if layer_idx == 0:
+            ax_heatmap.set_ylabel("Position", fontsize=9)
+    
+    # 添加总标题
+    fig.suptitle(f"Peptide: {sequence[:30]}{'...' if len(sequence) > 30 else ''}", 
+                fontsize=12, fontweight='bold', y=0.98)
+    
+    # 添加颜色条（共享）
+    cbar_ax = fig.add_axes([0.96, 0.15, 0.015, 0.7])
+    plt.colorbar(im, cax=cbar_ax, label='Attention Weight')
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        logger.info(f"Saved combined peptide attention to {save_path}")
+    
+    return fig
+
+
+def plot_attention_heads_combined(attention_weights_list: List[torch.Tensor],
+                                 edge_index: Optional[torch.Tensor] = None,
+                                 sequence: Optional[str] = None,
+                                 save_path: Optional[str] = None,
+                                 figsize: Tuple[int, int] = (16, 8),
+                                 max_heads: int = 4) -> plt.Figure:
+    """
+    绘制多层多头注意力的合并版本（横向排列）
+    
+    Args:
+        attention_weights_list: 各层注意力权重列表 [layer0_weights, layer1_weights, ...]
+        edge_index: 边索引 [2, num_edges]
+        sequence: 肽段序列
+        save_path: 保存路径
+        figsize: 图形大小
+        max_heads: 每层最多显示的头数
+        
+    Returns:
+        plt.Figure: matplotlib图形对象
+    """
+    num_layers = len(attention_weights_list)
+    
+    # 确定每层显示的头数
+    heads_per_layer = min(max_heads, attention_weights_list[0].shape[1] if attention_weights_list[0].dim() == 2 else 1)
+    
+    # 创建子图布局：每层 heads_per_layer 个图
+    fig, axes = plt.subplots(num_layers, heads_per_layer, figsize=figsize)
+    
+    if num_layers == 1:
+        axes = axes.reshape(1, -1)
+    if heads_per_layer == 1:
+        axes = axes.reshape(-1, 1)
+    
+    plt.subplots_adjust(wspace=0.3, hspace=0.3, left=0.05, right=0.95, top=0.9, bottom=0.1)
+    
+    # 确定节点数
+    num_nodes = 0
+    if sequence is not None:
+        num_nodes = len(sequence)
+    if edge_index is not None:
+        num_nodes = max(num_nodes, int(edge_index.max().item()) + 1)
+    
+    for layer_idx, attention_weights in enumerate(attention_weights_list):
+        for head_idx in range(heads_per_layer):
+            ax = axes[layer_idx, head_idx]
+            
+            # 构建该头的注意力矩阵
+            attention_matrix = np.zeros((num_nodes, num_nodes))
+            
+            if attention_weights.dim() == 2:
+                # [num_edges, num_heads]
+                edge_weights_np = attention_weights[:, head_idx].cpu().numpy()
+            else:
+                edge_weights_np = attention_weights.cpu().numpy()
+            
+            if edge_index is not None:
+                edge_index_np = edge_index.cpu().numpy()
+                for i in range(edge_index_np.shape[1]):
+                    src, dst = int(edge_index_np[0, i]), int(edge_index_np[1, i])
+                    if src < num_nodes and dst < num_nodes:
+                        attention_matrix[src, dst] += edge_weights_np[i]
+            
+            im = ax.imshow(attention_matrix, cmap='viridis', aspect='auto')
+            
+            ax.set_title(f"L{layer_idx} Head {head_idx}", fontsize=10, fontweight='bold')
+            
+            if sequence is not None and len(sequence) <= 15:
+                ax.set_xticks(range(len(sequence)))
+                ax.set_xticklabels(list(sequence), fontsize=7, rotation=45)
+                ax.set_yticks(range(len(sequence)))
+                ax.set_yticklabels(list(sequence), fontsize=7)
+            
+            if head_idx == 0:
+                ax.set_ylabel("Query", fontsize=9)
+            if layer_idx == num_layers - 1:
+                ax.set_xlabel("Key", fontsize=9)
+    
+    fig.suptitle("Multi-head Attention Comparison", fontsize=14, fontweight='bold')
+    
+    # 添加颜色条
+    cbar_ax = fig.add_axes([0.96, 0.1, 0.015, 0.8])
+    plt.colorbar(im, cax=cbar_ax, label='Attention Weight')
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        logger.info(f"Saved combined attention heads to {save_path}")
+    
+    return fig

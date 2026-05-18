@@ -90,9 +90,11 @@ python graph_transform/scripts/attention_visualization.py \
 
 | 函数名 | 功能 | 输出 |
 |-------|------|------|
-| `plot_attention_heatmap()` | 绘制注意力热力图 | `attention_heatmap_layerX.png` |
-| `plot_peptide_attention_graph()` | 绘制肽段结构图叠加注意力 | `peptide_attention_layerX.png` |
-| `plot_attention_head_comparison()` | 绘制多头注意力比较图 | `attention_heads_layerX.png` |
+| `plot_attention_heatmap()` | 绘制单层注意力热力图 | `attention_heatmap_layerX.png` |
+| `plot_peptide_attention_graph()` | 绘制单层肽段结构图叠加注意力 | `peptide_attention_layerX.png` |
+| `plot_peptide_attention_combined()` | **绘制多层肽段注意力合并图（推荐）** | `peptide_attention_combined.png` |
+| `plot_attention_head_comparison()` | 绘制单层多头注意力比较图 | `attention_heads_layerX.png` |
+| `plot_attention_heads_combined()` | **绘制多层多头注意力合并图（推荐）** | `attention_heads_combined.png` |
 | `analyze_attention_patterns()` | 分析注意力模式与断裂关系 | 分析字典 |
 | `plot_attention_analysis()` | 绘制综合分析图（4子图） | `comprehensive_analysis.png` |
 
@@ -110,6 +112,8 @@ results/attention_viz_paper/
 ├── statistical_analysis_results.csv              # 统计结果原始数据
 │
 ├── sample_0/                                     # 案例样本1
+│   ├── peptide_attention_combined.png            # [推荐] 多层肽段注意力合并图
+│   ├── attention_heads_combined.png              # [推荐] 多层多头注意力合并图
 │   ├── attention_heatmap_layer0.png              # Layer 0 注意力热力图
 │   ├── attention_heatmap_layer1.png              # Layer 1 注意力热力图
 │   ├── peptide_attention_layer0.png              # Layer 0 肽段结构图
@@ -122,6 +126,10 @@ results/attention_viz_paper/
 ├── sample_1/                                     # 案例样本2
 └── sample_2/                                     # 案例样本3
 ```
+
+**合并图说明**：
+- `peptide_attention_combined.png`：将所有层的肽段注意力图横向排列，减少留白，适合论文展示
+- `attention_heads_combined.png`：将所有层的多头注意力图横向排列，便于对比不同层的注意力头
 
 ### 3.2 各文件用途
 
