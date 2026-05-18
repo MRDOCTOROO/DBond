@@ -41,6 +41,7 @@ from utils.visualization import (
     plot_peptide_attention_graph,
     plot_attention_head_comparison,
     plot_peptide_attention_combined,
+    plot_peptide_attention_compact,
     plot_attention_heads_combined,
     analyze_attention_patterns,
     plot_attention_analysis,
