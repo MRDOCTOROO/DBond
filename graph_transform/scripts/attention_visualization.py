@@ -307,8 +307,46 @@ def main():
     if args.sample_indices:
         sample_indices = parse_sample_indices(args.sample_indices)
     else:
-        # 默认选择前num_samples个样本
-        sample_indices = list(range(min(args.num_samples, len(test_dataset))))
+        # 按序列去重，选择不同的序列进行案例研究
+        logger.info(f"Selecting {args.num_samples} diverse sequences for case study...")
+        
+        if hasattr(test_dataset, 'data') and 'seq' in test_dataset.data.columns:
+            # 获取所有唯一序列
+            unique_seqs = test_dataset.data['seq'].unique()
+            num_unique = len(unique_seqs)
+            
+            if num_unique <= args.num_samples:
+                # 唯一序列不足，直接取前N个
+                sample_indices = list(range(min(args.num_samples, len(test_dataset))))
+            else:
+                # 按序列长度均匀抽样，确保多样性
+                import numpy as np
+                
+                # 获取每个唯一序列的长度
+                seq_lengths = {seq: len(str(seq)) for seq in unique_seqs}
+                
+                # 按长度排序后均匀抽样
+                sorted_seqs = sorted(unique_seqs, key=lambda s: seq_lengths[s])
+                
+                # 均匀选择不同长度的序列
+                step = len(sorted_seqs) // args.num_samples
+                selected_seqs = [sorted_seqs[i * step] for i in range(args.num_samples)]
+                
+                # 找到这些序列在数据集中的第一个索引
+                sample_indices = []
+                for seq in selected_seqs:
+                    idx = test_dataset.data[test_dataset.data['seq'] == seq].index[0]
+                    sample_indices.append(int(idx))
+                
+                logger.info(f"Selected sequences with lengths: {[seq_lengths[s] for s in selected_seqs]}")
+        else:
+            # 无法访问序列信息，随机抽样
+            import random
+            random.seed(42)
+            sample_indices = sorted(random.sample(range(len(test_dataset)), 
+                                                  min(args.num_samples, len(test_dataset))))
+        
+        sample_indices = sorted(sample_indices)
     
     logger.info(f"Will visualize {len(sample_indices)} samples: {sample_indices}")
     
