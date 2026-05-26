@@ -113,7 +113,7 @@ def plot_interpretability_case_study(
 
 def _plot_case_study_single(
     ax: plt.Axes,
-    attention_weights: torch.Tensor,
+    attention_weights,  # 可以是 Tensor 或 List[Tensor]
     bond_labels: torch.Tensor,
     sequence: str,
     edge_index: Optional[torch.Tensor],
@@ -126,12 +126,28 @@ def _plot_case_study_single(
     """
     seq_len = min(len(sequence), max_seq_len)
     
-    # 提取注意力权重（取平均）
-    if attention_weights.dim() == 2:
-        # [num_edges, num_heads] - 取平均
-        attn_weights = attention_weights.mean(dim=1).cpu().numpy()
+    # 处理注意力权重：如果是列表，取所有层的平均
+    if isinstance(attention_weights, list):
+        # 列表格式：[layer0_weights, layer1_weights, ...]
+        # 取所有层的平均
+        if len(attention_weights) > 0:
+            if isinstance(attention_weights[0], torch.Tensor):
+                # 如果是张量列表，取平均
+                attn_weights = torch.stack([w.mean(dim=1) if w.dim() == 2 else w 
+                                           for w in attention_weights]).mean(dim=0).cpu().numpy()
+            else:
+                attn_weights = np.mean(attention_weights, axis=0)
+        else:
+            attn_weights = np.zeros(seq_len)
+    elif isinstance(attention_weights, torch.Tensor):
+        # 张量格式
+        if attention_weights.dim() == 2:
+            # [num_edges, num_heads] - 取平均
+            attn_weights = attention_weights.mean(dim=1).cpu().numpy()
+        else:
+            attn_weights = attention_weights.cpu().numpy()
     else:
-        attn_weights = attention_weights.cpu().numpy()
+        attn_weights = np.array(attention_weights)
     
     # 构建位置级别的注意力权重
     position_weights = np.zeros(seq_len)
@@ -215,7 +231,7 @@ def _plot_case_study_single(
 
 def _plot_attention_boxplot(
     ax: plt.Axes,
-    attention_weights_list: List[torch.Tensor],
+    attention_weights_list,  # 可以是 List[Tensor] 或 List[List[Tensor]]
     bond_labels_list: List[torch.Tensor],
     edge_indices: List[Optional[torch.Tensor]],
     sequences: List[str],
@@ -232,11 +248,23 @@ def _plot_attention_boxplot(
     ):
         seq_len = min(len(seq), 30)
         
-        # 提取注意力权重
-        if attn_weights.dim() == 2:
-            attn_np = attn_weights.mean(dim=1).cpu().numpy()
+        # 处理注意力权重：如果是列表，取所有层的平均
+        if isinstance(attn_weights, list):
+            if len(attn_weights) > 0:
+                if isinstance(attn_weights[0], torch.Tensor):
+                    attn_np = torch.stack([w.mean(dim=1) if w.dim() == 2 else w 
+                                          for w in attn_weights]).mean(dim=0).cpu().numpy()
+                else:
+                    attn_np = np.mean(attn_weights, axis=0)
+            else:
+                attn_np = np.zeros(seq_len)
+        elif isinstance(attn_weights, torch.Tensor):
+            if attn_weights.dim() == 2:
+                attn_np = attn_weights.mean(dim=1).cpu().numpy()
+            else:
+                attn_np = attn_weights.cpu().numpy()
         else:
-            attn_np = attn_weights.cpu().numpy()
+            attn_np = np.array(attn_weights)
         
         # 构建位置级别的注意力权重
         position_weights = np.zeros(seq_len)
@@ -312,7 +340,7 @@ def _plot_attention_boxplot(
 
 def _plot_attention_correlation_scatter(
     ax: plt.Axes,
-    attention_weights_list: List[torch.Tensor],
+    attention_weights_list,  # 可以是 List[Tensor] 或 List[List[Tensor]]
     bond_labels_list: List[torch.Tensor],
     edge_indices: List[Optional[torch.Tensor]],
     sequences: List[str],
@@ -329,11 +357,23 @@ def _plot_attention_correlation_scatter(
     ):
         seq_len = min(len(seq), 30)
         
-        # 提取注意力权重
-        if attn_weights.dim() == 2:
-            attn_np = attn_weights.mean(dim=1).cpu().numpy()
+        # 处理注意力权重：如果是列表，取所有层的平均
+        if isinstance(attn_weights, list):
+            if len(attn_weights) > 0:
+                if isinstance(attn_weights[0], torch.Tensor):
+                    attn_np = torch.stack([w.mean(dim=1) if w.dim() == 2 else w 
+                                          for w in attn_weights]).mean(dim=0).cpu().numpy()
+                else:
+                    attn_np = np.mean(attn_weights, axis=0)
+            else:
+                attn_np = np.zeros(seq_len)
+        elif isinstance(attn_weights, torch.Tensor):
+            if attn_weights.dim() == 2:
+                attn_np = attn_weights.mean(dim=1).cpu().numpy()
+            else:
+                attn_np = attn_weights.cpu().numpy()
         else:
-            attn_np = attn_weights.cpu().numpy()
+            attn_np = np.array(attn_weights)
         
         # 构建位置级别的注意力权重
         position_weights = np.zeros(seq_len)
@@ -439,7 +479,7 @@ def generate_interpretability_report(
 
 
 def _generate_statistical_summary(
-    attention_weights_list: List[torch.Tensor],
+    attention_weights_list,  # 可以是 List[Tensor] 或 List[List[Tensor]]
     bond_labels_list: List[torch.Tensor],
     sequences: List[str],
     edge_indices: List[Optional[torch.Tensor]],
@@ -456,10 +496,23 @@ def _generate_statistical_summary(
     ):
         seq_len = min(len(seq), 30)
         
-        if attn_weights.dim() == 2:
-            attn_np = attn_weights.mean(dim=1).cpu().numpy()
+        # 处理注意力权重：如果是列表，取所有层的平均
+        if isinstance(attn_weights, list):
+            if len(attn_weights) > 0:
+                if isinstance(attn_weights[0], torch.Tensor):
+                    attn_np = torch.stack([w.mean(dim=1) if w.dim() == 2 else w 
+                                          for w in attn_weights]).mean(dim=0).cpu().numpy()
+                else:
+                    attn_np = np.mean(attn_weights, axis=0)
+            else:
+                attn_np = np.zeros(seq_len)
+        elif isinstance(attn_weights, torch.Tensor):
+            if attn_weights.dim() == 2:
+                attn_np = attn_weights.mean(dim=1).cpu().numpy()
+            else:
+                attn_np = attn_weights.cpu().numpy()
         else:
-            attn_np = attn_weights.cpu().numpy()
+            attn_np = np.array(attn_weights)
         
         position_weights = np.zeros(seq_len)
         position_counts = np.zeros(seq_len)
