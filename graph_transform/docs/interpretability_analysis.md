@@ -14,7 +14,8 @@ graph_transform/
 │   └── attention_visualization.py    # 主脚本：注意力可视化与分析
 ├── utils/
 │   ├── attention_extractor.py        # 工具：注意力权重提取
-│   └── visualization.py              # 工具：可视化函数库
+│   ├── visualization.py              # 工具：可视化函数库
+│   └── interpretability.py           # 工具：可解释性分析（4子图）
 └── docs/
     └── interpretability_analysis.md  # 本文档
 ```
@@ -29,6 +30,7 @@ graph_transform/
 - 加载训练好的 GraphTransformer 模型
 - 从测试数据中提取注意力权重
 - 生成可视化图表和统计分析
+- **新增**：生成4子图可解释性案例分析图
 
 **命令行参数**：
 
@@ -44,6 +46,8 @@ graph_transform/
 | `--num_length_bins` | int | 5 | 分层抽样时序列长度分组数 |
 | `--skip_case_study` | flag | False | 跳过案例研究，只进行统计分析 |
 | `--infer_config` | flag | False | 从检查点推断模型配置 |
+| `--interpretability` | flag | False | **生成可解释性分析图（推荐用于论文）** |
+| `--random_seed` | int | None | 随机种子（不指定则真正随机） |
 
 **使用示例**：
 
@@ -57,6 +61,28 @@ python graph_transform/scripts/attention_visualization.py \
     --num_samples 3 \
     --num_stat_samples 1000 \
     --sampling_strategy stratified \
+    --infer_config
+
+# 生成可解释性分析图（4子图，推荐用于论文）
+python graph_transform/scripts/attention_visualization.py \
+    --config graph_transform/config/default.yaml \
+    --checkpoint checkpoints/best_model.pt \
+    --input_csv dataset/test_data.csv \
+    --output_dir results/attention_viz_paper \
+    --num_samples 3 \
+    --num_stat_samples 500 \
+    --interpretability \
+    --infer_config
+
+# 可复现的随机抽样
+python graph_transform/scripts/attention_visualization.py \
+    --config graph_transform/config/default.yaml \
+    --checkpoint checkpoints/best_model.pt \
+    --input_csv dataset/test_data.csv \
+    --output_dir results/attention_viz_paper \
+    --num_samples 3 \
+    --random_seed 42 \
+    --interpretability \
     --infer_config
 ```
 
@@ -98,6 +124,29 @@ python graph_transform/scripts/attention_visualization.py \
 | `analyze_attention_patterns()` | 分析注意力模式与断裂关系 | 分析字典 |
 | `plot_attention_analysis()` | 绘制综合分析图（4子图） | `comprehensive_analysis.png` |
 
+### 2.4 工具模块：`interpretability.py`（新增）
+
+**功能**：
+- 提供可解释性案例分析功能
+- 生成4子图论文级图表
+- 验证模型预测是否符合化学直觉
+
+**核心函数**：
+
+| 函数名 | 功能 | 输出 |
+|-------|------|------|
+| `plot_interpretability_case_study()` | 绘制4子图可解释性案例分析 | `interpretability_case_study.png` |
+| `generate_interpretability_report()` | 生成完整可解释性报告 | 图片 + 统计摘要 |
+
+**4子图说明**：
+
+| 子图 | 内容 | 证明目标 |
+|-----|------|---------|
+| (a) Case Study 1 | 单条肽段的注意力权重分布 | 模型给断裂键分配更高注意力 |
+| (b) Case Study 2 | 另一条肽段的注意力权重分布 | 结论不是偶然 |
+| (c) Boxplot | 断裂键 vs 完整键的注意力分布 | 整体统计差异显著 |
+| (d) Scatter | 注意力权重与断裂标签的相关性 | 存在正相关关系 |
+
 ---
 
 ## 3. 输出结果说明
@@ -110,6 +159,10 @@ results/attention_viz_paper/
 ├── comprehensive_analysis.png                    # 案例研究综合图（少量样本）
 ├── comprehensive_analysis_statistical.png        # 统计分析综合图（大样本）[主图]
 ├── statistical_analysis_results.csv              # 统计结果原始数据
+│
+├── interpretability/                             # [新增] 可解释性分析目录
+│   ├── interpretability_case_study.png           # 4子图可解释性案例分析图
+│   └── interpretability_summary.txt              # 统计摘要
 │
 ├── sample_0/                                     # 案例样本1
 │   ├── peptide_attention_combined.png            # [推荐] 多层肽段注意力合并图
@@ -135,11 +188,16 @@ results/attention_viz_paper/
 - `show_sequence=False`（默认）：不显示序列文本，因为坐标轴已有序列标签，布局更紧凑
 - `show_sequence=True`：在图片下方显示完整序列，适合序列较短的情况
 
+**可解释性分析（新增）**：
+- `interpretability_case_study.png`：4子图案例分析，用于验证模型可解释性
+- `interpretability_summary.txt`：统计检验结果（t检验p值、相关系数等）
+
 ### 3.2 各文件用途
 
 | 文件名 | 用途 | 论文使用建议 |
 |-------|------|-------------|
-| `comprehensive_analysis_statistical.png` | 统计分析主图，展示模型整体机制 | **主图**，基于大样本统计（500-1000个） |
+| `interpretability_case_study.png` | **可解释性验证（推荐）** | **主图**，证明模型学到了有意义的规律 |
+| `comprehensive_analysis_statistical.png` | 统计分析主图，展示模型整体机制 | 主图（备选），基于大样本统计 |
 | `comprehensive_analysis.png` | 案例研究综合图 | 补充材料（3-5个样本） |
 | `peptide_attention_combined.png` | **多层肽段注意力合并图（推荐）** | **主图或补充材料**，紧凑布局，适合论文 |
 | `attention_heads_combined.png` | **多层多头注意力合并图（推荐）** | 补充材料，便于对比不同层 |
@@ -148,6 +206,7 @@ results/attention_viz_paper/
 | `attention_heatmap_layerX.png` | 展示注意力权重分布 | 补充材料 |
 | `attention_analysis_layerX.txt` | 单个样本的数值分析结果 | 参考 |
 | `statistical_analysis_results.csv` | 原始统计数据 | 数据可用性声明 |
+| `interpretability_summary.txt` | 统计检验结果 | 参考 |
 
 ---
 

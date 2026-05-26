@@ -16,6 +16,10 @@ from .visualization import (
     plot_attention_analysis,
     create_attention_report,
 )
+from .interpretability import (
+    plot_interpretability_case_study,
+    generate_interpretability_report,
+)
 
 __all__ = [
     'AttentionExtractor',
@@ -29,4 +33,6 @@ __all__ = [
     'analyze_attention_patterns',
     'plot_attention_analysis',
     'create_attention_report',
+    'plot_interpretability_case_study',
+    'generate_interpretability_report',
 ]

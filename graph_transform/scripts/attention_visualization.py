@@ -47,6 +47,10 @@ from utils.visualization import (
     plot_attention_analysis,
     create_attention_report,
 )
+from utils.interpretability import (
+    plot_interpretability_case_study,
+    generate_interpretability_report,
+)
 
 
 def setup_logging() -> logging.Logger:
@@ -217,6 +221,10 @@ def main():
                        help="抽样策略：random=随机抽样，stratified=按序列长度分层抽样（推荐）")
     parser.add_argument("--num_length_bins", type=int, default=5,
                        help="分层抽样时的序列长度分组数（默认5组）")
+    parser.add_argument("--random_seed", type=int, default=None,
+                       help="随机种子（不指定则每次真正随机，指定则可复现结果）")
+    parser.add_argument("--interpretability", action="store_true",
+                       help="生成可解释性分析图（4子图，推荐用于论文）")
     parser.add_argument("--batch_size", type=int, default=1,
                        help="批处理大小")
     parser.add_argument("--device", type=str, choices=["cpu", "cuda", "mps"], default=None,
@@ -485,11 +493,19 @@ def main():
     if args.num_stat_samples > args.num_samples:
         logger.info(f"Running statistical analysis with {args.num_stat_samples} samples...")
         
-        import random
-        random.seed(42)  # 固定随机种子以便复现
-        
         total_samples = len(test_dataset)
         stat_sample_count = min(args.num_stat_samples, total_samples)
+        
+        # 设置随机种子（如果指定）
+        import random
+        if args.random_seed is not None:
+            random.seed(args.random_seed)
+            logger.info(f"Random seed set to: {args.random_seed}")
+        else:
+            # 使用当前时间作为种子，实现真正随机
+            random_seed = int(time.time() * 1000) % (2**32)
+            random.seed(random_seed)
+            logger.info(f"Random seed (for reproducibility): {random_seed}")
         
         # 根据抽样策略选择样本
         if args.sampling_strategy == "stratified":
@@ -604,6 +620,37 @@ def main():
             stat_df = pd.DataFrame(stat_analysis_results)
             stat_df.to_csv(stat_csv_path, index=False)
             logger.info(f"Statistical results saved to {stat_csv_path}")
+    
+    # 生成可解释性分析图
+    if args.interpretability and all_attention_weights:
+        logger.info("Generating interpretability analysis...")
+        
+        # 收集数据
+        case_attn_weights = []
+        case_bond_labels = []
+        case_sequences = []
+        case_edge_indices = []
+        
+        for idx, (attn_weights, sequence, bond_labels) in enumerate(
+            zip(all_attention_weights[:args.num_samples], 
+                all_sequences[:args.num_samples],
+                all_bond_labels[:args.num_samples])
+        ):
+            sample_data = test_dataset[sample_indices[idx]]
+            case_attn_weights.append(attn_weights)
+            case_bond_labels.append(bond_labels)
+            case_sequences.append(sequence)
+            case_edge_indices.append(sample_data.get('edge_index'))
+        
+        # 生成可解释性报告
+        interpretability_dir = os.path.join(args.output_dir, 'interpretability')
+        interpretability_files = generate_interpretability_report(
+            case_attn_weights, case_bond_labels,
+            case_sequences, case_edge_indices,
+            interpretability_dir
+        )
+        
+        logger.info(f"Interpretability analysis saved to: {interpretability_files}")
     
     logger.info(f"Attention visualization completed. Results saved to {args.output_dir}")
     
