@@ -1,0 +1,17 @@
+[project]
+name = "dbond"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.11.0",
+    "pandarallel>=1.6.5",
+    "pandas>=3.0.3",
+    "positional-encodings[pytorch]>=6.0.4",
+    "pyteomics>=5.0",
+    "pyyaml>=6.0.3",
+    "scikit-learn>=1.9.0",
+    "seaborn>=0.13.2",
+    "tensorboard>=2.20.0",
+]

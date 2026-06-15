@@ -44,7 +44,12 @@ cache/
 !result/metric/dbond_s/single/default_metric.csv
 !result/metric/dbond_m/multi/default_metric.csv
 
-# 其他忽略
+# 虚拟环境与工具目录
+.venv/
+.claude/
+.kilo/
+
+ # 其他忽略
 *.pyc
 *.pt
 *.svg

@@ -22,6 +22,14 @@ from .visualization import (
     plot_bond_type_comparison,
     compute_layer_correlations,
     plot_new_interpretability_case_study,
+    # 语义/统计辅助（paper-grade）
+    INTERP_COLORS,
+    VALID_ATTENTION_MODES,
+    DEFAULT_ATTENTION_MODE,
+    detect_attention_mode,
+    compute_effect_size,
+    compute_separation_metrics,
+    compute_layer_separation_metrics,
 )
 from .interpretability import (
     plot_interpretability_case_study,
@@ -49,4 +57,12 @@ __all__ = [
     'plot_bond_type_comparison',
     'compute_layer_correlations',
     'plot_new_interpretability_case_study',
+    # 语义/统计辅助（paper-grade）
+    'INTERP_COLORS',
+    'VALID_ATTENTION_MODES',
+    'DEFAULT_ATTENTION_MODE',
+    'detect_attention_mode',
+    'compute_effect_size',
+    'compute_separation_metrics',
+    'compute_layer_separation_metrics',
 ]

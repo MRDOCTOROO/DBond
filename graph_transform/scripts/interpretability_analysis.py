@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 import torch
 import yaml
+import json
 
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -42,7 +43,12 @@ from utils.visualization import (
     plot_bond_type_comparison,
     plot_new_interpretability_case_study,
     compute_layer_correlations,
+    compute_layer_separation_metrics,
+    compute_effect_size,
+    detect_attention_mode,
     extract_bond_level_attention,
+    VALID_ATTENTION_MODES,
+    DEFAULT_ATTENTION_MODE,
 )
 
 
@@ -184,8 +190,19 @@ def main():
     parser.add_argument("--device", type=str, choices=["cpu", "cuda", "mps"], default=None, help="计算设备")
     parser.add_argument("--infer_config", action="store_true", help="从检查点自动推断模型配置")
     parser.add_argument("--random_seed", type=int, default=42, help="随机种子")
+    # Paper-grade semantics + format
+    parser.add_argument("--attention_mode", type=str, default=DEFAULT_ATTENTION_MODE,
+                        choices=sorted(VALID_ATTENTION_MODES),
+                        help="统一注意力语义: stability(高=不易断裂) / cleavage(高=易断裂) / "
+                             "importance(中性) / auto(自动检测)")
+    parser.add_argument("--figure_format", type=str, default="svg", choices=["svg", "png"],
+                        help="图像输出格式: svg(矢量,浏览器可编辑文本) 或 png")
+    parser.add_argument("--heatmap_normalize", type=str, default="row",
+                        choices=["row", "global"],
+                        help="热力图归一化: row(每层独立[0,1]) 或 global(跨层同尺度)")
     
     args = parser.parse_args()
+    img_ext = ".svg" if args.figure_format == "svg" else ".png"
     
     # 设置日志
     logger = setup_logging()
@@ -315,44 +332,54 @@ def main():
     for i, (attn_weights, seq, labels, edge_idx) in enumerate(
         zip(all_attention_weights, all_sequences, all_bond_labels, all_edge_indices)
     ):
-        save_path = os.path.join(args.output_dir, f"sample_{case_indices[i]}_layer_attention.png")
+        save_path = os.path.join(args.output_dir, f"sample_{case_indices[i]}_layer_attention{img_ext}")
         plot_single_sample_layer_attention(
             attn_weights, labels, seq, edge_idx,
-            save_path=save_path, max_seq_len=args.max_seq_len
+            save_path=save_path, max_seq_len=args.max_seq_len,
+            attention_mode=args.attention_mode,
         )
     
     # 生成层间演化趋势图
     logger.info("Generating layer evolution trend plot...")
-    layer_corrs = compute_layer_correlations(
+    layer_metrics = compute_layer_separation_metrics(
         all_attention_weights, all_bond_labels, all_edge_indices, all_sequences
     )
+    layer_corrs = [m["abs_r"] for m in layer_metrics]  # backward-compat display
     
-    if layer_corrs:
-        trend_path = os.path.join(args.output_dir, "layer_evolution_trend.png")
-        plot_layer_evolution_trend(layer_corrs, save_path=trend_path)
-        
-        # 保存相关系数数据
-        corr_df = pd.DataFrame({
-            'layer': [f'Layer_{i}' for i in range(len(layer_corrs))],
-            'correlation': layer_corrs
-        })
+    if layer_metrics:
+        trend_path = os.path.join(args.output_dir, f"layer_evolution_trend{img_ext}")
+        plot_layer_evolution_trend(
+            layer_metrics, save_path=trend_path,
+            attention_mode=args.attention_mode,
+        )
+        # 保存完整的分层指标 (abs_r, signed r, spearman, auc)
+        corr_df = pd.DataFrame([
+            {"layer": f"Layer_{i}", **m} for i, m in enumerate(layer_metrics)
+        ])
         corr_df.to_csv(os.path.join(args.output_dir, "layer_correlations.csv"), index=False)
     
     # 生成新版4子图
     logger.info("Generating new interpretability case study figure...")
-    case_study_path = os.path.join(args.output_dir, "interpretability_case_study_new.png")
-    plot_new_interpretability_case_study(
+    case_study_path = os.path.join(args.output_dir, f"interpretability_case_study_new{img_ext}")
+    fig_case, case_summary = plot_new_interpretability_case_study(
         all_attention_weights, all_bond_labels, all_sequences, all_edge_indices,
-        save_path=case_study_path, max_seq_len=args.max_seq_len
+        save_path=case_study_path, max_seq_len=args.max_seq_len,
+        attention_mode=args.attention_mode,
+        heatmap_normalize=args.heatmap_normalize,
     )
     
     # 生成断裂对比图
     logger.info("Generating bond type comparison plot...")
-    comparison_path = os.path.join(args.output_dir, "bond_type_comparison.png")
-    plot_bond_type_comparison(
+    comparison_path = os.path.join(args.output_dir, f"bond_type_comparison{img_ext}")
+    _, case_effect = plot_bond_type_comparison(
         all_attention_weights, all_bond_labels, all_edge_indices, all_sequences,
-        save_path=comparison_path
+        save_path=comparison_path, attention_mode=args.attention_mode,
+        max_seq_len=args.max_seq_len,
     )
+    
+    # 统计分析容器（用于JSON）
+    stat_layer_metrics = []
+    stat_effect = {}
     
     # ========== 第二部分：统计分析 ==========
     if args.num_stat_samples > args.num_samples:
@@ -436,28 +463,59 @@ def main():
         
         # 统计分析的层间演化
         logger.info("Computing layer correlations for statistical analysis...")
-        stat_layer_corrs = compute_layer_correlations(
+        stat_layer_metrics = compute_layer_separation_metrics(
             stat_attention_weights, stat_bond_labels, stat_edge_indices, stat_sequences
         )
+        stat_layer_corrs = [m["abs_r"] for m in stat_layer_metrics]
         
-        if stat_layer_corrs:
-            stat_trend_path = os.path.join(args.output_dir, "layer_evolution_trend_statistical.png")
-            plot_layer_evolution_trend(stat_layer_corrs, save_path=stat_trend_path)
-            
+        if stat_layer_metrics:
+            stat_trend_path = os.path.join(args.output_dir, f"layer_evolution_trend_statistical{img_ext}")
+            plot_layer_evolution_trend(
+                stat_layer_metrics, save_path=stat_trend_path,
+                attention_mode=args.attention_mode,
+            )
             # 保存统计结果
-            stat_corr_df = pd.DataFrame({
-                'layer': [f'Layer_{i}' for i in range(len(stat_layer_corrs))],
-                'correlation': stat_layer_corrs
-            })
+            stat_corr_df = pd.DataFrame([
+                {"layer": f"Layer_{i}", **m} for i, m in enumerate(stat_layer_metrics)
+            ])
             stat_corr_df.to_csv(os.path.join(args.output_dir, "layer_correlations_statistical.csv"), index=False)
         
         # 统计分析的断裂对比
         logger.info("Generating statistical bond type comparison...")
-        stat_comparison_path = os.path.join(args.output_dir, "bond_type_comparison_statistical.png")
-        plot_bond_type_comparison(
+        stat_comparison_path = os.path.join(args.output_dir, f"bond_type_comparison_statistical{img_ext}")
+        _, stat_effect = plot_bond_type_comparison(
             stat_attention_weights, stat_bond_labels, stat_edge_indices, stat_sequences,
-            save_path=stat_comparison_path
+            save_path=stat_comparison_path, attention_mode=args.attention_mode,
+            max_seq_len=args.max_seq_len,
         )
+    
+    # ========== 论文级 JSON 摘要 ==========
+    logger.info("Writing paper-grade JSON summary...")
+    json_summary = {
+        "attention_mode": case_summary.get("attention_mode") if case_summary else args.attention_mode,
+        "mode_caption": case_summary.get("mode_caption", ""),
+        "layer_trend": {
+            "case_study": case_summary.get("panel_b_layer_metrics", []),
+            "statistical": stat_layer_metrics,
+            "primary_metric": "abs_r",
+            "note": "abs_r is the direction-agnostic strength; "
+                    "pearson_r keeps the sign for direction.",
+        },
+        "effect_size": {
+            "case_study": case_summary.get("panel_c_effect_size", {}),
+            "statistical": stat_effect,
+            "convention": "cohen_d_signed > 0 always means cleavage bonds carry "
+                          "the stronger attention signal, regardless of mode.",
+        },
+        "physicochemical_stats": {},
+        "rule_agreement": {},
+        "heatmap_normalize": args.heatmap_normalize,
+        "figure_format": args.figure_format,
+    }
+    json_path = os.path.join(args.output_dir, "interpretability_summary.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(json_summary, f, indent=2, ensure_ascii=False, default=str)
+    logger.info(f"Saved JSON summary to {json_path}")
     
     # ========== 完成 ==========
     logger.info("=" * 60)
@@ -475,7 +533,7 @@ def main():
         print(f"{indent}{os.path.basename(root)}/")
         subindent = ' ' * 2 * (level + 1)
         for file in sorted(files):
-            if file.endswith(('.png', '.csv')):
+            if file.endswith(('.png', '.svg', '.csv', '.json')):
                 print(f"{subindent}{file}")
     
     print("\n" + "=" * 60)
@@ -488,10 +546,12 @@ def main():
     print("=" * 60)
     
     # 打印关键结果
-    if layer_corrs:
-        print("\nLayer Correlations (Case Study):")
-        for i, corr in enumerate(layer_corrs):
-            print(f"  Layer {i}: r = {corr:.4f}")
+    if layer_metrics:
+        print("\nLayer Separation Metrics (Case Study):")
+        print(f"  primary = abs_r (strength, >=0)  | mode = {args.attention_mode}")
+        for i, m in enumerate(layer_metrics):
+            print(f"  Layer {i}: |r|={m['abs_r']:.4f}  signed_r={m['pearson_r']:+.4f}  "
+                  f"spearman={m['spearman_r']:+.4f}  AUC={m['auc']:.4f}")
 
 
 if __name__ == "__main__":

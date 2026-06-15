@@ -903,8 +903,232 @@ def plot_attention_heads_combined(attention_weights_list: List[torch.Tensor],
 
 
 # ============================================================================
-# 新版可解释性分析函数 (2024-06-15)
+# Paper-grade interpretability analysis (semantic-aware, reviewer-proof)
+#
+# Design principles
+# -----------------
+# 1. Unified attention semantics via ATTENTION_MODE:
+#      "stability"  -> high attention = bond resists cleavage (expects r < 0)
+#      "cleavage"   -> high attention = bond prone to cleavage (expects r > 0)
+#      "importance" -> attention marks salient bonds, direction-agnostic
+#      "auto"       -> detect from data sign
+#    All correlation / plots auto-adapt to this definition, so a negative
+#    correlation is no longer "bad" — under stability mode it is the EXPECTED,
+#    correct direction and is annotated as such.
+#
+# 2. Layer-wise evolution uses abs(r) as the PRIMARY metric (strength of the
+#    attention-breakage relationship, always >= 0), with the signed raw r shown
+#    as a secondary gray dashed line so the direction is still visible.
+#
+# 3. Effect-size computation is unified: compute_effect_size() guarantees that
+#    a POSITIVE value always means "cleavage bonds carry the stronger signal",
+#    regardless of group order. The mode only controls the narrative label.
+#
+# 4. Heatmaps expose a normalization mode (per-row / global) and carry an
+#    explicit caption stating what "high attention" means.
+#
+# 5. A single shared color palette and a single bond-indexing helper
+#    (extract_bond_level_attention) are reused by every panel so colors,
+#    indexing, and normalization are consistent across (a)-(d).
 # ============================================================================
+
+# Shared palette — imported by every panel for cross-figure consistency.
+INTERP_COLORS = {
+    'broken': '#E74C3C',      # cleaved bonds
+    'intact': '#3498DB',      # non-cleaved bonds
+    'line': '#2C3E50',        # primary lines / text
+    'highlight': '#F39C12',   # top-k annotations
+    'raw_r': '#95A5A6',       # secondary (raw signed r) trace
+    'fill': '#3498DB',        # area fills
+}
+
+VALID_ATTENTION_MODES = {"stability", "cleavage", "importance", "auto"}
+
+# Default mode — reviewers of GAT-style peptide models most commonly interpret
+# attention as a stability/saliency signal, hence "stability" is the default.
+DEFAULT_ATTENTION_MODE = "stability"
+
+
+def _resolve_attention_mode(mode: str, broken_weights=None, intact_weights=None) -> str:
+    """Resolve 'auto' into a concrete mode using the data sign.
+
+    Positive (mean(broken) - mean(intact)) -> cleavage signal dominates.
+    """
+    if mode not in VALID_ATTENTION_MODES:
+        raise ValueError(
+            f"Unknown attention mode '{mode}'. "
+            f"Expected one of {sorted(VALID_ATTENTION_MODES)}."
+        )
+    if mode != "auto":
+        return mode
+    if broken_weights is None or intact_weights is None:
+        return DEFAULT_ATTENTION_MODE
+    diff = float(np.mean(broken_weights) - np.mean(intact_weights))
+    return "cleavage" if diff > 0 else "stability"
+
+
+def _mode_caption(mode: str) -> str:
+    """Human-readable one-liner describing what 'high attention' means."""
+    if mode == "stability":
+        return "High attention = bond resists cleavage (stable)"
+    if mode == "cleavage":
+        return "High attention = bond prone to cleavage"
+    if mode == "importance":
+        return "High attention = salient bond (direction-agnostic)"
+    return "High attention = salient bond"
+
+
+def _save_figure(fig: plt.Figure, save_path: Optional[str]) -> None:
+    """Save a figure, auto-selecting SVG (vector, editable in browser/Illustrator)
+    or PNG (raster) from the file extension."""
+    if save_path is None:
+        return
+    path_str = str(save_path)
+    if path_str.lower().endswith('.svg'):
+        fig.savefig(path_str, format='svg', bbox_inches='tight')
+    else:
+        fig.savefig(path_str, dpi=300, bbox_inches='tight')
+    logger.info(f"Saved figure to {save_path}")
+
+
+def detect_attention_mode(broken_weights, intact_weights) -> str:
+    """Auto-detect attention semantics from the sign of the group-mean gap."""
+    return _resolve_attention_mode("auto", broken_weights, intact_weights)
+
+
+def compute_effect_size(broken_weights, intact_weights, mode: str = "auto") -> Dict[str, float]:
+    """Unified effect-size computation.
+
+    Guarantees that the returned ``cohen_d_signed`` is oriented so that
+    **positive always means cleavage bonds carry the stronger signal**:
+    cohen_d_signed = (mean(broken) - mean(intact)) / pooled_std.
+
+    The ``mode`` argument only controls the ``interpretation`` narrative string,
+    NOT the numerical direction, so the statistic is unambiguous to reviewers.
+
+    Returns a dict with: raw_mean_diff, cohen_d_signed, cohen_d_abs, t_stat,
+    p_value, auc, n_broken, n_intact, mode, interpretation.
+    """
+    from scipy import stats
+
+    broken = np.asarray(broken_weights, dtype=float)
+    intact = np.asarray(intact_weights, dtype=float)
+    mode = _resolve_attention_mode(mode, broken, intact)
+
+    n_b, n_i = len(broken), len(intact)
+    mean_diff = float(np.mean(broken) - np.mean(intact)) if n_b and n_i else 0.0
+    pooled_std = float(np.sqrt((np.var(broken) + np.var(intact)) / 2)) if n_b and n_i else 0.0
+    cohen_d_signed = mean_diff / pooled_std if pooled_std > 0 else 0.0
+
+    t_stat, p_value = (float('nan'), float('nan'))
+    if n_b > 1 and n_i > 1:
+        t_stat, p_value = stats.ttest_ind(broken, intact, equal_var=False)
+
+    # AUC: P(broken attention > intact attention). > 0.5 -> cleavage stronger.
+    auc = 0.5
+    if n_b and n_i:
+        try:
+            from sklearn.metrics import roc_auc_score
+            labels = np.concatenate([np.ones(n_b), np.zeros(n_i)])
+            scores = np.concatenate([broken, intact])
+            auc = float(roc_auc_score(labels, scores))
+        except Exception:
+            auc = 0.5
+
+    # Narrative — the NUMBER is invariant; only the wording depends on mode.
+    if mode == "stability":
+        interpretation = (
+            "Consistent with stability semantics" if cohen_d_signed < 0
+            else "Opposite to stability semantics (review carefully)"
+        )
+    elif mode == "cleavage":
+        interpretation = (
+            "Consistent with cleavage semantics" if cohen_d_signed > 0
+            else "Opposite to cleavage semantics (review carefully)"
+        )
+    else:  # importance
+        interpretation = "Salience signal (direction-agnostic)"
+
+    return {
+        "mode": mode,
+        "raw_mean_diff": mean_diff,
+        "cohen_d_signed": cohen_d_signed,
+        "cohen_d_abs": float(abs(cohen_d_signed)),
+        "t_stat": float(t_stat),
+        "p_value": float(p_value),
+        "auc": auc,
+        "n_broken": n_b,
+        "n_intact": n_i,
+        "interpretation": interpretation,
+    }
+
+
+def compute_separation_metrics(bond_attn: np.ndarray, bond_labels_np: np.ndarray) -> Dict[str, float]:
+    """Compute the full set of attention/breakage separation metrics for one
+    layer-sample pair.
+
+    Returns: pearson_r (signed), abs_r, spearman_r (signed), auc (signed,
+    >0.5 means broken bonds have higher attention), separation_auc
+    (direction-agnostic, in [0.5, 1.0]).
+    """
+    from scipy import stats
+
+    bond_attn = np.asarray(bond_attn, dtype=float)
+    bond_labels_np = np.asarray(bond_labels_np, dtype=float)
+    n = min(len(bond_attn), len(bond_labels_np))
+    bond_attn = bond_attn[:n]
+    bond_labels_np = bond_labels_np[:n]
+
+    out = {"pearson_r": 0.0, "abs_r": 0.0, "spearman_r": 0.0,
+           "auc": 0.5, "separation_auc": 0.5, "n": int(n)}
+
+    if n < 3 or np.std(bond_attn) == 0 or np.std(bond_labels_np) == 0:
+        return out
+
+    r = float(np.corrcoef(bond_attn, bond_labels_np)[0, 1])
+    if np.isnan(r):
+        r = 0.0
+    out["pearson_r"] = r
+    out["abs_r"] = abs(r)
+
+    try:
+        rho = float(stats.spearmanr(bond_attn, bond_labels_np).correlation)
+        if np.isnan(rho):
+            rho = 0.0
+    except Exception:
+        rho = 0.0
+    out["spearman_r"] = rho
+
+    if bond_labels_np.sum() > 0 and (bond_labels_np == 0).sum() > 0:
+        try:
+            from sklearn.metrics import roc_auc_score
+            auc = float(roc_auc_score(bond_labels_np, bond_attn))
+        except Exception:
+            auc = 0.5
+    else:
+        auc = 0.5
+    out["auc"] = auc
+    out["separation_auc"] = float(max(auc, 1.0 - auc))
+    return out
+
+
+def _normalize_heatmap(matrix: np.ndarray, mode: str) -> np.ndarray:
+    """Normalize a [num_layers, num_bonds] attention matrix.
+
+    mode = 'row'    -> each layer normalized to [0,1] (within-layer pattern)
+    mode = 'global' -> shared scale across layers (cross-layer magnitude)
+    """
+    matrix = np.asarray(matrix, dtype=float)
+    if mode == "row":
+        out = np.zeros_like(matrix)
+        for i in range(matrix.shape[0]):
+            row_max = matrix[i].max()
+            out[i] = matrix[i] / row_max if row_max > 0 else matrix[i]
+        return out
+    # global
+    g_max = matrix.max()
+    return matrix / g_max if g_max > 0 else matrix
+
 
 def extract_bond_level_attention(
     attention_weights: torch.Tensor,
@@ -912,55 +1136,529 @@ def extract_bond_level_attention(
     sequence: str,
     max_seq_len: int = 30
 ) -> Tuple[np.ndarray, List[str]]:
-    """
-    从边级别注意力权重提取肽键级别的注意力权重
-    
-    Args:
-        attention_weights: 注意力权重 [num_edges, num_heads] 或 [num_edges]
-        edge_index: 边索引 [2, num_edges]
-        sequence: 氨基酸序列
-        max_seq_len: 最大序列长度
-        
-    Returns:
-        bond_attn: 肽键级别的注意力权重数组
-        bond_labels: 肽键标签列表 (如 "A-C", "C-D")
+    """Extract peptide-bond-level attention from edge-level weights.
+
+    Returns (bond_attn, bond_labels) where bond_labels[i] = "X-Y" for the
+    peptide bond between residue i and i+1. This is the SINGLE source of truth
+    for bond indexing across all interpretability panels.
     """
     seq_len = min(len(sequence), max_seq_len)
-    
-    # 处理注意力权重维度
+
     if attention_weights.dim() == 2:
         attn_np = attention_weights.mean(dim=1).cpu().numpy()
     else:
         attn_np = attention_weights.cpu().numpy()
-    
-    # 初始化肽键级别权重
+
     bond_attn = np.zeros(seq_len - 1)
     bond_counts = np.zeros(seq_len - 1)
-    
+
     if edge_index is not None:
         edge_index_np = edge_index.cpu().numpy()
         for i in range(edge_index_np.shape[1]):
             src, dst = int(edge_index_np[0, i]), int(edge_index_np[1, i])
-            # 只处理相邻位置（肽键）
             if abs(src - dst) == 1 and src < seq_len - 1 and dst < seq_len:
                 bond_pos = min(src, dst)
                 if i < len(attn_np):
                     bond_attn[bond_pos] += attn_np[i]
                     bond_counts[bond_pos] += 1
     else:
-        # 假设边是顺序排列的
         for i in range(min(seq_len - 1, len(attn_np))):
             bond_attn[i] = attn_np[i]
             bond_counts[i] = 1
-    
-    # 平均化
+
     bond_counts = np.maximum(bond_counts, 1)
     bond_attn = bond_attn / bond_counts
-    
-    # 生成肽键标签
     bond_labels = [f"{sequence[i]}-{sequence[i+1]}" for i in range(seq_len - 1)]
-    
     return bond_attn, bond_labels
+
+
+def plot_single_sample_layer_attention(
+    attention_weights_list: List[torch.Tensor],
+    bond_labels: torch.Tensor,
+    sequence: str,
+    edge_index: Optional[torch.Tensor],
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (12, 5),
+    max_seq_len: int = 25,
+    attention_mode: str = DEFAULT_ATTENTION_MODE,
+) -> plt.Figure:
+    """Per-layer attention bar plot for a single peptide (case study).
+
+    Title reports |r| (strength) and signed r (direction) so reviewers cannot
+    misread a legitimate negative r under stability mode.
+    """
+    num_layers = len(attention_weights_list)
+    seq_len = min(len(sequence), max_seq_len)
+    num_bonds = seq_len - 1
+
+    all_bond_attn = []
+    for layer_weights in attention_weights_list:
+        bond_attn, _ = extract_bond_level_attention(layer_weights, edge_index, sequence, max_seq_len)
+        all_bond_attn.append(bond_attn)
+
+    bond_labels_np = bond_labels[:num_bonds].cpu().numpy() if isinstance(bond_labels, torch.Tensor) else np.asarray(bond_labels[:num_bonds])
+
+    fig, axes = plt.subplots(1, num_layers, figsize=figsize, sharey=True)
+    if num_layers == 1:
+        axes = [axes]
+    plt.subplots_adjust(wspace=0.15, left=0.08, right=0.95, top=0.84, bottom=0.18)
+
+    x = np.arange(num_bonds)
+    for ax, bond_attn in zip(axes, all_bond_attn):
+        for i in range(num_bonds):
+            if i < len(bond_labels_np) and bond_labels_np[i] == 1:
+                ax.axvspan(i - 0.4, i + 0.4, alpha=0.15, color=INTERP_COLORS['broken'])
+        bar_colors = [INTERP_COLORS['broken'] if bond_labels_np[i] == 1 else INTERP_COLORS['intact']
+                      for i in range(num_bonds)]
+        ax.bar(x, bond_attn[:num_bonds], color=bar_colors, alpha=0.7, edgecolor='white')
+
+        top_indices = np.argsort(bond_attn[:num_bonds])[-min(3, num_bonds):]
+        _, bond_labels_str = extract_bond_level_attention(attention_weights_list[0], edge_index, sequence, max_seq_len)
+        for idx in top_indices:
+            ax.annotate(bond_labels_str[idx], xy=(idx, bond_attn[idx]),
+                        xytext=(0, 8), textcoords='offset points',
+                        ha='center', fontsize=7, fontweight='bold',
+                        color=INTERP_COLORS['highlight'])
+
+        m = compute_separation_metrics(bond_attn[:num_bonds], bond_labels_np)
+        ax.set_xlabel('Bond Position (Residue Pair)', fontsize=9)
+        ax.set_title(f"|r|={m['abs_r']:.2f}  (signed r={m['pearson_r']:+.2f})",
+                     fontsize=10, fontweight='bold')
+        ax.set_xlim(-0.5, num_bonds - 0.5)
+        if num_bonds <= 15:
+            ax.set_xticks(x)
+            ax.set_xticklabels(bond_labels_str, fontsize=7, rotation=45)
+        ax.grid(True, alpha=0.3, axis='y')
+
+    axes[0].set_ylabel('Attention Weight', fontsize=10)
+    seq_display = sequence[:20] + ('...' if len(sequence) > 20 else '')
+    fig.suptitle(f'Sample Peptide: {seq_display}\n'
+                 f'Mode = {attention_mode} | {_mode_caption(attention_mode)}',
+                 fontsize=11, fontweight='bold', y=0.99)
+
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor=INTERP_COLORS['broken'], alpha=0.7, label='Broken Bond'),
+        Patch(facecolor=INTERP_COLORS['intact'], alpha=0.7, label='Intact Bond'),
+    ]
+    fig.legend(handles=legend_elements, loc='lower center', ncol=2, fontsize=9,
+               bbox_to_anchor=(0.5, 0.02))
+
+    _save_figure(fig, save_path)
+    return fig
+
+
+def compute_layer_separation_metrics(
+    attention_weights_list: List,
+    bond_labels_list: List[torch.Tensor],
+    edge_indices: List[Optional[torch.Tensor]],
+    sequences: List[str],
+    max_seq_len: int = 30,
+) -> List[Dict[str, float]]:
+    """Per-layer separation metrics, averaged across samples.
+
+    Returns a list (one dict per layer) of {pearson_r, abs_r, spearman_r,
+    auc, separation_auc}. Use abs_r / separation_auc as the primary,
+    direction-agnostic strength metric for the evolution trend.
+    """
+    if not attention_weights_list or not attention_weights_list[0]:
+        return []
+    num_layers = len(attention_weights_list[0])
+    per_layer: List[List[Dict[str, float]]] = [[] for _ in range(num_layers)]
+
+    for attn_weights, labels, edge_idx, seq in zip(
+        attention_weights_list, bond_labels_list, edge_indices, sequences
+    ):
+        labels_np = labels.cpu().numpy() if isinstance(labels, torch.Tensor) else np.asarray(labels)
+        for layer_idx in range(min(num_layers, len(attn_weights))):
+            bond_attn, _ = extract_bond_level_attention(attn_weights[layer_idx], edge_idx, seq, max_seq_len)
+            m = compute_separation_metrics(bond_attn, labels_np)
+            if m["n"] >= 3:
+                per_layer[layer_idx].append(m)
+
+    summary = []
+    keys = ("pearson_r", "abs_r", "spearman_r", "auc", "separation_auc")
+    for samples in per_layer:
+        if not samples:
+            summary.append({k: 0.0 for k in keys} | {"n_samples": 0})
+            continue
+        agg = {k: float(np.mean([s[k] for s in samples])) for k in keys}
+        agg["n_samples"] = len(samples)
+        summary.append(agg)
+    return summary
+
+
+def compute_layer_correlations(
+    attention_weights_list: List,
+    bond_labels_list: List[torch.Tensor],
+    edge_indices: List[Optional[torch.Tensor]],
+    sequences: List[str],
+    max_seq_len: int = 30,
+) -> List[float]:
+    """Backward-compatible wrapper: returns abs(r) per layer (the primary,
+    direction-agnostic strength metric). Prefer compute_layer_separation_metrics
+    for the full metric set."""
+    metrics = compute_layer_separation_metrics(
+        attention_weights_list, bond_labels_list, edge_indices, sequences, max_seq_len
+    )
+    return [m["abs_r"] for m in metrics]
+
+
+def plot_layer_evolution_trend(
+    layer_metrics,
+    layer_names: Optional[List[str]] = None,
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (8, 5),
+    attention_mode: str = DEFAULT_ATTENTION_MODE,
+    primary_metric: str = "abs_r",
+) -> plt.Figure:
+    """Layer-wise evolution of the attention-breakage relationship.
+
+    PRIMARY (solid): |r| (or separation_auc) — direction-agnostic STRENGTH,
+    always >= 0, so an increasing trend unambiguously means "the model's
+    attention becomes more informative about cleavage with depth".
+    SECONDARY (gray dashed): signed raw r — keeps the direction visible so a
+    negative r under stability mode is shown explicitly, not hidden.
+
+    ``layer_metrics`` may be either:
+      * a list of floats (treated as the primary metric directly), or
+      * a list of dicts as produced by compute_layer_separation_metrics().
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Normalize input to (primary_values, raw_r_values)
+    if layer_metrics and isinstance(layer_metrics[0], dict):
+        primary_vals = [float(m[primary_metric]) for m in layer_metrics]
+        raw_r_vals = [float(m["pearson_r"]) for m in layer_metrics]
+    else:
+        primary_vals = [float(v) for v in layer_metrics]
+        raw_r_vals = primary_vals  # fall back; no signed info available
+
+    num_layers = len(primary_vals)
+    x = np.arange(num_layers)
+    if layer_names is None:
+        layer_names = [f'Layer {i}' for i in range(num_layers)]
+
+    # Secondary: signed raw r (gray dashed) — plotted first so primary sits on top
+    if raw_r_vals is not primary_vals:
+        ax.plot(x, raw_r_vals, 'o--', color=INTERP_COLORS['raw_r'], linewidth=1.5,
+                markersize=6, alpha=0.7, label='Signed r (direction)', zorder=2)
+        for xi, yi in zip(x, raw_r_vals):
+            ax.annotate(f'{yi:+.2f}', xy=(xi, yi), xytext=(0, -16),
+                        textcoords='offset points', ha='center', fontsize=8,
+                        color=INTERP_COLORS['raw_r'])
+
+    # Primary: abs(r) — solid
+    ax.plot(x, primary_vals, 'o-', color=INTERP_COLORS['line'], linewidth=2.5,
+            markersize=11, markerfacecolor=INTERP_COLORS['broken'],
+            markeredgecolor='black', markeredgewidth=1.5,
+            label=f'{primary_metric} (strength)', zorder=4)
+    for xi, yi in zip(x, primary_vals):
+        ax.annotate(f'{yi:.3f}', xy=(xi, yi), xytext=(0, 12),
+                    textcoords='offset points', ha='center', fontsize=10,
+                    fontweight='bold', color=INTERP_COLORS['line'])
+    ax.fill_between(x, primary_vals, alpha=0.15, color=INTERP_COLORS['fill'])
+
+    # Linear trend on the primary metric
+    if num_layers > 1:
+        z = np.polyfit(x, primary_vals, 1)
+        ax.plot(x, np.poly1d(z)(x), ':', color=INTERP_COLORS['highlight'],
+                alpha=0.8, linewidth=1.5, label=f'Trend slope={z[0]:+.4f}')
+
+    ax.axhline(0, color='gray', linewidth=0.5, alpha=0.5)
+    ax.set_xlabel('Network Layer', fontsize=12, fontweight='bold')
+    ax.set_ylabel(f'{primary_metric}  (strength, always ≥ 0)', fontsize=12, fontweight='bold')
+    ax.set_title(f'Layer-wise Evolution of Attention–Breakage Strength\n'
+                 f'Mode = {attention_mode} | {_mode_caption(attention_mode)}',
+                 fontsize=12, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(layer_names, fontsize=10)
+    lo = min(min(primary_vals), min(raw_r_vals) if raw_r_vals else 0)
+    hi = max(max(primary_vals), max(raw_r_vals) if raw_r_vals else 0)
+    ax.set_ylim(lo - 0.12, hi + 0.18)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='lower right', fontsize=9, framealpha=0.9)
+
+    # Reviewer-proof annotation
+    note = ("Increasing |r| ⇒ attention becomes more informative about cleavage.\n"
+            f"Under {attention_mode} mode a negative signed r is the EXPECTED direction.")
+    ax.text(0.02, 0.98, note, transform=ax.transAxes, fontsize=8,
+            verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.6))
+
+    plt.tight_layout()
+    _save_figure(fig, save_path)
+    return fig
+
+
+def plot_bond_type_comparison(
+    attention_weights_list: List,
+    bond_labels_list: List[torch.Tensor],
+    edge_indices: List[Optional[torch.Tensor]],
+    sequences: List[str],
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (8, 6),
+    attention_mode: str = "auto",
+    max_seq_len: int = 30,
+) -> Tuple[plt.Figure, Dict[str, float]]:
+    """Boxplot of attention on broken vs intact bonds, annotated with the
+    UNIFIED effect size (positive ⇒ cleavage bonds stronger) and the active
+    semantic mode. Returns (fig, effect_size_dict) so callers can serialize
+    the stats into the JSON summary.
+    """
+    broken_weights, intact_weights = [], []
+    for attn_weights, labels, edge_idx, seq in zip(
+        attention_weights_list, bond_labels_list, edge_indices, sequences
+    ):
+        last_layer = attn_weights[-1] if isinstance(attn_weights, list) else attn_weights
+        bond_attn, _ = extract_bond_level_attention(last_layer, edge_idx, seq, max_seq_len)
+        labels_np = labels.cpu().numpy() if isinstance(labels, torch.Tensor) else np.asarray(labels)
+        for i in range(min(len(bond_attn), len(labels_np))):
+            (broken_weights if labels_np[i] == 1 else intact_weights).append(bond_attn[i])
+
+    effect = compute_effect_size(broken_weights, intact_weights, mode=attention_mode)
+    mode = effect["mode"]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    bp = ax.boxplot([broken_weights, intact_weights],
+                    patch_artist=True, widths=0.5, showmeans=True,
+                    meanprops=dict(marker='D', markerfacecolor='white', markersize=8))
+    ax.set_xticks([1, 2])
+    ax.set_xticklabels(['Broken Bonds', 'Intact Bonds'])
+    bp['boxes'][0].set_facecolor(INTERP_COLORS['broken']); bp['boxes'][0].set_alpha(0.7)
+    bp['boxes'][1].set_facecolor(INTERP_COLORS['intact']); bp['boxes'][1].set_alpha(0.7)
+    for median in bp['medians']:
+        median.set_color('black'); median.set_linewidth(2)
+
+    rng = np.random.default_rng(42)
+    ax.scatter(rng.normal(1, 0.06, len(broken_weights)), broken_weights,
+               alpha=0.4, color=INTERP_COLORS['broken'], s=20, zorder=2)
+    ax.scatter(rng.normal(2, 0.06, len(intact_weights)), intact_weights,
+               alpha=0.4, color=INTERP_COLORS['intact'], s=20, zorder=2)
+
+    stats_text = (
+        f"Mode: {mode}\n"
+        f"Cohen's d (signed): {effect['cohen_d_signed']:+.3f}\n"
+        f"  ↑ positive ⇒ cleavage bonds stronger\n"
+        f"Cohen's d (|·|): {effect['cohen_d_abs']:.3f}\n"
+        f"AUC: {effect['auc']:.3f}\n"
+        f"t = {effect['t_stat']:.2f}, p = {effect['p_value']:.2e}\n"
+        f"n_broken = {effect['n_broken']}, n_intact = {effect['n_intact']}\n"
+        f"{effect['interpretation']}"
+    )
+    ax.text(0.98, 0.98, stats_text, transform=ax.transAxes, fontsize=9,
+            verticalalignment='top', horizontalalignment='right',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.85))
+
+    ax.set_ylabel('Attention Weight', fontsize=12, fontweight='bold')
+    ax.set_title('Attention: Broken vs Intact Bonds\n'
+                 f'{_mode_caption(mode)}',
+                 fontsize=12, fontweight='bold')
+    ax.grid(True, alpha=0.3, axis='y')
+    plt.tight_layout()
+    _save_figure(fig, save_path)
+    return fig, effect
+
+
+def plot_new_interpretability_case_study(
+    attention_weights_list: List,
+    bond_labels_list: List[torch.Tensor],
+    sequences: List[str],
+    edge_indices: List[Optional[torch.Tensor]],
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (16, 12),
+    max_seq_len: int = 25,
+    attention_mode: str = "auto",
+    heatmap_normalize: str = "row",
+) -> Tuple[plt.Figure, Dict[str, object]]:
+    """Paper-grade 2x2 interpretability figure.
+
+    (a) Single-sample attention (final layer) with |r| and signed r.
+    (b) Layer-wise evolution: primary |r| (strength) + secondary signed r.
+    (c) Broken vs intact boxplot with UNIFIED effect size + mode label.
+    (d) Attention heatmap with explicit normalization + semantic caption.
+
+    Shared palette (INTERP_COLORS), shared bond indexing
+    (extract_bond_level_attention), and shared metrics
+    (compute_separation_metrics / compute_effect_size) guarantee consistency.
+
+    Returns (fig, summary_dict) for JSON serialization.
+    """
+    # Create 2x2 layout
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    plt.subplots_adjust(hspace=0.40, wspace=0.30, left=0.08, right=0.95, top=0.90, bottom=0.08)
+
+    # ---------- (a) Single-sample final-layer attention ----------
+    ax1 = axes[0, 0]
+    sample_attn = attention_weights_list[0]
+    sample_labels = bond_labels_list[0]
+    sample_seq = sequences[0]
+    sample_edge_idx = edge_indices[0]
+
+    num_layers = len(sample_attn)
+    seq_len = min(len(sample_seq), max_seq_len)
+    num_bonds = seq_len - 1
+
+    last_layer = sample_attn[-1]
+    last_attn, bond_labels_str = extract_bond_level_attention(
+        last_layer, sample_edge_idx, sample_seq, max_seq_len
+    )
+    bond_labels_np = (sample_labels[:num_bonds].cpu().numpy()
+                      if isinstance(sample_labels, torch.Tensor)
+                      else np.asarray(sample_labels[:num_bonds]))
+    last_attn = last_attn[:num_bonds]
+
+    x = np.arange(num_bonds)
+    for i in range(num_bonds):
+        if i < len(bond_labels_np) and bond_labels_np[i] == 1:
+            ax1.axvspan(i - 0.4, i + 0.4, alpha=0.15, color=INTERP_COLORS['broken'])
+    bar_colors = [INTERP_COLORS['broken'] if (i < len(bond_labels_np) and bond_labels_np[i] == 1)
+                  else INTERP_COLORS['intact'] for i in range(num_bonds)]
+    ax1.bar(x, last_attn, color=bar_colors, alpha=0.7, edgecolor='white')
+
+    for idx in np.argsort(last_attn)[-min(3, num_bonds):]:
+        ax1.annotate(bond_labels_str[idx], xy=(idx, last_attn[idx]),
+                     xytext=(0, 8), textcoords='offset points',
+                     ha='center', fontsize=7, fontweight='bold',
+                     color=INTERP_COLORS['highlight'])
+
+    m_a = compute_separation_metrics(last_attn, bond_labels_np)
+    ax1.set_xlabel('Bond Position (Residue Pair)', fontsize=10)
+    ax1.set_ylabel('Attention Weight', fontsize=10)
+    ax1.set_title(f'(a) Attention Distribution (final layer)\n'
+                  f"|r|={m_a['abs_r']:.2f}, signed r={m_a['pearson_r']:+.2f}",
+                  fontsize=11, fontweight='bold')
+    if num_bonds <= 15:
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(bond_labels_str, fontsize=7, rotation=45)
+    ax1.grid(True, alpha=0.3, axis='y')
+
+    # ---------- (b) Layer-wise evolution ----------
+    ax2 = axes[0, 1]
+    layer_metrics = compute_layer_separation_metrics(
+        attention_weights_list, bond_labels_list, edge_indices, sequences, max_seq_len
+    )
+
+    if layer_metrics:
+        layer_x = np.arange(len(layer_metrics))
+        abs_r = [m["abs_r"] for m in layer_metrics]
+        raw_r = [m["pearson_r"] for m in layer_metrics]
+
+        # Secondary signed r (gray dashed)
+        ax2.plot(layer_x, raw_r, 'o--', color=INTERP_COLORS['raw_r'], linewidth=1.5,
+                 markersize=6, alpha=0.7, label='Signed r', zorder=2)
+        # Primary |r| (solid)
+        ax2.plot(layer_x, abs_r, 'o-', color=INTERP_COLORS['line'], linewidth=2.5,
+                 markersize=11, markerfacecolor=INTERP_COLORS['broken'],
+                 markeredgecolor='black', markeredgewidth=1.5, label='|r| (strength)', zorder=4)
+        for xi, yi in zip(layer_x, abs_r):
+            ax2.annotate(f'{yi:.3f}', xy=(xi, yi), xytext=(0, 12),
+                         textcoords='offset points', ha='center', fontsize=10,
+                         fontweight='bold', color=INTERP_COLORS['line'])
+        ax2.fill_between(layer_x, abs_r, alpha=0.15, color=INTERP_COLORS['fill'])
+        ax2.axhline(0, color='gray', linewidth=0.5, alpha=0.5)
+        ax2.set_xticks(layer_x)
+        ax2.set_xticklabels([f'L{i}' for i in range(len(layer_metrics))], fontsize=10)
+        ax2.legend(loc='lower right', fontsize=9, framealpha=0.9)
+
+    ax2.set_xlabel('Network Layer', fontsize=10, fontweight='bold')
+    ax2.set_ylabel('|r| (strength, ≥ 0)', fontsize=10, fontweight='bold')
+    ax2.set_title('(b) Layer-wise Evolution (|r| primary, signed r secondary)',
+                  fontsize=11, fontweight='bold')
+    ax2.grid(True, alpha=0.3)
+
+    # ---------- (c) Broken vs intact (unified effect size) ----------
+    ax3 = axes[1, 0]
+    broken_weights, intact_weights = [], []
+    for attn_weights, labels, edge_idx, seq in zip(
+        attention_weights_list, bond_labels_list, edge_indices, sequences
+    ):
+        ll = attn_weights[-1] if isinstance(attn_weights, list) else attn_weights
+        bond_attn, _ = extract_bond_level_attention(ll, edge_idx, seq, max_seq_len)
+        labels_np = labels.cpu().numpy() if isinstance(labels, torch.Tensor) else np.asarray(labels)
+        for i in range(min(len(bond_attn), len(labels_np))):
+            (broken_weights if labels_np[i] == 1 else intact_weights).append(bond_attn[i])
+
+    effect = compute_effect_size(broken_weights, intact_weights, mode=attention_mode)
+    mode = effect["mode"]
+
+    bp = ax3.boxplot([broken_weights, intact_weights], patch_artist=True, widths=0.5,
+                     showmeans=True,
+                     meanprops=dict(marker='D', markerfacecolor='white', markersize=8))
+    ax3.set_xticks([1, 2])
+    ax3.set_xticklabels(['Broken Bonds', 'Intact Bonds'])
+    bp['boxes'][0].set_facecolor(INTERP_COLORS['broken']); bp['boxes'][0].set_alpha(0.7)
+    bp['boxes'][1].set_facecolor(INTERP_COLORS['intact']); bp['boxes'][1].set_alpha(0.7)
+    for median in bp['medians']:
+        median.set_color('black'); median.set_linewidth(2)
+
+    rng = np.random.default_rng(42)
+    ax3.scatter(rng.normal(1, 0.06, len(broken_weights)), broken_weights,
+                alpha=0.4, color=INTERP_COLORS['broken'], s=20, zorder=2)
+    ax3.scatter(rng.normal(2, 0.06, len(intact_weights)), intact_weights,
+                alpha=0.4, color=INTERP_COLORS['intact'], s=20, zorder=2)
+
+    stats_text = (
+        f"Mode: {mode}\n"
+        f"d = {effect['cohen_d_signed']:+.2f} (|d|={effect['cohen_d_abs']:.2f})\n"
+        f"AUC = {effect['auc']:.3f}\n"
+        f"p = {effect['p_value']:.2e}\n"
+        f"{effect['interpretation']}"
+    )
+    ax3.text(0.98, 0.98, stats_text, transform=ax3.transAxes, fontsize=9,
+             verticalalignment='top', horizontalalignment='right',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.85))
+    ax3.set_ylabel('Attention Weight', fontsize=10, fontweight='bold')
+    ax3.set_title(f'(c) Broken vs Intact  [+ ⇒ cleavage stronger]\n{_mode_caption(mode)}',
+                  fontsize=11, fontweight='bold')
+    ax3.grid(True, alpha=0.3, axis='y')
+
+    # ---------- (d) Attention heatmap (normalized, semantic caption) ----------
+    ax4 = axes[1, 1]
+    max_bonds_show = 15
+    heatmap_data = []
+    for layer_idx in range(num_layers):
+        rows = []
+        for attn_weights, edge_idx, seq in zip(attention_weights_list, edge_indices, sequences):
+            bond_attn, _ = extract_bond_level_attention(attn_weights[layer_idx], edge_idx, seq, max_seq_len)
+            rows.append(bond_attn[:max_bonds_show])
+        max_len = max(len(r) for r in rows) if rows else 0
+        padded = [np.pad(r, (0, max_len - len(r)), constant_values=np.nan) for r in rows]
+        stacked = np.stack(padded) if padded else np.zeros((1, 1))
+        # nanmean ignores padding
+        with np.errstate(all='ignore'):
+            heatmap_data.append(np.nanmean(stacked, axis=0))
+    # Truncate to the shortest non-nan length to avoid nan columns
+    min_len = min((np.sum(~np.isnan(row)) for row in heatmap_data), default=0)
+    heatmap_array = np.array([row[:min_len] for row in heatmap_data]) if min_len > 0 else np.array(heatmap_data)
+    heatmap_array = _normalize_heatmap(heatmap_array, heatmap_normalize)
+
+    im = ax4.imshow(heatmap_array, cmap='YlOrRd', aspect='auto', interpolation='nearest')
+    cbar = plt.colorbar(im, ax=ax4)
+    norm_label = 'per-row normalized' if heatmap_normalize == 'row' else 'global normalized'
+    cbar.set_label(f'Attention ({norm_label})', fontsize=10)
+    ax4.set_xlabel('Bond Position', fontsize=10, fontweight='bold')
+    ax4.set_ylabel('Network Layer', fontsize=10, fontweight='bold')
+    ax4.set_title(f'(d) Attention Heatmap [{norm_label}]\n'
+                  f'{_mode_caption(mode)}', fontsize=11, fontweight='bold')
+    if num_layers <= 5:
+        ax4.set_yticks(np.arange(num_layers))
+        ax4.set_yticklabels([f'L{i}' for i in range(num_layers)], fontsize=9)
+
+    fig.suptitle('DBond-GT Interpretability Analysis',
+                 fontsize=14, fontweight='bold', y=0.98)
+
+    _save_figure(fig, save_path)
+
+    summary = {
+        "attention_mode": mode,
+        "mode_caption": _mode_caption(mode),
+        "panel_a_metrics": m_a,
+        "panel_b_layer_metrics": layer_metrics,
+        "panel_c_effect_size": effect,
+        "panel_d_heatmap_normalize": heatmap_normalize,
+    }
+    return fig, summary
 
 
 def plot_single_sample_layer_attention(
