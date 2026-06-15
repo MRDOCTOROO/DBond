@@ -15,6 +15,13 @@ from .visualization import (
     analyze_attention_patterns,
     plot_attention_analysis,
     create_attention_report,
+    # 新版可解释性分析函数
+    extract_bond_level_attention,
+    plot_single_sample_layer_attention,
+    plot_layer_evolution_trend,
+    plot_bond_type_comparison,
+    compute_layer_correlations,
+    plot_new_interpretability_case_study,
 )
 from .interpretability import (
     plot_interpretability_case_study,
@@ -35,4 +42,11 @@ __all__ = [
     'create_attention_report',
     'plot_interpretability_case_study',
     'generate_interpretability_report',
+    # 新版可解释性分析函数
+    'extract_bond_level_attention',
+    'plot_single_sample_layer_attention',
+    'plot_layer_evolution_trend',
+    'plot_bond_type_comparison',
+    'compute_layer_correlations',
+    'plot_new_interpretability_case_study',
 ]
