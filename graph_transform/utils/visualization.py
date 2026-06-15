@@ -1201,12 +1201,13 @@ def plot_bond_type_comparison(
     
     # 绘制箱线图
     data_to_plot = [broken_weights, intact_weights]
-    bp = ax.boxplot(data_to_plot, 
-                   labels=['Broken Bonds', 'Intact Bonds'],
+    bp = ax.boxplot(data_to_plot,
                    patch_artist=True,
                    widths=0.5,
                    showmeans=True,
                    meanprops=dict(marker='D', markerfacecolor='white', markersize=8))
+    ax.set_xticks([1, 2])
+    ax.set_xticklabels(['Broken Bonds', 'Intact Bonds'])
     
     # 设置颜色
     bp['boxes'][0].set_facecolor('#E74C3C')
@@ -1435,7 +1436,7 @@ def plot_new_interpretability_case_study(
         if len(layer_corrs) > 2:
             z = np.polyfit(layer_x, layer_corrs, 1)
             p = np.poly1d(z)
-            ax2.plot(layer_x, p(x), '--', color=colors['broken'], alpha=0.5, linewidth=1.5)
+            ax2.plot(layer_x, p(layer_x), '--', color=colors['broken'], alpha=0.5, linewidth=1.5)
             
             # 解释文字
             if z[0] > 0:
@@ -1474,11 +1475,12 @@ def plot_new_interpretability_case_study(
     # 箱线图
     data_to_plot = [broken_weights, intact_weights]
     bp = ax3.boxplot(data_to_plot, 
-                    labels=['Broken Bonds', 'Intact Bonds'],
                     patch_artist=True,
                     widths=0.5,
                     showmeans=True,
                     meanprops=dict(marker='D', markerfacecolor='white', markersize=8))
+    ax3.set_xticks([1, 2])
+    ax3.set_xticklabels(['Broken Bonds', 'Intact Bonds'])
     
     bp['boxes'][0].set_facecolor(colors['broken'])
     bp['boxes'][0].set_alpha(0.7)

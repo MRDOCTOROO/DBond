@@ -302,9 +302,10 @@ def _plot_attention_boxplot(
     if broken_weights and intact_weights:
         data_to_plot = [broken_weights, intact_weights]
         bp = ax.boxplot(data_to_plot, 
-                       labels=['Broken Bonds', 'Intact Bonds'],
                        patch_artist=True,
                        widths=0.6)
+        ax.set_xticks([1, 2])
+        ax.set_xticklabels(['Broken Bonds', 'Intact Bonds'])
         
         # 设置颜色
         bp['boxes'][0].set_facecolor(colors['broken'])
