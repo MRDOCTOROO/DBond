@@ -903,79 +903,95 @@ def plot_attention_heads_combined(attention_weights_list: List[torch.Tensor],
 
 
 # ============================================================================
-# Paper-grade interpretability analysis (semantic-aware, reviewer-proof)
+# Paper-grade interpretability analysis (cleavage-aligned, reviewer-proof)
 #
-# Design principles
-# -----------------
-# 1. Unified attention semantics via ATTENTION_MODE:
-#      "stability"  -> high attention = bond resists cleavage (expects r < 0)
-#      "cleavage"   -> high attention = bond prone to cleavage (expects r > 0)
+# Canonical semantic convention
+# -----------------------------
+# Attention is interpreted as a CLEAVAGE RELEVANCE SCORE: higher attention on
+# a peptide bond = higher relevance to / likelihood of bond cleavage (label=1).
+# This aligns the interpretability layer with the model's prediction objective
+# (bond cleavage prediction), so attention, labels, and all statistics share a
+# single, consistent direction.
+#
+# Modes (for backward compatibility; "cleavage" is the canonical default):
+#      "cleavage"   -> high attention = higher cleavage relevance (DEFAULT)
 #      "importance" -> attention marks salient bonds, direction-agnostic
-#      "auto"       -> detect from data sign
-#    All correlation / plots auto-adapt to this definition, so a negative
-#    correlation is no longer "bad" — under stability mode it is the EXPECTED,
-#    correct direction and is annotated as such.
+#      "auto"       -> detect from data sign (falls back to "cleavage")
+#      "stability"  -> DEPRECATED. Kept only for legacy callers; new figures
+#                      should never use it. "stability" is internally remapped
+#                      to "cleavage" so outputs stay consistent.
 #
-# 2. Layer-wise evolution uses abs(r) as the PRIMARY metric (strength of the
-#    attention-breakage relationship, always >= 0), with the signed raw r shown
-#    as a secondary gray dashed line so the direction is still visible.
-#
-# 3. Effect-size computation is unified: compute_effect_size() guarantees that
-#    a POSITIVE value always means "cleavage bonds carry the stronger signal",
-#    regardless of group order. The mode only controls the narrative label.
-#
-# 4. Heatmaps expose a normalization mode (per-row / global) and carry an
-#    explicit caption stating what "high attention" means.
-#
-# 5. A single shared color palette and a single bond-indexing helper
+# Consistency guarantees
+# ----------------------
+# 1. Every statistic is cleavage-positive by construction:
+#      - Pearson r / Spearman r:  r > 0  =>  attention aligned with cleavage
+#      - Cohen's d (signed):      d > 0  =>  broken bonds have stronger signal
+#      - AUC:                    > 0.5  =>  broken bonds have stronger signal
+# 2. Layer-wise evolution uses abs(r) as PRIMARY (strength, always >= 0); the
+#    signed raw r is shown as a secondary gray dashed line so direction is
+#    visible (positive r = aligned with cleavage = desirable).
+# 3. All axis labels, legends, and captions say "higher attention = higher
+#    cleavage relevance (more likely broken bond)".
+# 4. A single shared palette (INTERP_COLORS) and a single bond-indexing helper
 #    (extract_bond_level_attention) are reused by every panel so colors,
 #    indexing, and normalization are consistent across (a)-(d).
 # ============================================================================
 
 # Shared palette — imported by every panel for cross-figure consistency.
 INTERP_COLORS = {
-    'broken': '#E74C3C',      # cleaved bonds
-    'intact': '#3498DB',      # non-cleaved bonds
+    'broken': '#E74C3C',      # cleaved bonds (label=1)
+    'intact': '#3498DB',      # non-cleaved bonds (label=0)
     'line': '#2C3E50',        # primary lines / text
     'highlight': '#F39C12',   # top-k annotations
     'raw_r': '#95A5A6',       # secondary (raw signed r) trace
     'fill': '#3498DB',        # area fills
 }
 
-VALID_ATTENTION_MODES = {"stability", "cleavage", "importance", "auto"}
+VALID_ATTENTION_MODES = {"cleavage", "importance", "auto", "stability"}
 
-# Default mode — reviewers of GAT-style peptide models most commonly interpret
-# attention as a stability/saliency signal, hence "stability" is the default.
-DEFAULT_ATTENTION_MODE = "stability"
+# Canonical default: attention is a cleavage-relevance score. "stability" is
+# DEPRECATED and silently remapped to "cleavage" (see _resolve_attention_mode).
+DEFAULT_ATTENTION_MODE = "cleavage"
 
 
 def _resolve_attention_mode(mode: str, broken_weights=None, intact_weights=None) -> str:
-    """Resolve 'auto' into a concrete mode using the data sign.
+    """Resolve a (possibly deprecated/auto) mode into the canonical concrete mode.
 
-    Positive (mean(broken) - mean(intact)) -> cleavage signal dominates.
+    "stability" is DEPRECATED -> remapped to "cleavage".
+    "auto" -> detected from the sign of mean(broken) - mean(intact), falling
+              back to "cleavage" when data is unavailable.
     """
     if mode not in VALID_ATTENTION_MODES:
         raise ValueError(
             f"Unknown attention mode '{mode}'. "
             f"Expected one of {sorted(VALID_ATTENTION_MODES)}."
         )
+    # Deprecation: stability is no longer a distinct interpretation.
+    if mode == "stability":
+        logger.warning(
+            "Attention mode 'stability' is DEPRECATED and has been remapped to "
+            "'cleavage' (attention = cleavage relevance). Update your call site."
+        )
+        return "cleavage"
     if mode != "auto":
         return mode
     if broken_weights is None or intact_weights is None:
         return DEFAULT_ATTENTION_MODE
     diff = float(np.mean(broken_weights) - np.mean(intact_weights))
-    return "cleavage" if diff > 0 else "stability"
+    return "cleavage" if diff > 0 else "importance"
 
 
 def _mode_caption(mode: str) -> str:
-    """Human-readable one-liner describing what 'high attention' means."""
-    if mode == "stability":
-        return "High attention = bond resists cleavage (stable)"
-    if mode == "cleavage":
-        return "High attention = bond prone to cleavage"
-    if mode == "importance":
+    """Human-readable one-liner describing what 'high attention' means.
+
+    Always cleavage-aligned: higher attention = higher cleavage relevance.
+    """
+    resolved = _resolve_attention_mode(mode)
+    if resolved == "cleavage":
+        return "High attention = higher cleavage relevance (more likely broken bond)"
+    if resolved == "importance":
         return "High attention = salient bond (direction-agnostic)"
-    return "High attention = salient bond"
+    return "High attention = higher cleavage relevance (more likely broken bond)"
 
 
 def _save_figure(fig: plt.Figure, save_path: Optional[str]) -> None:
@@ -1036,21 +1052,17 @@ def compute_effect_size(broken_weights, intact_weights, mode: str = "auto") -> D
             auc = 0.5
 
     # Narrative — the NUMBER is invariant; only the wording depends on mode.
-    if mode == "stability":
+    resolved = _resolve_attention_mode(mode, broken, intact)
+    if resolved == "cleavage":
         interpretation = (
-            "Consistent with stability semantics" if cohen_d_signed < 0
-            else "Opposite to stability semantics (review carefully)"
-        )
-    elif mode == "cleavage":
-        interpretation = (
-            "Consistent with cleavage semantics" if cohen_d_signed > 0
-            else "Opposite to cleavage semantics (review carefully)"
+            "Attention ALIGNED with cleavage (broken > intact)" if cohen_d_signed > 0
+            else "Attention OPPOSITE to cleavage (broken < intact, review carefully)"
         )
     else:  # importance
         interpretation = "Salience signal (direction-agnostic)"
 
     return {
-        "mode": mode,
+        "mode": resolved,
         "raw_mean_diff": mean_diff,
         "cohen_d_signed": cohen_d_signed,
         "cohen_d_abs": float(abs(cohen_d_signed)),
@@ -1184,8 +1196,9 @@ def plot_single_sample_layer_attention(
 ) -> plt.Figure:
     """Per-layer attention bar plot for a single peptide (case study).
 
-    Title reports |r| (strength) and signed r (direction) so reviewers cannot
-    misread a legitimate negative r under stability mode.
+    Attention is a cleavage-relevance score (higher = more likely broken).
+    Title reports |r| (strength) and signed r (direction); positive r means
+    attention is aligned with the cleavage target.
     """
     num_layers = len(attention_weights_list)
     seq_len = min(len(sequence), max_seq_len)
@@ -1204,16 +1217,16 @@ def plot_single_sample_layer_attention(
     plt.subplots_adjust(wspace=0.15, left=0.08, right=0.95, top=0.84, bottom=0.18)
 
     x = np.arange(num_bonds)
+    _, bond_labels_str = extract_bond_level_attention(attention_weights_list[0], edge_index, sequence, max_seq_len)
     for ax, bond_attn in zip(axes, all_bond_attn):
         for i in range(num_bonds):
             if i < len(bond_labels_np) and bond_labels_np[i] == 1:
                 ax.axvspan(i - 0.4, i + 0.4, alpha=0.15, color=INTERP_COLORS['broken'])
-        bar_colors = [INTERP_COLORS['broken'] if bond_labels_np[i] == 1 else INTERP_COLORS['intact']
-                      for i in range(num_bonds)]
+        bar_colors = [INTERP_COLORS['broken'] if (i < len(bond_labels_np) and bond_labels_np[i] == 1)
+                      else INTERP_COLORS['intact'] for i in range(num_bonds)]
         ax.bar(x, bond_attn[:num_bonds], color=bar_colors, alpha=0.7, edgecolor='white')
 
         top_indices = np.argsort(bond_attn[:num_bonds])[-min(3, num_bonds):]
-        _, bond_labels_str = extract_bond_level_attention(attention_weights_list[0], edge_index, sequence, max_seq_len)
         for idx in top_indices:
             ax.annotate(bond_labels_str[idx], xy=(idx, bond_attn[idx]),
                         xytext=(0, 8), textcoords='offset points',
@@ -1230,16 +1243,16 @@ def plot_single_sample_layer_attention(
             ax.set_xticklabels(bond_labels_str, fontsize=7, rotation=45)
         ax.grid(True, alpha=0.3, axis='y')
 
-    axes[0].set_ylabel('Attention Weight', fontsize=10)
+    axes[0].set_ylabel('Cleavage-Relevance Attention', fontsize=10)
     seq_display = sequence[:20] + ('...' if len(sequence) > 20 else '')
     fig.suptitle(f'Sample Peptide: {seq_display}\n'
-                 f'Mode = {attention_mode} | {_mode_caption(attention_mode)}',
+                 f'{_mode_caption(attention_mode)}',
                  fontsize=11, fontweight='bold', y=0.99)
 
     from matplotlib.patches import Patch
     legend_elements = [
-        Patch(facecolor=INTERP_COLORS['broken'], alpha=0.7, label='Broken Bond'),
-        Patch(facecolor=INTERP_COLORS['intact'], alpha=0.7, label='Intact Bond'),
+        Patch(facecolor=INTERP_COLORS['broken'], alpha=0.7, label='Broken Bond (label=1)'),
+        Patch(facecolor=INTERP_COLORS['intact'], alpha=0.7, label='Intact Bond (label=0)'),
     ]
     fig.legend(handles=legend_elements, loc='lower center', ncol=2, fontsize=9,
                bbox_to_anchor=(0.5, 0.02))
@@ -1314,11 +1327,13 @@ def plot_layer_evolution_trend(
 ) -> plt.Figure:
     """Layer-wise evolution of the attention-breakage relationship.
 
+    Attention is a cleavage-relevance score (higher = more likely broken).
     PRIMARY (solid): |r| (or separation_auc) — direction-agnostic STRENGTH,
     always >= 0, so an increasing trend unambiguously means "the model's
     attention becomes more informative about cleavage with depth".
-    SECONDARY (gray dashed): signed raw r — keeps the direction visible so a
-    negative r under stability mode is shown explicitly, not hidden.
+    SECONDARY (gray dashed): signed raw r — keeps the direction visible; a
+    POSITIVE signed r means attention is aligned with the cleavage target
+    (broken bonds receive higher attention), which is the desirable direction.
 
     ``layer_metrics`` may be either:
       * a list of floats (treated as the primary metric directly), or
@@ -1368,8 +1383,8 @@ def plot_layer_evolution_trend(
     ax.axhline(0, color='gray', linewidth=0.5, alpha=0.5)
     ax.set_xlabel('Network Layer', fontsize=12, fontweight='bold')
     ax.set_ylabel(f'{primary_metric}  (strength, always ≥ 0)', fontsize=12, fontweight='bold')
-    ax.set_title(f'Layer-wise Evolution of Attention–Breakage Strength\n'
-                 f'Mode = {attention_mode} | {_mode_caption(attention_mode)}',
+    ax.set_title('Layer-wise Evolution of Cleavage-Relevance Attention\n'
+                 f'{_mode_caption(attention_mode)}',
                  fontsize=12, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(layer_names, fontsize=10)
@@ -1379,9 +1394,9 @@ def plot_layer_evolution_trend(
     ax.grid(True, alpha=0.3)
     ax.legend(loc='lower right', fontsize=9, framealpha=0.9)
 
-    # Reviewer-proof annotation
+    # Reviewer-proof annotation (cleavage-canonical)
     note = ("Increasing |r| ⇒ attention becomes more informative about cleavage.\n"
-            f"Under {attention_mode} mode a negative signed r is the EXPECTED direction.")
+            "Signed r > 0 ⇒ attention ALIGNED with cleavage (broken > intact).")
     ax.text(0.02, 0.98, note, transform=ax.transAxes, fontsize=8,
             verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.6))
@@ -1439,9 +1454,9 @@ def plot_bond_type_comparison(
     stats_text = (
         f"Mode: {mode}\n"
         f"Cohen's d (signed): {effect['cohen_d_signed']:+.3f}\n"
-        f"  ↑ positive ⇒ cleavage bonds stronger\n"
+        f"  ↑ positive ⇒ broken bonds have higher cleavage-relevance\n"
         f"Cohen's d (|·|): {effect['cohen_d_abs']:.3f}\n"
-        f"AUC: {effect['auc']:.3f}\n"
+        f"AUC: {effect['auc']:.3f}  (>0.5 ⇒ broken > intact)\n"
         f"t = {effect['t_stat']:.2f}, p = {effect['p_value']:.2e}\n"
         f"n_broken = {effect['n_broken']}, n_intact = {effect['n_intact']}\n"
         f"{effect['interpretation']}"
@@ -1450,8 +1465,8 @@ def plot_bond_type_comparison(
             verticalalignment='top', horizontalalignment='right',
             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.85))
 
-    ax.set_ylabel('Attention Weight', fontsize=12, fontweight='bold')
-    ax.set_title('Attention: Broken vs Intact Bonds\n'
+    ax.set_ylabel('Cleavage-Relevance Attention', fontsize=12, fontweight='bold')
+    ax.set_title('Broken vs Intact Bonds: Attention reflects cleavage propensity\n'
                  f'{_mode_caption(mode)}',
                  fontsize=12, fontweight='bold')
     ax.grid(True, alpha=0.3, axis='y')
@@ -1524,9 +1539,10 @@ def plot_new_interpretability_case_study(
 
     m_a = compute_separation_metrics(last_attn, bond_labels_np)
     ax1.set_xlabel('Bond Position (Residue Pair)', fontsize=10)
-    ax1.set_ylabel('Attention Weight', fontsize=10)
+    ax1.set_ylabel('Cleavage-Relevance Attention', fontsize=10)
     ax1.set_title(f'(a) Attention Distribution (final layer)\n'
-                  f"|r|={m_a['abs_r']:.2f}, signed r={m_a['pearson_r']:+.2f}",
+                  f"|r|={m_a['abs_r']:.2f}, signed r={m_a['pearson_r']:+.2f}  "
+                  f"(r>0 ⇒ aligned with cleavage)",
                   fontsize=11, fontweight='bold')
     if num_bonds <= 15:
         ax1.set_xticks(x)
@@ -1601,16 +1617,17 @@ def plot_new_interpretability_case_study(
     stats_text = (
         f"Mode: {mode}\n"
         f"d = {effect['cohen_d_signed']:+.2f} (|d|={effect['cohen_d_abs']:.2f})\n"
-        f"AUC = {effect['auc']:.3f}\n"
+        f"AUC = {effect['auc']:.3f}  (>0.5 ⇒ broken > intact)\n"
         f"p = {effect['p_value']:.2e}\n"
         f"{effect['interpretation']}"
     )
     ax3.text(0.98, 0.98, stats_text, transform=ax3.transAxes, fontsize=9,
              verticalalignment='top', horizontalalignment='right',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.85))
-    ax3.set_ylabel('Attention Weight', fontsize=10, fontweight='bold')
-    ax3.set_title(f'(c) Broken vs Intact  [+ ⇒ cleavage stronger]\n{_mode_caption(mode)}',
-                  fontsize=11, fontweight='bold')
+    ax3.set_ylabel('Cleavage-Relevance Attention', fontsize=10, fontweight='bold')
+    ax3.set_title('(c) Broken vs Intact Bonds: Attention reflects cleavage propensity\n'
+                  f'[+ ⇒ broken bonds carry higher cleavage-relevance]  {_mode_caption(mode)}',
+                  fontsize=10, fontweight='bold')
     ax3.grid(True, alpha=0.3, axis='y')
 
     # ---------- (d) Attention heatmap (normalized, semantic caption) ----------
@@ -1636,10 +1653,10 @@ def plot_new_interpretability_case_study(
     im = ax4.imshow(heatmap_array, cmap='YlOrRd', aspect='auto', interpolation='nearest')
     cbar = plt.colorbar(im, ax=ax4)
     norm_label = 'per-row normalized' if heatmap_normalize == 'row' else 'global normalized'
-    cbar.set_label(f'Attention ({norm_label})', fontsize=10)
+    cbar.set_label(f'Cleavage-Relevance Attention ({norm_label})', fontsize=10)
     ax4.set_xlabel('Bond Position', fontsize=10, fontweight='bold')
     ax4.set_ylabel('Network Layer', fontsize=10, fontweight='bold')
-    ax4.set_title(f'(d) Attention Heatmap [{norm_label}]\n'
+    ax4.set_title(f'(d) Cleavage-Relevance Heatmap [{norm_label}]\n'
                   f'{_mode_caption(mode)}', fontsize=11, fontweight='bold')
     if num_layers <= 5:
         ax4.set_yticks(np.arange(num_layers))

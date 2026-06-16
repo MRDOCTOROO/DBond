@@ -193,8 +193,9 @@ def main():
     # Paper-grade semantics + format
     parser.add_argument("--attention_mode", type=str, default=DEFAULT_ATTENTION_MODE,
                         choices=sorted(VALID_ATTENTION_MODES),
-                        help="统一注意力语义: stability(高=不易断裂) / cleavage(高=易断裂) / "
-                             "importance(中性) / auto(自动检测)")
+                        help="注意力语义: cleavage(默认,高=更易断裂/更高断裂相关性) / "
+                             "importance(中性) / auto(自动检测) / "
+                             "stability(已废弃,自动映射为cleavage)")
     parser.add_argument("--figure_format", type=str, default="svg", choices=["svg", "png"],
                         help="图像输出格式: svg(矢量,浏览器可编辑文本) 或 png")
     parser.add_argument("--heatmap_normalize", type=str, default="row",
