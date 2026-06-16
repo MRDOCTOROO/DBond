@@ -31,6 +31,12 @@ from .visualization import (
     compute_effect_size,
     compute_separation_metrics,
     compute_layer_separation_metrics,
+    # 残基对化学矩阵 + Occlusion 归因（paper-grade extension）
+    plot_residue_pair_matrix,
+    build_residue_attention_matrix,
+    collapse_to_residue_bond_attention,
+    plot_occlusion_vs_attention,
+    plot_occlusion_attention_consistency,
 )
 from .interpretability import (
     plot_interpretability_case_study,
@@ -67,4 +73,10 @@ __all__ = [
     'compute_effect_size',
     'compute_separation_metrics',
     'compute_layer_separation_metrics',
+    # 残基对化学矩阵 + Occlusion 归因（paper-grade extension）
+    'plot_residue_pair_matrix',
+    'build_residue_attention_matrix',
+    'collapse_to_residue_bond_attention',
+    'plot_occlusion_vs_attention',
+    'plot_occlusion_attention_consistency',
 ]

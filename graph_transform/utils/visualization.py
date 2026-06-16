@@ -1674,3 +1674,352 @@ def plot_new_interpretability_case_study(
         "panel_d_heatmap_normalize": heatmap_normalize,
     }
     return fig, summary
+
+
+# =============================================================================
+# Residue-pair chemistry matrix (Paper-grade baseline)
+# =============================================================================
+
+def plot_residue_pair_matrix(
+    empirical: np.ndarray,
+    predicted: np.ndarray,
+    counts: np.ndarray,
+    aa_labels: List[str],
+    save_path: Optional[str] = None,
+    min_n_for_label: int = 50,
+    rare_thresholds: Tuple[int, int] = (10, 50),
+    figsize: Tuple[float, float] = (20, 6.5),
+) -> plt.Figure:
+    """3-panel residue-pair chemistry matrix.
+
+    Panel (a): empirical bond cleavage rate per residue pair (X-Y).
+    Panel (b): model's mean predicted cleavage probability per residue pair.
+    Panel (c): difference (predicted - empirical), diverging colormap.
+
+    Rows = N-terminal residue X, columns = C-terminal residue Y.
+    Cells with sample count below `rare_thresholds[1]` are hatched and marked
+    with asterisks to indicate statistical uncertainty (rare AAs B/O/X/Z).
+
+    Args:
+        empirical:    [N_aa, N_aa] empirical cleavage rate, values in [0, 1].
+        predicted:    [N_aa, N_aa] model mean predicted probability, [0, 1].
+        counts:       [N_aa, N_aa] integer sample count per cell.
+        aa_labels:    list of N_aa single-char amino acid labels.
+        save_path:    output path; format inferred from extension (svg/png).
+        min_n_for_label: cells with N < this get asterisk annotation.
+        rare_thresholds: (n_star_star, n_star) thresholds for double/triple marker.
+    """
+    n_aa = len(aa_labels)
+    assert empirical.shape == (n_aa, n_aa)
+    assert predicted.shape == (n_aa, n_aa)
+    assert counts.shape == (n_aa, n_aa)
+
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+    plt.subplots_adjust(wspace=0.35, left=0.06, right=0.97, top=0.83, bottom=0.18)
+
+    # Shared colour scale for (a) and (b) so they are directly comparable
+    rate_vmin, rate_vmax = 0.0, 1.0
+    diff_vmin, diff_vmax = -0.5, 0.5
+
+    def _draw_panel(ax, matrix, vmin, vmax, cmap, title, annotate_values: bool):
+        im = ax.imshow(matrix, cmap=cmap, aspect='equal',
+                       vmin=vmin, vmax=vmax, interpolation='nearest')
+        ax.set_xticks(np.arange(n_aa))
+        ax.set_yticks(np.arange(n_aa))
+        ax.set_xticklabels(aa_labels, fontsize=9)
+        ax.set_yticklabels(aa_labels, fontsize=9)
+        ax.set_xlabel('C-terminal residue  Y', fontsize=11, fontweight='bold')
+        ax.set_ylabel('N-terminal residue  X', fontsize=11, fontweight='bold')
+        ax.set_title(title, fontsize=11, fontweight='bold')
+
+        # Annotate values with rare-AA markers
+        if annotate_values:
+            for i in range(n_aa):
+                for j in range(n_aa):
+                    n = int(counts[i, j])
+                    if n == 0:
+                        # empty cell: hatch background
+                        ax.add_patch(plt.Rectangle((j - 0.5, i - 0.5), 1, 1,
+                                                   fill=True, facecolor='#EEEEEE',
+                                                   edgecolor='#BBBBBB', linewidth=0.3, zorder=1))
+                        continue
+                    val = matrix[i, j]
+                    if n < rare_thresholds[0]:
+                        marker, color = '**', '#7F8C8D'
+                    elif n < rare_thresholds[1]:
+                        marker, color = '*', '#7F8C8D'
+                    else:
+                        marker, color = '', 'black'
+                    text = f'{val:.2f}{marker}' if marker else f'{val:.2f}'
+                    ax.text(j, i, text, ha='center', va='center',
+                            fontsize=6.5, color=color)
+        return im
+
+    im_a = _draw_panel(axes[0], empirical, rate_vmin, rate_vmax, 'YlOrRd',
+                       '(a) Empirical cleavage rate  P(broken | X-Y)',
+                       annotate_values=True)
+    im_b = _draw_panel(axes[1], predicted, rate_vmin, rate_vmax, 'YlOrRd',
+                       '(b) Model predicted  E[σ(model) | X-Y]',
+                       annotate_values=True)
+    im_c = _draw_panel(axes[2], predicted - empirical, diff_vmin, diff_vmax, 'RdBu_r',
+                       '(c) Difference  (predicted − empirical)',
+                       annotate_values=True)
+
+    cb_a = plt.colorbar(im_a, ax=axes[0], fraction=0.046, pad=0.04)
+    cb_a.set_label('Cleavage rate', fontsize=9)
+    cb_b = plt.colorbar(im_b, ax=axes[1], fraction=0.046, pad=0.04)
+    cb_b.set_label('Predicted probability', fontsize=9)
+    cb_c = plt.colorbar(im_c, ax=axes[2], fraction=0.046, pad=0.04)
+    cb_c.set_label('Bias (model − empirical)', fontsize=9)
+
+    fig.suptitle('Residue-Pair Cleavage Chemistry: Empirical vs Model\n'
+                 f'Rows X = N-terminal side,  Cols Y = C-terminal side   '
+                 f'|   * N∈[{rare_thresholds[0]},{rare_thresholds[1]}), '
+                 f'** N<{rare_thresholds[0]} (uncertain)',
+                 fontsize=12, fontweight='bold', y=0.97)
+
+    _save_figure(fig, save_path)
+    return fig
+
+
+# =============================================================================
+# Occlusion causal attribution
+# =============================================================================
+
+def build_residue_attention_matrix(
+    attention_weights: torch.Tensor,
+    edge_index: torch.Tensor,
+    seq_len: int,
+) -> np.ndarray:
+    """Convert GAT edge attention to a [seq_len, seq_len] residue-residue matrix.
+
+    Each edge (src, dst) contributes its (head-averaged) attention weight to
+    both matrix entries [src, dst] and [dst, src] (attention is treated as a
+    symmetric association for visualisation purposes; this is a display
+    convention, not a claim about the underlying directed computation).
+    """
+    if attention_weights.dim() == 2:
+        attn_np = attention_weights.mean(dim=1).cpu().numpy()
+    else:
+        attn_np = attention_weights.cpu().numpy()
+
+    matrix = np.zeros((seq_len, seq_len), dtype=float)
+    edge_index_np = edge_index.cpu().numpy()
+    n_edges = edge_index_np.shape[1]
+    for i in range(min(n_edges, len(attn_np))):
+        src, dst = int(edge_index_np[0, i]), int(edge_index_np[1, i])
+        if 0 <= src < seq_len and 0 <= dst < seq_len and src != dst:
+            w = float(attn_np[i])
+            matrix[src, dst] += w
+            matrix[dst, src] += w
+    return matrix
+
+
+def collapse_to_residue_bond_attention(
+    residue_attn: np.ndarray,
+    seq_len: int,
+) -> np.ndarray:
+    """Collapse [L, L] residue-residue attention to [L, L-1] residue-bond matrix.
+
+    Entry [j, i] = mean of residue j's attention toward residue i and residue
+    i+1 (the two residues that form bond i). This produces a matrix directly
+    comparable to the occlusion sensitivity matrix M[j, i].
+    """
+    bond_attn = np.zeros((seq_len, max(seq_len - 1, 0)), dtype=float)
+    for i in range(seq_len - 1):
+        if i < residue_attn.shape[1] and (i + 1) < residue_attn.shape[1]:
+            bond_attn[:, i] = (residue_attn[:, i] + residue_attn[:, i + 1]) / 2.0
+    return bond_attn
+
+
+def plot_occlusion_vs_attention(
+    occlusion_matrix: np.ndarray,
+    attention_matrix: np.ndarray,
+    sequence: str,
+    sample_id: str = '',
+    layer_idx: int = -1,
+    save_path: Optional[str] = None,
+    figsize: Tuple[float, float] = (15, 6.5),
+) -> plt.Figure:
+    """Per-sample 2-panel heatmap: occlusion sensitivity vs attention saliency.
+
+    Both matrices are [seq_len, seq_len-1]:
+        rows   = residue position j (the mutated / attending residue)
+        cols   = bond position i    (the predicted / attended-to bond)
+
+    Pearson r between flattened matrices is reported in the suptitle as a
+    consistency metric (non-causal wording: "consistent with" not "caused by").
+    """
+    seq_len = len(sequence)
+    num_bonds = seq_len - 1
+
+    occ = occlusion_matrix[:seq_len, :num_bonds]
+    att = attention_matrix[:seq_len, :num_bonds]
+
+    # Consistency (Pearson r over flattened upper-relevant entries)
+    if occ.size > 1 and np.std(occ) > 0 and np.std(att) > 0:
+        r = float(np.corrcoef(occ.flatten(), att.flatten())[0, 1])
+    else:
+        r = float('nan')
+
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    plt.subplots_adjust(wspace=0.3, left=0.07, right=0.96, top=0.83, bottom=0.20)
+
+    bond_labels = [f'{sequence[i]}-{sequence[i+1]}\n(i={i})' for i in range(num_bonds)]
+    residue_labels = [f'{i}:{sequence[i]}' for i in range(seq_len)]
+
+    im0 = axes[0].imshow(occ, cmap='YlOrRd', aspect='auto',
+                         interpolation='nearest')
+    axes[0].set_xticks(np.arange(num_bonds))
+    axes[0].set_xticklabels(bond_labels, fontsize=7)
+    axes[0].set_yticks(np.arange(seq_len))
+    axes[0].set_yticklabels(residue_labels, fontsize=7)
+    axes[0].set_xlabel('Bond (predicted)', fontsize=10, fontweight='bold')
+    axes[0].set_ylabel('Mutated residue position j', fontsize=10, fontweight='bold')
+    axes[0].set_title('(a) Occlusion sensitivity  mean |Δp[j→aa] on bond i|',
+                      fontsize=10, fontweight='bold')
+    cb0 = plt.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
+    cb0.set_label('Sensitivity', fontsize=9)
+
+    im1 = axes[1].imshow(att, cmap='YlOrRd', aspect='auto',
+                         interpolation='nearest')
+    axes[1].set_xticks(np.arange(num_bonds))
+    axes[1].set_xticklabels(bond_labels, fontsize=7)
+    axes[1].set_yticks(np.arange(seq_len))
+    axes[1].set_yticklabels(residue_labels, fontsize=7)
+    axes[1].set_xlabel('Bond (attended-to)', fontsize=10, fontweight='bold')
+    axes[1].set_ylabel('Attending residue position j', fontsize=10, fontweight='bold')
+    axes[1].set_title('(b) Functional-saliency attention (residue → bond)',
+                      fontsize=10, fontweight='bold')
+    cb1 = plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
+    cb1.set_label('Attention (functional saliency)', fontsize=9)
+
+    r_str = f'{r:+.3f}' if not np.isnan(r) else 'N/A'
+    consistency_verdict = (
+        'strongly consistent' if (not np.isnan(r) and r >= 0.5)
+        else ('moderately consistent' if (not np.isnan(r) and r >= 0.3)
+              else ('weakly consistent' if not np.isnan(r) else 'undefined'))
+    )
+    fig.suptitle(
+        f'Occlusion vs Functional-Saliency Attention   |   sample = {sample_id}   '
+        f'|   layer = {layer_idx}\n'
+        f'Pearson r (attention vs occlusion) = {r_str}   →   {consistency_verdict}',
+        fontsize=11, fontweight='bold', y=0.96,
+    )
+
+    _save_figure(fig, save_path)
+    return fig, {'pearson_r': r, 'consistency': consistency_verdict}
+
+
+def plot_occlusion_attention_consistency(
+    per_sample_r: List[float],
+    sample_ids: List[str],
+    all_attention_flat: np.ndarray,
+    all_occlusion_flat: np.ndarray,
+    save_path: Optional[str] = None,
+    figsize: Tuple[float, float] = (14, 6),
+) -> plt.Figure:
+    """Aggregate consistency figure: scatter + per-sample r distribution.
+
+    Left  : 2D hexbin/scatter of (attention, occlusion) over all (j,i) entries
+            across all analysed samples; reports global Pearson r and Spearman ρ.
+    Right : box plot of per-sample Pearson r values; each sample is one point.
+    """
+    from scipy.stats import spearmanr
+
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    plt.subplots_adjust(wspace=0.3, left=0.07, right=0.97, top=0.86, bottom=0.15)
+
+    valid_r = [r for r in per_sample_r if not np.isnan(r)]
+    global_r = (float(np.corrcoef(all_attention_flat, all_occlusion_flat)[0, 1])
+                if len(all_attention_flat) > 1 else float('nan'))
+    try:
+        global_rho, _ = spearmanr(all_attention_flat, all_occlusion_flat)
+        global_rho = float(global_rho)
+    except Exception:
+        global_rho = float('nan')
+
+    # Left: scatter (hexbin if very dense)
+    ax = axes[0]
+    if len(all_attention_flat) > 5000:
+        hb = ax.hexbin(all_attention_flat, all_occlusion_flat, gridsize=40,
+                       cmap='Blues', mincnt=1)
+        plt.colorbar(hb, ax=ax, label='count')
+    else:
+        ax.scatter(all_attention_flat, all_occlusion_flat, s=8,
+                   alpha=0.35, color=INTERP_COLORS['broken'], edgecolors='none')
+    ax.set_xlabel('Functional-saliency attention (residue → bond)',
+                  fontsize=10, fontweight='bold')
+    ax.set_ylabel('Occlusion sensitivity (residue → bond)',
+                  fontsize=10, fontweight='bold')
+    r_str = f'{global_r:+.3f}' if not np.isnan(global_r) else 'N/A'
+    rho_str = f'{global_rho:+.3f}' if not np.isnan(global_rho) else 'N/A'
+    ax.set_title(
+        f'(a) Global consistency across all samples\n'
+        f'Pearson r = {r_str}   |   Spearman ρ = {rho_str}',
+        fontsize=10, fontweight='bold',
+    )
+    ax.grid(True, alpha=0.3)
+
+    # Right: per-sample r distribution
+    ax2 = axes[1]
+    if valid_r:
+        bp = ax2.boxplot(valid_r, vert=True, patch_artist=True, widths=0.4,
+                         medianprops=dict(color='black', linewidth=1.5))
+        for patch in bp['boxes']:
+            patch.set_facecolor(INTERP_COLORS['fill'])
+            patch.set_alpha(0.5)
+        # overlay individual sample points
+        jitter = np.random.RandomState(42).uniform(-0.08, 0.08, size=len(valid_r))
+        ax2.scatter(np.ones(len(valid_r)) + jitter, valid_r,
+                    s=40, color=INTERP_COLORS['broken'],
+                    edgecolor='black', linewidth=0.5, zorder=3)
+        for k, (r_val, sid) in enumerate(zip(per_sample_r, sample_ids)):
+            if not np.isnan(r_val):
+                # annotate top-3 and bottom-3 only to avoid clutter
+                pass
+        mean_r = float(np.mean(valid_r))
+        median_r = float(np.median(valid_r))
+        ax2.axhline(mean_r, color=INTERP_COLORS['line'], linestyle='--',
+                    linewidth=1.2, alpha=0.7,
+                    label=f'mean = {mean_r:+.3f}')
+        ax2.axhline(0, color='gray', linewidth=0.5, alpha=0.5)
+        ax2.axhline(0.5, color=INTERP_COLORS['highlight'], linestyle=':',
+                    linewidth=1.0, alpha=0.6, label='r = 0.5 (strong)')
+        ax2.set_xticklabels([f'per-sample\n(n={len(valid_r)})'])
+        ax2.set_ylabel('Pearson r (attention vs occlusion)',
+                       fontsize=10, fontweight='bold')
+        ax2.set_title(
+            f'(b) Per-sample consistency distribution\n'
+            f'median = {median_r:+.3f}   |   '
+            f'{sum(1 for r in valid_r if r >= 0.5)}/{len(valid_r)} '
+            f'samples r ≥ 0.5',
+            fontsize=10, fontweight='bold',
+        )
+        ax2.legend(loc='lower right', fontsize=9, framealpha=0.9)
+    else:
+        ax2.text(0.5, 0.5, 'No valid r values', ha='center', va='center',
+                 transform=ax2.transAxes)
+    ax2.grid(True, alpha=0.3, axis='y')
+
+    n_total = len(per_sample_r)
+    n_strong = sum(1 for r in valid_r if r >= 0.5)
+    verdict = (
+        f'{n_strong}/{len(valid_r)} samples show strong consistency (r ≥ 0.5)'
+        if valid_r else 'Consistency undefined'
+    )
+    fig.suptitle(
+        f'Occlusion vs Attention Consistency  ({n_total} samples)\n'
+        f'{verdict}',
+        fontsize=12, fontweight='bold', y=0.98,
+    )
+
+    _save_figure(fig, save_path)
+    return fig, {
+        'global_pearson_r': global_r,
+        'global_spearman_rho': global_rho,
+        'mean_per_sample_r': float(np.mean(valid_r)) if valid_r else float('nan'),
+        'median_per_sample_r': float(np.median(valid_r)) if valid_r else float('nan'),
+        'n_strong_consistency': n_strong,
+        'n_valid': len(valid_r),
+    }
