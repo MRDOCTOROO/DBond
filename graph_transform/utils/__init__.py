@@ -37,6 +37,9 @@ from .visualization import (
     collapse_to_residue_bond_attention,
     plot_occlusion_vs_attention,
     plot_occlusion_attention_consistency,
+    # 聚合图层注意力（基于多样本的群体平均模式，比单样本更可信）
+    plot_aggregate_layer_attention,
+    plot_aggregate_layer_attention_compact,
 )
 from .interpretability import (
     plot_interpretability_case_study,
@@ -79,4 +82,7 @@ __all__ = [
     'collapse_to_residue_bond_attention',
     'plot_occlusion_vs_attention',
     'plot_occlusion_attention_consistency',
+    # 聚合图层注意力（基于多样本的群体平均模式，比单样本更可信）
+    'plot_aggregate_layer_attention',
+    'plot_aggregate_layer_attention_compact',
 ]

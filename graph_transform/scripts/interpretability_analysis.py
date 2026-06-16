@@ -42,6 +42,7 @@ from utils.visualization import (
     plot_layer_evolution_trend,
     plot_bond_type_comparison,
     plot_new_interpretability_case_study,
+    plot_aggregate_layer_attention,
     compute_layer_correlations,
     compute_layer_separation_metrics,
     compute_effect_size,
@@ -136,32 +137,72 @@ def infer_model_config_from_checkpoint(checkpoint_path: str, base_config: Dict[s
 
 
 def select_diverse_samples(dataset, num_samples: int, logger) -> List[int]:
-    """选择多样化的样本（按序列长度均匀抽样）"""
-    if hasattr(dataset, 'data') and 'seq' in dataset.data.columns:
-        unique_seqs = dataset.data['seq'].unique()
-        num_unique = len(unique_seqs)
-        
-        if num_unique <= num_samples:
-            return list(range(min(num_samples, len(dataset))))
-        
-        # 按序列长度均匀抽样
-        seq_lengths = {seq: len(str(seq)) for seq in unique_seqs}
-        sorted_seqs = sorted(unique_seqs, key=lambda s: seq_lengths[s])
-        
-        step = len(sorted_seqs) // num_samples
-        selected_seqs = [sorted_seqs[i * step] for i in range(num_samples)]
-        
-        sample_indices = []
-        for seq in selected_seqs:
-            idx = dataset.data[dataset.data['seq'] == seq].index[0]
-            sample_indices.append(int(idx))
-        
-        logger.info(f"Selected sequences with lengths: {[seq_lengths[s] for s in selected_seqs]}")
-        return sorted(sample_indices)
-    else:
-        import random
-        random.seed(42)
+    """选择多样化的样本（按序列长度分桶 + 桶内随机抽样）。
+
+    旧版实现按序列长度排序后等间隔取样，每种长度只取「第一个」样本，
+    导致选出的样本高度依赖数据顺序，容易挑到异常样本（如 padding 边缘、
+    罕见 AA 富集序列等），case study 图会呈现与聚合统计相反的模式。
+
+    改进版：
+      1. 按序列长度分桶（每 1 个长度一个桶）
+      2. 在桶内随机抽样（带 random_seed）
+      3. 跨桶均匀分配 num_samples 个样本
+    这样既能覆盖长度多样性，又避免「第一个样本」的偏置。
+    """
+    import random
+    random.seed(42)
+
+    if not (hasattr(dataset, 'data') and 'seq' in dataset.data.columns):
         return sorted(random.sample(range(len(dataset)), min(num_samples, len(dataset))))
+
+    df = dataset.data.reset_index(drop=True)
+    df['seq_len'] = df['seq'].astype(str).str.len()
+
+    # 按长度分桶
+    length_bins: dict[int, list[int]] = {}
+    for idx, L in zip(df.index, df['seq_len']):
+        length_bins.setdefault(int(L), []).append(int(idx))
+
+    unique_lengths = sorted(length_bins.keys())
+    if len(unique_lengths) <= num_samples:
+        # 长度种类不够：每个长度抽 1 个
+        selected = [random.choice(length_bins[L]) for L in unique_lengths]
+        # 不足则从最大桶补
+        while len(selected) < num_samples:
+            biggest = max(unique_lengths, key=lambda L: len(length_bins[L]))
+            pick = random.choice(length_bins[biggest])
+            if pick not in selected:
+                selected.append(pick)
+            else:
+                break
+        return sorted(selected[:num_samples])
+
+    # 均匀分布 num_samples 到各长度桶
+    # 策略：把长度范围等分为 num_samples 个区间，每个区间随机抽 1 个
+    min_L, max_L = unique_lengths[0], unique_lengths[-1]
+    selected: list[int] = []
+    for i in range(num_samples):
+        lo = min_L + (max_L - min_L) * i // num_samples
+        hi = min_L + (max_L - min_L) * (i + 1) // num_samples
+        # 找 [lo, hi] 范围内的所有可用长度
+        candidate_lengths = [L for L in unique_lengths if lo <= L <= hi]
+        if not candidate_lengths:
+            # 回退：用最近的长度
+            nearest = min(unique_lengths, key=lambda L: abs(L - (lo + hi) / 2))
+            candidate_lengths = [nearest]
+        chosen_length = random.choice(candidate_lengths)
+        pick = random.choice(length_bins[chosen_length])
+        # 避免重复
+        attempts = 0
+        while pick in selected and attempts < 5:
+            pick = random.choice(length_bins[chosen_length])
+            attempts += 1
+        selected.append(pick)
+
+    logger.info(f"Selected {len(selected)} samples across "
+                f"{len(set(df.loc[selected, 'seq_len']))} length bins; "
+                f"lengths = {sorted(set(df.loc[selected, 'seq_len'].tolist()))}")
+    return sorted(selected)
 
 
 def main():
@@ -327,17 +368,22 @@ def main():
         
         logger.info(f"  Sample {idx}: seq_len={len(sequence)}, num_layers={len(attention_weights)}")
     
-    # 生成单样本各层注意力图
-    logger.info("Generating single sample layer attention plots...")
+    # 生成单样本各层注意力图（移入 single_samples/ 子目录，作为 supplementary）
+    single_sample_dir = os.path.join(args.output_dir, "single_samples")
+    os.makedirs(single_sample_dir, exist_ok=True)
+    logger.info("Generating single sample layer attention plots "
+                "(supplementary, illustrative-not-representative)...")
     for i, (attn_weights, seq, labels, edge_idx) in enumerate(
         zip(all_attention_weights, all_sequences, all_bond_labels, all_edge_indices)
     ):
-        save_path = os.path.join(args.output_dir, f"sample_{case_indices[i]}_layer_attention{img_ext}")
+        save_path = os.path.join(single_sample_dir,
+                                 f"sample_{case_indices[i]}_layer_attention{img_ext}")
         plot_single_sample_layer_attention(
             attn_weights, labels, seq, edge_idx,
             save_path=save_path, max_seq_len=args.max_seq_len,
             attention_mode=args.attention_mode,
         )
+    logger.info(f"  saved {len(case_indices)} single-sample figures to: {single_sample_dir}")
     
     # 生成层间演化趋势图
     logger.info("Generating layer evolution trend plot...")
@@ -488,6 +534,28 @@ def main():
             save_path=stat_comparison_path, attention_mode=args.attention_mode,
             max_seq_len=args.max_seq_len,
         )
+
+        # ===== 聚合图层注意力图（基于多样本的群体平均模式）=====
+        # 这是「真实平均」的可信视图，不受单样本选择偏置影响。
+        # 与单样本图（sample_<idx>_layer_attention.svg）形成对比：
+        #   - 单样本图：1 个样本，可能异常
+        #   - 聚合图：N 个样本的中位数 + IQR，反映模型群体行为
+        logger.info(f"Generating aggregate layer attention figure "
+                    f"(n={len(stat_attention_weights)} samples)...")
+        agg_path = os.path.join(
+            args.output_dir, f"aggregate_layer_attention{img_ext}",
+        )
+        agg_fig, agg_summary = plot_aggregate_layer_attention(
+            stat_attention_weights,
+            stat_bond_labels,
+            stat_edge_indices,
+            stat_sequences,
+            save_path=agg_path,
+            max_seq_len=args.max_seq_len,
+            max_bonds_show=min(20, args.max_seq_len - 1),
+        )
+        logger.info(f"Saved aggregate layer attention: {agg_path}")
+        logger.info(f"  Layer focus progression: {agg_summary['interpretation']}")
     
     # ========== 论文级 JSON 摘要 ==========
     logger.info("Writing paper-grade JSON summary...")

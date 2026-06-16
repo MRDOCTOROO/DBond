@@ -1636,37 +1636,27 @@ def plot_new_interpretability_case_study(
                   fontsize=10, fontweight='bold')
     ax3.grid(True, alpha=0.3, axis='y')
 
-    # ---------- (d) Attention heatmap (normalized, semantic caption) ----------
+    # ---------- (d) Aggregate layer attention (replaces old heatmap) ----------
+    # 旧版：mean + row-normalized heatmap（5 个样本）
+    # 新版：median + 绝对值色阶 + entropy/top-3 量化指标（N 个案例样本）
+    # 用 group truth 的群体模式替代单样本热力图，避免异常样本误导
     ax4 = axes[1, 1]
-    max_bonds_show = 15
-    heatmap_data = []
-    for layer_idx in range(num_layers):
-        rows = []
-        for attn_weights, edge_idx, seq in zip(attention_weights_list, edge_indices, sequences):
-            bond_attn, _ = extract_bond_level_attention(attn_weights[layer_idx], edge_idx, seq, max_seq_len)
-            rows.append(bond_attn[:max_bonds_show])
-        max_len = max(len(r) for r in rows) if rows else 0
-        padded = [np.pad(r, (0, max_len - len(r)), constant_values=np.nan) for r in rows]
-        stacked = np.stack(padded) if padded else np.zeros((1, 1))
-        # nanmean ignores padding
-        with np.errstate(all='ignore'):
-            heatmap_data.append(np.nanmean(stacked, axis=0))
-    # Truncate to the shortest non-nan length to avoid nan columns
-    min_len = min((np.sum(~np.isnan(row)) for row in heatmap_data), default=0)
-    heatmap_array = np.array([row[:min_len] for row in heatmap_data]) if min_len > 0 else np.array(heatmap_data)
-    heatmap_array = _normalize_heatmap(heatmap_array, heatmap_normalize)
+    # 调整 panel (d) 子图位置，给右侧 metrics 文本列留空间
+    # 通过 set_position 缩小宽度，腾出右侧 0.18 的空间
+    pos = ax4.get_position()
+    ax4.set_position([pos.x0, pos.y0, pos.width * 0.72, pos.height])
 
-    im = ax4.imshow(heatmap_array, cmap='YlOrRd', aspect='auto', interpolation='nearest')
-    cbar = plt.colorbar(im, ax=ax4)
-    norm_label = 'per-row normalized' if heatmap_normalize == 'row' else 'global normalized'
-    cbar.set_label(f'Attention (normalized functional saliency)', fontsize=10)
-    ax4.set_xlabel('Bond Position', fontsize=10, fontweight='bold')
-    ax4.set_ylabel('Network Layer', fontsize=10, fontweight='bold')
-    ax4.set_title(f'(d) Layer-wise Functional Saliency Heatmap [{norm_label}]',
-                  fontsize=11, fontweight='bold')
-    if num_layers <= 5:
-        ax4.set_yticks(np.arange(num_layers))
-        ax4.set_yticklabels([f'L{i}' for i in range(num_layers)], fontsize=9)
+    _, panel_d_summary = plot_aggregate_layer_attention_compact(
+        attention_weights_list, edge_indices, sequences,
+        ax=ax4,
+        max_seq_len=max_seq_len,
+        max_bonds_show=min(15, max_seq_len - 1),
+        focus_thresholds=(0.85, 0.95),
+        show_right_metrics=True,
+    )
+    panel_d_focus_metrics = panel_d_summary['layer_focus_metrics']
+    # 在 panel (d) 标题前加 "(d)" 标识
+    ax4.set_title('(d) ' + ax4.get_title(), fontsize=10, fontweight='bold', pad=8)
 
     fig.suptitle('DBond-GT Interpretability Analysis\n'
                  + FUNCTIONAL_SALIENCY_CAPTION,
@@ -1680,7 +1670,10 @@ def plot_new_interpretability_case_study(
         "panel_a_metrics": m_a,
         "panel_b_layer_metrics": layer_metrics,
         "panel_c_effect_size": effect,
-        "panel_d_heatmap_normalize": heatmap_normalize,
+        "panel_d_layer_focus_metrics": panel_d_focus_metrics,
+        "panel_d_interpretation": panel_d_summary['interpretation'],
+        "panel_d_n_samples": panel_d_summary['n_samples'],
+        "panel_d_color_scale": "absolute",
     }
     return fig, summary
 
@@ -2100,3 +2093,371 @@ def plot_occlusion_attention_consistency(
         'n_strong_consistency': n_strong,
         'n_valid': len(valid_r),
     }
+
+
+# =============================================================================
+# Aggregate per-layer attention (trustworthy mean across many samples)
+# =============================================================================
+
+def _compute_layer_focus_stats(
+    layer_bond_values: List[List[List[float]]],
+    num_layers: int,
+    max_bonds: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[Dict[str, float]]]:
+    """从「每层每键的 attention 值列表」计算聚合统计量。
+
+    Args:
+        layer_bond_values: shape [num_layers][max_bonds][n_samples] 的嵌套 list
+        num_layers:        层数
+        max_bonds:         键数
+
+    Returns:
+        layer_median:  [num_layers, max_bonds]  跨样本中位数
+        layer_q25:     [num_layers, max_bonds]  25 分位
+        layer_q75:     [num_layers, max_bonds]  75 分位
+        layer_mean:    [num_layers, max_bonds]  跨样本均值
+        layer_std:     [num_layers, max_bonds]  跨样本标准差
+        focus_metrics: list[dict]，每层一个，含 normalized_entropy / top1_share /
+                       top3_share / mean_attention / std_across_bonds
+    """
+    layer_median = np.zeros((num_layers, max_bonds))
+    layer_q25 = np.zeros((num_layers, max_bonds))
+    layer_q75 = np.zeros((num_layers, max_bonds))
+    layer_mean = np.zeros((num_layers, max_bonds))
+    layer_std = np.zeros((num_layers, max_bonds))
+
+    for layer_idx in range(num_layers):
+        for bond_pos in range(max_bonds):
+            vals = layer_bond_values[layer_idx][bond_pos]
+            if len(vals) >= 2:
+                layer_median[layer_idx, bond_pos] = float(np.median(vals))
+                layer_q25[layer_idx, bond_pos] = float(np.percentile(vals, 25))
+                layer_q75[layer_idx, bond_pos] = float(np.percentile(vals, 75))
+                layer_mean[layer_idx, bond_pos] = float(np.mean(vals))
+                layer_std[layer_idx, bond_pos] = float(np.std(vals))
+            elif len(vals) == 1:
+                layer_median[layer_idx, bond_pos] = vals[0]
+                layer_q25[layer_idx, bond_pos] = vals[0]
+                layer_q75[layer_idx, bond_pos] = vals[0]
+                layer_mean[layer_idx, bond_pos] = vals[0]
+                layer_std[layer_idx, bond_pos] = 0.0
+
+    focus_metrics: List[Dict[str, float]] = []
+    for layer_idx in range(num_layers):
+        row = layer_median[layer_idx]
+        row_nonneg = np.maximum(row, 0)
+        s = row_nonneg.sum()
+        if s > 0:
+            normalized = row_nonneg / s
+            entropy = -float(np.sum(normalized * np.log(normalized + 1e-12)))
+            max_entropy = float(np.log(max_bonds)) if max_bonds > 1 else 0.0
+            normalized_entropy = entropy / max_entropy if max_entropy > 0 else 0.0
+            top1_share = float(np.max(normalized))
+            top3_share = float(np.sum(np.sort(normalized)[-min(3, max_bonds):]))
+        else:
+            normalized_entropy = 1.0
+            top1_share = 0.0
+            top3_share = 0.0
+        focus_metrics.append({
+            'layer': layer_idx,
+            'normalized_entropy': normalized_entropy,
+            'top1_share': top1_share,
+            'top3_share': top3_share,
+            'mean_attention': float(row_nonneg.mean()),
+            'std_across_bonds': float(row_nonneg.std()),
+        })
+
+    return layer_median, layer_q25, layer_q75, layer_mean, layer_std, focus_metrics
+
+
+def _collect_layer_bond_values(
+    attention_weights_list: List[List[torch.Tensor]],
+    edge_indices: List[Optional[torch.Tensor]],
+    sequences: List[str],
+    num_layers: int,
+    max_bonds: int,
+    max_seq_len: int,
+) -> List[List[List[float]]]:
+    """收集每层每键的 attention 值（跨样本）。"""
+    layer_bond_values: List[List[List[float]]] = [
+        [[] for _ in range(max_bonds)] for _ in range(num_layers)
+    ]
+    for attn_weights, edge_idx, seq in zip(
+        attention_weights_list, edge_indices, sequences
+    ):
+        seq_len = min(len(seq), max_seq_len)
+        for layer_idx in range(num_layers):
+            bond_attn, _ = extract_bond_level_attention(
+                attn_weights[layer_idx], edge_idx, seq, max_seq_len
+            )
+            for bond_pos in range(min(max_bonds, len(bond_attn))):
+                layer_bond_values[layer_idx][bond_pos].append(float(bond_attn[bond_pos]))
+    return layer_bond_values
+
+
+def plot_aggregate_layer_attention_compact(
+    attention_weights_list: List[List[torch.Tensor]],
+    edge_indices: List[Optional[torch.Tensor]],
+    sequences: List[str],
+    ax: Optional[plt.Axes] = None,
+    save_path: Optional[str] = None,
+    max_seq_len: int = 30,
+    max_bonds_show: int = 20,
+    focus_thresholds: Tuple[float, float] = (0.85, 0.95),
+    figsize: Tuple[float, float] = (10, 4),
+    show_right_metrics: bool = True,
+) -> Tuple[Optional[plt.Figure], Dict[str, object]]:
+    """紧凑版聚合图层注意力图（单 subplot，适配嵌入 case study panel d）。
+
+    与 `plot_aggregate_layer_attention`（多 subplot 详细版）的区别：
+        - 本函数输出/绘制到单个 axes，便于嵌入 2×2 case study 的 panel (d)
+        - 用 heatmap（layer × bond），绝对值色阶（保留层间大小差异）
+        - 右侧文本列显示每层的 entropy + top-3 share + 聚焦度判定
+
+    解读：
+        - 浅层（L0）应熵高（接近 1.0）= 分散
+        - 深层（LN）应熵低（< 0.85）= 聚焦到少数键
+        - 若所有层熵都接近 1.0：可能 GCN 修复未生效，或模型未学到层间分化
+
+    Args:
+        attention_weights_list: 每个样本的 [layer_0, layer_1, ...] attention
+        edge_indices:           每个样本的 edge_index
+        sequences:              每个样本的序列
+        ax:                     若提供，绘制到此 axes（嵌入模式）；
+                                否则创建新 figure（standalone 模式）。
+        save_path:              保存路径（仅 standalone 模式生效）
+        max_seq_len:            最大序列长度
+        max_bonds_show:         最多显示键数
+        focus_thresholds:       (focused, diffuse) 的 entropy 阈值
+                                entropy < thr[0] → focused
+                                thr[0] ≤ entropy < thr[1] → moderate
+                                entropy ≥ thr[1] → diffuse
+        figsize:                standalone 模式的 figure 大小
+        show_right_metrics:     是否在右侧显示 entropy + top-3 文本列
+
+    Returns:
+        (fig, summary) — fig 在嵌入模式下为 None
+    """
+    n_samples = len(attention_weights_list)
+    if n_samples == 0:
+        raise ValueError("attention_weights_list is empty")
+    num_layers = len(attention_weights_list[0])
+    max_bonds = min(max_bonds_show, max_seq_len - 1)
+
+    layer_bond_values = _collect_layer_bond_values(
+        attention_weights_list, edge_indices, sequences,
+        num_layers, max_bonds, max_seq_len,
+    )
+    layer_median, _, _, _, _, focus_metrics = _compute_layer_focus_stats(
+        layer_bond_values, num_layers, max_bonds,
+    )
+
+    # 嵌入 vs standalone
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+        plt.subplots_adjust(left=0.10, right=0.75, top=0.88, bottom=0.18)
+    else:
+        fig = None
+
+    # 绝对值色阶：所有层共用 [0, global_max]
+    global_max = float(layer_median.max()) if layer_max_safe(layer_median) > 0 else 1.0
+    im = ax.imshow(layer_median, cmap='YlOrRd', aspect='auto',
+                   vmin=0, vmax=global_max, interpolation='nearest',
+                   origin='lower')  # L0 在底部，LN 在顶部
+
+    # 主图：层 × 键热力图
+    ax.set_xticks(np.arange(max_bonds))
+    ax.set_xticklabels([str(i) for i in range(max_bonds)], fontsize=8)
+    ax.set_yticks(np.arange(num_layers))
+    ax.set_yticklabels([f'L{i}' for i in range(num_layers)], fontsize=10,
+                       fontweight='bold')
+    ax.set_xlabel('Bond position (i)', fontsize=10, fontweight='bold')
+    ax.set_ylabel('Network layer', fontsize=10, fontweight='bold')
+
+    # 标题：包含进度结论
+    focus_progression = ' → '.join(
+        f'L{m["layer"]}:H={m["normalized_entropy"]:.2f}'
+        for m in focus_metrics
+    )
+    ax.set_title(
+        f'Aggregate median attention (n={n_samples} samples, absolute scale)\n'
+        f'Progression: {focus_progression}',
+        fontsize=10, fontweight='bold', pad=8,
+    )
+
+    # 每行右侧加 entropy + top-3 share 文本
+    focused_thr, diffuse_thr = focus_thresholds
+    if show_right_metrics:
+        for i, m in enumerate(focus_metrics):
+            ent = m['normalized_entropy']
+            top3 = m['top3_share']
+            if ent < focused_thr:
+                verdict, verdict_color = 'focused', '#C0392B'
+            elif ent < diffuse_thr:
+                verdict, verdict_color = 'moderate', '#F39C12'
+            else:
+                verdict, verdict_color = 'diffuse', '#27AE60'
+            text = f'H={ent:.3f}\nT3={top3:.3f}\n{verdict}'
+            # 用 axes 坐标在右侧定位
+            ax.text(1.02, i / max(num_layers - 1, 1), text,
+                    transform=ax.transAxes, fontsize=8, va='center', ha='left',
+                    color=verdict_color, fontweight='bold',
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                              edgecolor=verdict_color, linewidth=0.8, alpha=0.9))
+
+    # Colorbar（仅在 standalone 模式，避免嵌入时挤占空间）
+    if fig is not None:
+        cbar = plt.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
+        cbar.set_label('Median attention (functional saliency)', fontsize=9)
+
+    summary = {
+        'n_samples': n_samples,
+        'num_layers': num_layers,
+        'max_bonds_shown': max_bonds,
+        'layer_focus_metrics': focus_metrics,
+        'color_scale': 'absolute',
+        'global_max': global_max,
+        'interpretation': (
+            'Layer-wise focus progression (median across samples): '
+            + ' → '.join(
+                f"L{m['layer']}(H={m['normalized_entropy']:.3f})"
+                for m in focus_metrics
+            )
+        ),
+    }
+
+    if fig is not None:
+        _save_figure(fig, save_path)
+    return fig, summary
+
+
+def layer_max_safe(arr: np.ndarray) -> float:
+    """安全获取数组最大值（空数组返回 0）。"""
+    if arr.size == 0:
+        return 0.0
+    return float(arr.max())
+
+
+def plot_aggregate_layer_attention(
+    attention_weights_list: List[List[torch.Tensor]],
+    bond_labels_list: List[torch.Tensor],
+    edge_indices: List[Optional[torch.Tensor]],
+    sequences: List[str],
+    save_path: Optional[str] = None,
+    max_seq_len: int = 30,
+    max_bonds_show: int = 20,
+    figsize: Optional[Tuple[float, float]] = None,
+    show_quantiles: bool = True,
+) -> Tuple[plt.Figure, Dict[str, object]]:
+    """Aggregate per-layer attention: mean ± IQR across many samples.
+
+    回答的问题：「在群体平均水平上，每层的 attention 是更分散还是更聚焦？」
+
+    与单样本图的关键区别：
+        - 单样本图（plot_single_sample_layer_attention）：1 个样本，可能异常
+        - 本图（aggregate）：N 个样本的平均，反映模型的真实群体行为
+
+    每层一行：
+        - 实线 = 跨样本的中位数 attention
+        - 阴影带 = IQR (25%~75% 分位)
+        - 可选虚线 = 均值
+
+    解读：
+        - L0 行呈"平缓"分布（中位数均匀，IQR 大） → 浅层分散，符合 GCN 平滑后预期
+        - L1 行呈"尖峰"分布（少数键高中位数，IQR 窄） → 深层聚焦到任务相关键
+        - 这是修复 GCN 跳过 bug 后的预期模式
+
+    Args:
+        attention_weights_list: 每个样本的 [layer_0_weights, layer_1_weights, ...]
+        bond_labels_list:       每个样本的键标签（仅用于诊断，不参与绘图）
+        edge_indices:           每个样本的边索引
+        sequences:              每个样本的序列
+        max_seq_len:            最大序列长度（裁剪）
+        max_bonds_show:         最多显示多少个键（避免长序列拥挤）
+        show_quantiles:         是否绘制 IQR 阴影带
+    """
+    n_samples = len(attention_weights_list)
+    if n_samples == 0:
+        raise ValueError("attention_weights_list is empty")
+
+    num_layers = len(attention_weights_list[0])
+    max_bonds = min(max_bonds_show, max_seq_len - 1)
+
+    layer_bond_values = _collect_layer_bond_values(
+        attention_weights_list, edge_indices, sequences,
+        num_layers, max_bonds, max_seq_len,
+    )
+    layer_median, layer_q25, layer_q75, layer_mean, _, focus_metrics = (
+        _compute_layer_focus_stats(layer_bond_values, num_layers, max_bonds)
+    )
+
+    # 绘图：每层一行
+    n_rows = num_layers
+    if figsize is None:
+        figsize = (14, 3.2 * n_rows + 1.5)
+    fig, axes = plt.subplots(n_rows, 1, figsize=figsize, sharex=True)
+    if n_rows == 1:
+        axes = [axes]
+    plt.subplots_adjust(hspace=0.45, left=0.08, right=0.97, top=0.90, bottom=0.10)
+
+    bond_x = np.arange(max_bonds)
+    for layer_idx in range(num_layers):
+        ax = axes[layer_idx]
+        median = layer_median[layer_idx]
+        q25 = layer_q25[layer_idx]
+        q75 = layer_q75[layer_idx]
+        mean = layer_mean[layer_idx]
+
+        if show_quantiles:
+            ax.fill_between(bond_x, q25, q75, alpha=0.30,
+                            color=INTERP_COLORS['fill'], label='IQR (25%–75%)')
+        ax.plot(bond_x, median, 'o-', color=INTERP_COLORS['line'],
+                linewidth=2.2, markersize=7, label='Median', zorder=3)
+        ax.plot(bond_x, mean, '--', color=INTERP_COLORS['raw_r'],
+                linewidth=1.4, alpha=0.8, label='Mean', zorder=2)
+
+        m = focus_metrics[layer_idx]
+        focus_verdict = (
+            'focused' if m['normalized_entropy'] < 0.85
+            else ('moderate' if m['normalized_entropy'] < 0.95 else 'diffuse')
+        )
+        ax.set_title(
+            f'Layer {layer_idx}   |   '
+            f'normalized entropy = {m["normalized_entropy"]:.3f} ({focus_verdict})   |   '
+            f'top-1 share = {m["top1_share"]:.3f}   |   '
+            f'top-3 share = {m["top3_share"]:.3f}',
+            fontsize=10, fontweight='bold', pad=8,
+        )
+        ax.set_ylabel('Attention\n(functional saliency)',
+                      fontsize=9, fontweight='bold')
+        ax.grid(True, alpha=0.3, axis='y')
+        if layer_idx == 0:
+            ax.legend(loc='upper right', fontsize=8, framealpha=0.9)
+
+    axes[-1].set_xticks(bond_x)
+    axes[-1].set_xticklabels([f'i={i}' for i in bond_x], fontsize=8)
+    axes[-1].set_xlabel('Bond position (i)', fontsize=10, fontweight='bold')
+
+    fig.suptitle(
+        f'Aggregate Per-Layer Attention Pattern (n = {n_samples} samples)\n'
+        f'Lower entropy = more focused; higher top-K share = sharper peaks.  '
+        f'Expected after GCN fix: L0 diffuse → L_last focused.',
+        fontsize=12, fontweight='bold', y=0.97,
+    )
+
+    _save_figure(fig, save_path)
+
+    summary = {
+        'n_samples': n_samples,
+        'num_layers': num_layers,
+        'max_bonds_shown': max_bonds,
+        'layer_focus_metrics': focus_metrics,
+        'interpretation': (
+            'Layer-wise focus progression (median across samples): '
+            + ' → '.join(
+                f"L{m['layer']}({m['normalized_entropy']:.3f})"
+                for m in focus_metrics
+            )
+        ),
+    }
+    return fig, summary

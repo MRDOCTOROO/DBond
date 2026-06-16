@@ -234,6 +234,75 @@ A B D E F G H I K L N O P Q R S T X Y
                         attention 是部分可靠的解释"
 ```
 
+### 4.1 Interpretability 案例研究图（更新版）
+
+**文件**：`results/interpretability_v3/interpretability_case_study_new.svg`
+
+**改造说明**（v3）：原 panel (d) 的"5 样本均值 + 行归一化热力图"已被替换为
+"15 样本中位数 + 绝对值色阶 + entropy/top-3 量化指标"的聚合图层注意力图。
+**单样本图**已移入 `single_samples/` 子目录作为 supplementary。
+
+| Panel | 数据来源 | 用途 | 可信度 |
+|-------|---------|------|--------|
+| (a) 单样本 final-layer bars | 1 个代表性案例样本 | 故事性展示 | ⚠️ 示例性 |
+| (b) Layer-wise \|r\| evolution | 15 案例样本聚合 | 定量层间演化 | ✅ 中等 |
+| (c) Broken vs intact boxplot | 15 案例样本聚合 | 功能分离 | ✅ 中等 |
+| **(d) Aggregate median + focus** | **15 案例样本中位数** | **群体平均模式 + 量化聚焦度** | ✅ **强（抗异常）** |
+
+#### Panel (d) 解读（重点）
+
+**视觉**：
+- 横轴：键位置
+- 纵轴：层（L0 在底，LN 在顶）
+- 色阶：**绝对值**（所有层共用 [0, global_max]，保留层间大小差异）
+- 右侧文本列：每层的 `H=熵 T3=top3份额 verdict`
+
+**verdict 颜色编码**：
+- 🔴 红色 `focused`：entropy < 0.85（聚焦到少数键）
+- 🟡 橙色 `moderate`：0.85 ≤ entropy < 0.95（中等）
+- 🟢 绿色 `diffuse`：entropy ≥ 0.95（分散均匀）
+
+**预期模式（GCN 修复后）**：
+- L0 行：多数键颜色相近（diffuse）→ 浅层 attention 分散，符合 GCN 平滑后预期
+- LN 行：少数键明显深色（focused）→ 深层聚焦到任务相关键
+- verdict 列从下到上：`diffuse → moderate → focused`
+
+**反模式（提示问题）**：
+- L0 已经 focused：可能 GCN 修复未生效，或模型浅层就过拟合
+- LN 仍然 diffuse：模型未学到层间分化
+
+### 4.2 Aggregate 图层注意力（500 样本 supplementary）
+
+**文件**：`results/interpretability_v3/aggregate_layer_attention.svg`
+
+**定位**：supplementary figure，**验证 panel (d) 结论可推广到 500 样本**
+
+**视觉**：每层一个子图（折线图）：
+- 实线 = 跨样本中位数
+- 阴影带 = IQR (25%-75% 分位)
+- 虚线 = 均值
+- 标题：normalized entropy + top-1 + top-3 + verdict
+
+**用途**：
+- 给作者自己验证 panel (d) 的 15 样本结论是否稳定
+- 论文 supplementary 中作为"15 → 500 样本推广"的证据
+
+### 4.3 单样本图（supplementary）
+
+**文件**：`results/interpretability_v3/single_samples/sample_<idx>_layer_attention.svg`
+
+**定位**：supplementary，**示例展示用，非代表性**
+
+**为何降级**：
+- 1 个样本的 attention 可能是异常值
+- 容易让读者误以为"模型对所有样本都这样"
+- 但适合用来讲具体的"故事"（如某个有趣的样本）
+
+**使用建议**：
+- 主文：用 panel (d) 的聚合图说话
+- Supplementary：选 2-3 个有故事性的单样本图作为示例
+- 图注**必须**写明："示例样本，不代表平均行为；见 panel (d) / aggregate 图"
+
 ---
 
 ## 五、`occlusion_aggregate.svg` 读图示例（image_3f36d9.png 验证）
