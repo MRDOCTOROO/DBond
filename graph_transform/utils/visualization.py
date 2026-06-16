@@ -1688,7 +1688,7 @@ def plot_residue_pair_matrix(
     save_path: Optional[str] = None,
     min_n_for_label: int = 50,
     rare_thresholds: Tuple[int, int] = (10, 50),
-    figsize: Tuple[float, float] = (20, 6.5),
+    figsize: Tuple[float, float] = (30, 10.5),
 ) -> plt.Figure:
     """3-panel residue-pair chemistry matrix.
 
@@ -1708,6 +1708,8 @@ def plot_residue_pair_matrix(
         save_path:    output path; format inferred from extension (svg/png).
         min_n_for_label: cells with N < this get asterisk annotation.
         rare_thresholds: (n_star_star, n_star) thresholds for double/triple marker.
+        figsize: figure size; default (30, 10.5) gives ~0.4" per cell with 3
+                 square subplots side-by-side, enough room for 2-decimal text.
     """
     n_aa = len(aa_labels)
     assert empirical.shape == (n_aa, n_aa)
@@ -1715,22 +1717,32 @@ def plot_residue_pair_matrix(
     assert counts.shape == (n_aa, n_aa)
 
     fig, axes = plt.subplots(1, 3, figsize=figsize)
-    plt.subplots_adjust(wspace=0.35, left=0.06, right=0.97, top=0.83, bottom=0.18)
+    # 拓宽左右留白以放下 colorbar；wspace 控制子图间距；
+    # 底部留 0.10 给坐标轴说明；顶部留 0.17 给总标题。
+    plt.subplots_adjust(wspace=0.40, left=0.05, right=0.97, top=0.83, bottom=0.10)
 
     # Shared colour scale for (a) and (b) so they are directly comparable
     rate_vmin, rate_vmax = 0.0, 1.0
     diff_vmin, diff_vmax = -0.5, 0.5
 
-    def _draw_panel(ax, matrix, vmin, vmax, cmap, title, annotate_values: bool):
+    def _draw_panel(ax, matrix, vmin, vmax, cmap, title, annotate_values: bool,
+                    is_diff: bool = False):
         im = ax.imshow(matrix, cmap=cmap, aspect='equal',
                        vmin=vmin, vmax=vmax, interpolation='nearest')
         ax.set_xticks(np.arange(n_aa))
         ax.set_yticks(np.arange(n_aa))
-        ax.set_xticklabels(aa_labels, fontsize=9)
-        ax.set_yticklabels(aa_labels, fontsize=9)
-        ax.set_xlabel('C-terminal residue  Y', fontsize=11, fontweight='bold')
-        ax.set_ylabel('N-terminal residue  X', fontsize=11, fontweight='bold')
-        ax.set_title(title, fontsize=11, fontweight='bold')
+        ax.set_xticklabels(aa_labels, fontsize=10)
+        ax.set_yticklabels(aa_labels, fontsize=10)
+        ax.set_xlabel('C-terminal residue  Y', fontsize=12, fontweight='bold',
+                      labelpad=6)
+        ax.set_ylabel('N-terminal residue  X', fontsize=12, fontweight='bold',
+                      labelpad=6)
+        ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+        # 让每个 cell 的边界清晰（小网格线）
+        ax.set_xticks(np.arange(-0.5, n_aa, 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, n_aa, 1), minor=True)
+        ax.grid(which='minor', color='white', linestyle='-', linewidth=0.6)
+        ax.tick_params(which='minor', bottom=False, left=False)
 
         # Annotate values with rare-AA markers
         if annotate_values:
@@ -1741,42 +1753,52 @@ def plot_residue_pair_matrix(
                         # empty cell: hatch background
                         ax.add_patch(plt.Rectangle((j - 0.5, i - 0.5), 1, 1,
                                                    fill=True, facecolor='#EEEEEE',
-                                                   edgecolor='#BBBBBB', linewidth=0.3, zorder=1))
+                                                   edgecolor='#BBBBBB',
+                                                   linewidth=0.3, zorder=1))
                         continue
                     val = matrix[i, j]
+                    # 动态字体大小 + 颜色：稀有 AA 用更小字体 + 灰色
                     if n < rare_thresholds[0]:
-                        marker, color = '**', '#7F8C8D'
+                        marker, color, fs = '**', '#34495E', 7.0
                     elif n < rare_thresholds[1]:
-                        marker, color = '*', '#7F8C8D'
+                        marker, color, fs = '*', '#34495E', 7.5
                     else:
-                        marker, color = '', 'black'
-                    text = f'{val:.2f}{marker}' if marker else f'{val:.2f}'
+                        marker, color, fs = '', 'black', 8.5
+                    # diff 面板：带符号，2 位小数；rate 面板：百分比整数
+                    if is_diff:
+                        sign = '+' if val >= 0 else '−'
+                        text = f'{sign}{abs(val):.2f}{marker}'
+                    else:
+                        text = f'{val*100:.0f}{marker}'
                     ax.text(j, i, text, ha='center', va='center',
-                            fontsize=6.5, color=color)
+                            fontsize=fs, color=color)
         return im
 
     im_a = _draw_panel(axes[0], empirical, rate_vmin, rate_vmax, 'YlOrRd',
-                       '(a) Empirical cleavage rate  P(broken | X-Y)',
+                       '(a) Empirical cleavage rate  P(broken | X-Y)  [%]',
                        annotate_values=True)
     im_b = _draw_panel(axes[1], predicted, rate_vmin, rate_vmax, 'YlOrRd',
-                       '(b) Model predicted  E[σ(model) | X-Y]',
+                       '(b) Model predicted  E[σ(model) | X-Y]  [%]',
                        annotate_values=True)
     im_c = _draw_panel(axes[2], predicted - empirical, diff_vmin, diff_vmax, 'RdBu_r',
                        '(c) Difference  (predicted − empirical)',
-                       annotate_values=True)
+                       annotate_values=True, is_diff=True)
 
-    cb_a = plt.colorbar(im_a, ax=axes[0], fraction=0.046, pad=0.04)
-    cb_a.set_label('Cleavage rate', fontsize=9)
-    cb_b = plt.colorbar(im_b, ax=axes[1], fraction=0.046, pad=0.04)
-    cb_b.set_label('Predicted probability', fontsize=9)
-    cb_c = plt.colorbar(im_c, ax=axes[2], fraction=0.046, pad=0.04)
-    cb_c.set_label('Bias (model − empirical)', fontsize=9)
+    # Colorbars: 放在右侧，pad 略大避免与子图挤在一起
+    cb_a = plt.colorbar(im_a, ax=axes[0], fraction=0.038, pad=0.04)
+    cb_a.set_label('Cleavage rate', fontsize=10)
+    cb_b = plt.colorbar(im_b, ax=axes[1], fraction=0.038, pad=0.04)
+    cb_b.set_label('Predicted probability', fontsize=10)
+    cb_c = plt.colorbar(im_c, ax=axes[2], fraction=0.038, pad=0.04)
+    cb_c.set_label('Bias (model − empirical)', fontsize=10)
 
     fig.suptitle('Residue-Pair Cleavage Chemistry: Empirical vs Model\n'
-                 f'Rows X = N-terminal side,  Cols Y = C-terminal side   '
-                 f'|   * N∈[{rare_thresholds[0]},{rare_thresholds[1]}), '
-                 f'** N<{rare_thresholds[0]} (uncertain)',
-                 fontsize=12, fontweight='bold', y=0.97)
+                 'Rows X = N-terminal side,  Cols Y = C-terminal side   '
+                 '|   Panels (a)(b) shown as percentage [%],   '
+                 'Panel (c) shown as signed bias (model − empirical)\n'
+                 f'* N∈[{rare_thresholds[0]},{rare_thresholds[1]}), '
+                 f'** N<{rare_thresholds[0]} (statistically uncertain, rare AAs B/O/X/Z)',
+                 fontsize=13, fontweight='bold', y=0.965)
 
     _save_figure(fig, save_path)
     return fig
