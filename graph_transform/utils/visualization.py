@@ -1839,7 +1839,7 @@ def plot_occlusion_vs_attention(
     sample_id: str = '',
     layer_idx: int = -1,
     save_path: Optional[str] = None,
-    figsize: Tuple[float, float] = (15, 6.5),
+    figsize: Optional[Tuple[float, float]] = None,
 ) -> plt.Figure:
     """Per-sample 2-panel heatmap: occlusion sensitivity vs attention saliency.
 
@@ -1849,9 +1849,18 @@ def plot_occlusion_vs_attention(
 
     Pearson r between flattened matrices is reported in the suptitle as a
     consistency metric (non-causal wording: "consistent with" not "caused by").
+
+    Figure width auto-scales with sequence length to prevent label overlap.
     """
     seq_len = len(sequence)
     num_bonds = seq_len - 1
+
+    # 自适应宽度：每个键至少 0.45 inch
+    if figsize is None:
+        min_width_per_bond = 0.45
+        min_total_width = 12.0
+        computed = max(min_total_width, num_bonds * min_width_per_bond * 2 + 3)
+        figsize = (min(computed, 28.0), max(6.5, seq_len * 0.32 + 3.0))
 
     occ = occlusion_matrix[:seq_len, :num_bonds]
     att = attention_matrix[:seq_len, :num_bonds]
@@ -1863,18 +1872,23 @@ def plot_occlusion_vs_attention(
         r = float('nan')
 
     fig, axes = plt.subplots(1, 2, figsize=figsize)
-    plt.subplots_adjust(wspace=0.3, left=0.07, right=0.96, top=0.83, bottom=0.20)
+    # 底部留更多空间给旋转 45° 的键标签
+    plt.subplots_adjust(wspace=0.3, left=0.07, right=0.96, top=0.83, bottom=0.28)
 
-    bond_labels = [f'{sequence[i]}-{sequence[i+1]}\n(i={i})' for i in range(num_bonds)]
+    # 紧凑的键标签：仅在键位置变化时显示残基对，否则只显示索引；
+    # 旋转 45° 防止重叠；底部留 0.28 给旋转后的标签空间。
+    bond_labels = [f'{sequence[i]}-{sequence[i+1]}' for i in range(num_bonds)]
     residue_labels = [f'{i}:{sequence[i]}' for i in range(seq_len)]
 
     im0 = axes[0].imshow(occ, cmap='YlOrRd', aspect='auto',
                          interpolation='nearest')
     axes[0].set_xticks(np.arange(num_bonds))
-    axes[0].set_xticklabels(bond_labels, fontsize=7)
+    axes[0].set_xticklabels(bond_labels, fontsize=8, rotation=45,
+                            ha='right', rotation_mode='anchor')
     axes[0].set_yticks(np.arange(seq_len))
-    axes[0].set_yticklabels(residue_labels, fontsize=7)
-    axes[0].set_xlabel('Bond (predicted)', fontsize=10, fontweight='bold')
+    axes[0].set_yticklabels(residue_labels, fontsize=8)
+    axes[0].set_xlabel('Bond (predicted)  [X-Y]', fontsize=10, fontweight='bold',
+                       labelpad=8)
     axes[0].set_ylabel('Mutated residue position j', fontsize=10, fontweight='bold')
     axes[0].set_title('(a) Occlusion sensitivity  mean |Δp[j→aa] on bond i|',
                       fontsize=10, fontweight='bold')
@@ -1884,10 +1898,12 @@ def plot_occlusion_vs_attention(
     im1 = axes[1].imshow(att, cmap='YlOrRd', aspect='auto',
                          interpolation='nearest')
     axes[1].set_xticks(np.arange(num_bonds))
-    axes[1].set_xticklabels(bond_labels, fontsize=7)
+    axes[1].set_xticklabels(bond_labels, fontsize=8, rotation=45,
+                            ha='right', rotation_mode='anchor')
     axes[1].set_yticks(np.arange(seq_len))
-    axes[1].set_yticklabels(residue_labels, fontsize=7)
-    axes[1].set_xlabel('Bond (attended-to)', fontsize=10, fontweight='bold')
+    axes[1].set_yticklabels(residue_labels, fontsize=8)
+    axes[1].set_xlabel('Bond (attended-to)  [X-Y]', fontsize=10, fontweight='bold',
+                       labelpad=8)
     axes[1].set_ylabel('Attending residue position j', fontsize=10, fontweight='bold')
     axes[1].set_title('(b) Functional-saliency attention (residue → bond)',
                       fontsize=10, fontweight='bold')

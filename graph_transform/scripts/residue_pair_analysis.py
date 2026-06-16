@@ -199,6 +199,41 @@ def load_predictions_from_csv(
         f"Loaded pred_csv: {len(pred_df)} rows; input_csv: {len(input_df)} rows"
     )
 
+    # ---- 容错：检测错误的 CSV 类型 ----
+    cols = set(pred_df.columns)
+    # 1) 指标文件（metric,value 两列）
+    if cols <= {"metric", "value"} or (
+        len(cols) == 2 and "metric" in cols and "value" in cols
+    ):
+        raise ValueError(
+            f"\n  [ERROR] '{pred_csv}' looks like a METRIC file "
+            f"(columns: metric, value), not a per-bond prediction file.\n"
+            f"  Predicted CSVs have columns: seq, true, pred, pred_prob "
+            f"(one row per sample, semicolon-separated per-bond values).\n\n"
+            f"  Searched locations for the prediction file:\n"
+            f"    - Same parent dir, 'preds/latest_test.pred.csv'\n"
+            f"    - Same parent dir, 'latest.pred.csv'\n"
+            f"    - result/pred/graph_transform/latest.pred.csv\n\n"
+            f"  Tip: re-run evaluate_graph_model.py with the same checkpoint to "
+            f"regenerate the prediction CSV, OR drop --pred_csv and pass "
+            f"--checkpoint to run inference directly."
+        )
+    # 2) 缺少关键列
+    prob_col_candidates = [c for c in ("pred_prob", "prob", "probabilities") if c in cols]
+    if not prob_col_candidates:
+        # 尝试自动定位真正的预测文件
+        sibling = _auto_locate_pred_csv(pred_csv, logger)
+        if sibling is not None:
+            logger.info(f"Auto-located actual prediction CSV: {sibling}")
+            return load_predictions_from_csv(sibling, input_csv, logger)
+        raise ValueError(
+            f"\n  [ERROR] '{pred_csv}' does not contain a prediction probability "
+            f"column (expected one of: pred_prob, prob, probabilities).\n"
+            f"  Found columns: {sorted(cols)}\n"
+            f"  Please provide the path to the per-sample prediction CSV "
+            f"(produced by evaluate_graph_model.py)."
+        )
+
     if len(pred_df) != len(input_df):
         logger.warning(
             f"Row count mismatch (pred={len(pred_df)}, input={len(input_df)}); "
@@ -208,24 +243,47 @@ def load_predictions_from_csv(
         pred_df = pred_df.iloc[:n].reset_index(drop=True)
         input_df = input_df.iloc[:n].reset_index(drop=True)
 
-    seq_col = "seq" if "seq" in pred_df.columns else None
-    if seq_col is None:
-        seq_col = "seq"
+    # seq 列：优先用 pred_csv 的，否则从 input_csv 对齐
+    if "seq" not in pred_df.columns:
         pred_df["seq"] = input_df["seq"].values
 
-    true_col = "true" if "true" in pred_df.columns else None
-    if true_col is None:
-        # 回退到 input_csv 的 true_multi
+    # true 列：优先用 pred_csv 的，否则从 input_csv.true_multi
+    if "true" in pred_df.columns:
+        true_strings = pred_df["true"].astype(str).tolist()
+    else:
+        if "true_multi" not in input_df.columns:
+            raise ValueError(
+                f"Neither pred_csv nor input_csv has true labels "
+                f"(looked for 'true' in pred_csv, 'true_multi' in input_csv)."
+            )
         logger.info("pred_csv lacks 'true' column, falling back to input_csv.true_multi")
-        true_col = "true_multi"
-        pred_df["true"] = input_df["true_multi"].astype(str).values
+        true_strings = input_df["true_multi"].astype(str).tolist()
 
-    prob_col = "pred_prob" if "pred_prob" in pred_df.columns else "prob"
-
-    sequences = pred_df[seq_col].astype(str).tolist()
-    true_strings = pred_df[true_col].astype(str).tolist()
-    prob_strings = pred_df[prob_col].astype(str).tolist()
+    sequences = pred_df["seq"].astype(str).tolist()
+    prob_strings = pred_df[prob_col_candidates[0]].astype(str).tolist()
     return sequences, true_strings, prob_strings
+
+
+def _auto_locate_pred_csv(wrong_path: str, logger: logging.Logger) -> Optional[str]:
+    """根据用户提供的错误路径（如 metric CSV）尝试定位真正的预测 CSV。
+
+    检查兄弟目录下的常见预测文件名。
+    """
+    p = os.path.abspath(wrong_path)
+    parent = os.path.dirname(p)
+    grandparent = os.path.dirname(parent)
+    candidates = [
+        os.path.join(parent, "latest_test.pred.csv"),
+        os.path.join(parent, "latest.pred.csv"),
+        os.path.join(parent, "..", "preds", "latest_test.pred.csv"),
+        os.path.join(grandparent, "preds", "latest_test.pred.csv"),
+        os.path.join(grandparent, "latest_test.pred.csv"),
+    ]
+    for c in candidates:
+        c_norm = os.path.normpath(c)
+        if os.path.isfile(c_norm) and c_norm != os.path.normpath(p):
+            return c_norm
+    return None
 
 
 # =============================================================================
