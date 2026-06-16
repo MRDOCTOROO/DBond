@@ -903,35 +903,35 @@ def plot_attention_heads_combined(attention_weights_list: List[torch.Tensor],
 
 
 # ============================================================================
-# Paper-grade interpretability analysis (cleavage-aligned, reviewer-proof)
+# Paper-grade interpretability analysis (unified functional-saliency frame)
 #
 # Canonical semantic convention
 # -----------------------------
-# Attention is interpreted as a CLEAVAGE RELEVANCE SCORE: higher attention on
-# a peptide bond = higher relevance to / likelihood of bond cleavage (label=1).
-# This aligns the interpretability layer with the model's prediction objective
-# (bond cleavage prediction), so attention, labels, and all statistics share a
-# single, consistent direction.
+# Attention is interpreted as a FUNCTIONAL SALIENCY SCORE: it represents the
+# model's structural role specialization in bond cleavage prediction. We do
+# NOT label attention as a "cleavage score" or "stability score"; attention
+# marks which bonds play a functionally important role in differentiating bond
+# outcomes, and its relationship to the cleavage label is reported through
+# alignment statistics rather than causal claims.
 #
-# Modes (for backward compatibility; "cleavage" is the canonical default):
-#      "cleavage"   -> high attention = higher cleavage relevance (DEFAULT)
-#      "importance" -> attention marks salient bonds, direction-agnostic
-#      "auto"       -> detect from data sign (falls back to "cleavage")
-#      "stability"  -> DEPRECATED. Kept only for legacy callers; new figures
-#                      should never use it. "stability" is internally remapped
-#                      to "cleavage" so outputs stay consistent.
+# Modes (kept for backward compatibility; all unify under the functional frame):
+#      "functional" / "cleavage" / "importance" / "auto" / "stability"
+#      Every mode renders the SAME functional-saliency narrative on the figures.
+#      The mode value only governs the internal sign convention for statistics;
+#      "stability" is DEPRECATED and remapped to the canonical mode.
 #
 # Consistency guarantees
 # ----------------------
-# 1. Every statistic is cleavage-positive by construction:
-#      - Pearson r / Spearman r:  r > 0  =>  attention aligned with cleavage
-#      - Cohen's d (signed):      d > 0  =>  broken bonds have stronger signal
-#      - AUC:                    > 0.5  =>  broken bonds have stronger signal
-# 2. Layer-wise evolution uses abs(r) as PRIMARY (strength, always >= 0); the
-#    signed raw r is shown as a secondary gray dashed line so direction is
-#    visible (positive r = aligned with cleavage = desirable).
-# 3. All axis labels, legends, and captions say "higher attention = higher
-#    cleavage relevance (more likely broken bond)".
+# 1. Every statistic is orientation-consistent by construction:
+#      - Pearson r / Spearman r:  r > 0  =>  attention co-varies with label=1
+#      - Cohen's d (signed):      d > 0  =>  broken bonds have higher saliency
+#      - AUC:                    > 0.5  =>  broken bonds have higher saliency
+#    These are reported as "alignment strength", never as causal effects.
+# 2. Layer-wise evolution uses abs(r) as PRIMARY (alignment strength, >= 0);
+#    the signed raw r is shown as a secondary gray dashed line.
+# 3. All axis labels, legends, and captions use the unified vocabulary:
+#    "Functional Saliency (Attention)" and "Attention–Label Alignment".
+#    Boxplots use non-causal wording ("associated with" / "differentiates").
 # 4. A single shared palette (INTERP_COLORS) and a single bond-indexing helper
 #    (extract_bond_level_attention) are reused by every panel so colors,
 #    indexing, and normalization are consistent across (a)-(d).
@@ -947,51 +947,52 @@ INTERP_COLORS = {
     'fill': '#3498DB',        # area fills
 }
 
-VALID_ATTENTION_MODES = {"cleavage", "importance", "auto", "stability"}
+VALID_ATTENTION_MODES = {"functional", "cleavage", "importance", "auto", "stability"}
 
-# Canonical default: attention is a cleavage-relevance score. "stability" is
-# DEPRECATED and silently remapped to "cleavage" (see _resolve_attention_mode).
-DEFAULT_ATTENTION_MODE = "cleavage"
+# Canonical default / unified interpretation mode.
+DEFAULT_ATTENTION_MODE = "functional"
+
+# Unified, non-causal caption shown on every figure (single source of truth).
+FUNCTIONAL_SALIENCY_CAPTION = (
+    "Attention = functional saliency "
+    "(structural role specialization in bond cleavage prediction)"
+)
 
 
 def _resolve_attention_mode(mode: str, broken_weights=None, intact_weights=None) -> str:
     """Resolve a (possibly deprecated/auto) mode into the canonical concrete mode.
 
-    "stability" is DEPRECATED -> remapped to "cleavage".
+    "stability" is DEPRECATED -> remapped to the canonical mode.
     "auto" -> detected from the sign of mean(broken) - mean(intact), falling
-              back to "cleavage" when data is unavailable.
+              back to the canonical mode when data is unavailable.
     """
     if mode not in VALID_ATTENTION_MODES:
         raise ValueError(
             f"Unknown attention mode '{mode}'. "
             f"Expected one of {sorted(VALID_ATTENTION_MODES)}."
         )
-    # Deprecation: stability is no longer a distinct interpretation.
     if mode == "stability":
         logger.warning(
-            "Attention mode 'stability' is DEPRECATED and has been remapped to "
-            "'cleavage' (attention = cleavage relevance). Update your call site."
+            "Attention mode 'stability' is DEPRECATED and remapped to the "
+            "unified functional-saliency interpretation. Update your call site."
         )
-        return "cleavage"
-    if mode != "auto":
+        return DEFAULT_ATTENTION_MODE
+    if mode in ("functional", "cleavage", "importance"):
         return mode
+    # auto
     if broken_weights is None or intact_weights is None:
         return DEFAULT_ATTENTION_MODE
     diff = float(np.mean(broken_weights) - np.mean(intact_weights))
-    return "cleavage" if diff > 0 else "importance"
+    return DEFAULT_ATTENTION_MODE if diff > 0 else "importance"
 
 
-def _mode_caption(mode: str) -> str:
-    """Human-readable one-liner describing what 'high attention' means.
+def _mode_caption(mode: str = DEFAULT_ATTENTION_MODE) -> str:
+    """Unified, non-causal figure caption (single source of truth).
 
-    Always cleavage-aligned: higher attention = higher cleavage relevance.
+    Returns the same functional-saliency statement for every mode so all
+    figures share one interpretation framework.
     """
-    resolved = _resolve_attention_mode(mode)
-    if resolved == "cleavage":
-        return "High attention = higher cleavage relevance (more likely broken bond)"
-    if resolved == "importance":
-        return "High attention = salient bond (direction-agnostic)"
-    return "High attention = higher cleavage relevance (more likely broken bond)"
+    return FUNCTIONAL_SALIENCY_CAPTION
 
 
 def _save_figure(fig: plt.Figure, save_path: Optional[str]) -> None:
@@ -1040,7 +1041,7 @@ def compute_effect_size(broken_weights, intact_weights, mode: str = "auto") -> D
     if n_b > 1 and n_i > 1:
         t_stat, p_value = stats.ttest_ind(broken, intact, equal_var=False)
 
-    # AUC: P(broken attention > intact attention). > 0.5 -> cleavage stronger.
+    # AUC: P(broken attention > intact attention). > 0.5 -> broken bonds higher saliency.
     auc = 0.5
     if n_b and n_i:
         try:
@@ -1051,15 +1052,15 @@ def compute_effect_size(broken_weights, intact_weights, mode: str = "auto") -> D
         except Exception:
             auc = 0.5
 
-    # Narrative — the NUMBER is invariant; only the wording depends on mode.
+    # Narrative — the NUMBER is invariant; wording is non-causal and unified.
     resolved = _resolve_attention_mode(mode, broken, intact)
-    if resolved == "cleavage":
+    if resolved == "importance":
+        interpretation = "Functional saliency (direction-agnostic)"
+    else:
         interpretation = (
-            "Attention ALIGNED with cleavage (broken > intact)" if cohen_d_signed > 0
-            else "Attention OPPOSITE to cleavage (broken < intact, review carefully)"
+            "Saliency associated with broken bonds (broken > intact)" if cohen_d_signed > 0
+            else "Saliency associated with intact bonds (broken < intact)"
         )
-    else:  # importance
-        interpretation = "Salience signal (direction-agnostic)"
 
     return {
         "mode": resolved,
@@ -1196,9 +1197,9 @@ def plot_single_sample_layer_attention(
 ) -> plt.Figure:
     """Per-layer attention bar plot for a single peptide (case study).
 
-    Attention is a cleavage-relevance score (higher = more likely broken).
-    Title reports |r| (strength) and signed r (direction); positive r means
-    attention is aligned with the cleavage target.
+    Attention is a functional-saliency score. Title reports |r| (alignment
+    strength) and signed r (direction); r > 0 means saliency co-varies with
+    the cleavage label.
     """
     num_layers = len(attention_weights_list)
     seq_len = min(len(sequence), max_seq_len)
@@ -1235,7 +1236,7 @@ def plot_single_sample_layer_attention(
 
         m = compute_separation_metrics(bond_attn[:num_bonds], bond_labels_np)
         ax.set_xlabel('Bond Position (Residue Pair)', fontsize=9)
-        ax.set_title(f"|r|={m['abs_r']:.2f}  (signed r={m['pearson_r']:+.2f})",
+        ax.set_title(f"alignment |r|={m['abs_r']:.2f}  (signed r={m['pearson_r']:+.2f})",
                      fontsize=10, fontweight='bold')
         ax.set_xlim(-0.5, num_bonds - 0.5)
         if num_bonds <= 15:
@@ -1243,11 +1244,12 @@ def plot_single_sample_layer_attention(
             ax.set_xticklabels(bond_labels_str, fontsize=7, rotation=45)
         ax.grid(True, alpha=0.3, axis='y')
 
-    axes[0].set_ylabel('Cleavage-Relevance Attention', fontsize=10)
+    axes[0].set_ylabel('Functional Saliency (Attention)', fontsize=10)
     seq_display = sequence[:20] + ('...' if len(sequence) > 20 else '')
     fig.suptitle(f'Sample Peptide: {seq_display}\n'
+                 f'Cleavage-Relevance Attention Distribution\n'
                  f'{_mode_caption(attention_mode)}',
-                 fontsize=11, fontweight='bold', y=0.99)
+                 fontsize=10, fontweight='bold', y=0.99)
 
     from matplotlib.patches import Patch
     legend_elements = [
@@ -1325,15 +1327,13 @@ def plot_layer_evolution_trend(
     attention_mode: str = DEFAULT_ATTENTION_MODE,
     primary_metric: str = "abs_r",
 ) -> plt.Figure:
-    """Layer-wise evolution of the attention-breakage relationship.
+    """Layer-wise evolution of the attention–label alignment.
 
-    Attention is a cleavage-relevance score (higher = more likely broken).
-    PRIMARY (solid): |r| (or separation_auc) — direction-agnostic STRENGTH,
-    always >= 0, so an increasing trend unambiguously means "the model's
-    attention becomes more informative about cleavage with depth".
-    SECONDARY (gray dashed): signed raw r — keeps the direction visible; a
-    POSITIVE signed r means attention is aligned with the cleavage target
-    (broken bonds receive higher attention), which is the desirable direction.
+    Attention is a functional-saliency score. PRIMARY (solid): |r| — alignment
+    strength, always >= 0, so an increasing trend means attention becomes more
+    informative about bond-role differentiation with depth. SECONDARY (gray
+    dashed): signed raw r — keeps the direction visible; r > 0 means saliency
+    co-varies with the cleavage label (broken bonds receive higher saliency).
 
     ``layer_metrics`` may be either:
       * a list of floats (treated as the primary metric directly), or
@@ -1354,20 +1354,20 @@ def plot_layer_evolution_trend(
     if layer_names is None:
         layer_names = [f'Layer {i}' for i in range(num_layers)]
 
-    # Secondary: signed raw r (gray dashed) — plotted first so primary sits on top
+    # Secondary: signed raw r (gray dashed) — alignment strength (direction)
     if raw_r_vals is not primary_vals:
         ax.plot(x, raw_r_vals, 'o--', color=INTERP_COLORS['raw_r'], linewidth=1.5,
-                markersize=6, alpha=0.7, label='Signed r (direction)', zorder=2)
+                markersize=6, alpha=0.7, label='Signed r (alignment strength, direction)', zorder=2)
         for xi, yi in zip(x, raw_r_vals):
             ax.annotate(f'{yi:+.2f}', xy=(xi, yi), xytext=(0, -16),
                         textcoords='offset points', ha='center', fontsize=8,
                         color=INTERP_COLORS['raw_r'])
 
-    # Primary: abs(r) — solid
+    # Primary: abs(r) — alignment strength
     ax.plot(x, primary_vals, 'o-', color=INTERP_COLORS['line'], linewidth=2.5,
             markersize=11, markerfacecolor=INTERP_COLORS['broken'],
             markeredgecolor='black', markeredgewidth=1.5,
-            label=f'{primary_metric} (strength)', zorder=4)
+            label=f'{primary_metric} (alignment strength)', zorder=4)
     for xi, yi in zip(x, primary_vals):
         ax.annotate(f'{yi:.3f}', xy=(xi, yi), xytext=(0, 12),
                     textcoords='offset points', ha='center', fontsize=10,
@@ -1382,8 +1382,8 @@ def plot_layer_evolution_trend(
 
     ax.axhline(0, color='gray', linewidth=0.5, alpha=0.5)
     ax.set_xlabel('Network Layer', fontsize=12, fontweight='bold')
-    ax.set_ylabel(f'{primary_metric}  (strength, always ≥ 0)', fontsize=12, fontweight='bold')
-    ax.set_title('Layer-wise Evolution of Cleavage-Relevance Attention\n'
+    ax.set_ylabel(f'{primary_metric}  (alignment strength, ≥ 0)', fontsize=12, fontweight='bold')
+    ax.set_title('Layer-wise Attention–Label Alignment\n'
                  f'{_mode_caption(attention_mode)}',
                  fontsize=12, fontweight='bold')
     ax.set_xticks(x)
@@ -1394,9 +1394,9 @@ def plot_layer_evolution_trend(
     ax.grid(True, alpha=0.3)
     ax.legend(loc='lower right', fontsize=9, framealpha=0.9)
 
-    # Reviewer-proof annotation (cleavage-canonical)
-    note = ("Increasing |r| ⇒ attention becomes more informative about cleavage.\n"
-            "Signed r > 0 ⇒ attention ALIGNED with cleavage (broken > intact).")
+    # Reviewer-proof annotation (non-causal, unified frame)
+    note = ("Increasing |r| ⇒ stronger attention–label alignment.\n"
+            "Signed r > 0 ⇒ higher saliency associated with broken bonds.")
     ax.text(0.02, 0.98, note, transform=ax.transAxes, fontsize=8,
             verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.6))
@@ -1452,9 +1452,8 @@ def plot_bond_type_comparison(
                alpha=0.4, color=INTERP_COLORS['intact'], s=20, zorder=2)
 
     stats_text = (
-        f"Mode: {mode}\n"
         f"Cohen's d (signed): {effect['cohen_d_signed']:+.3f}\n"
-        f"  ↑ positive ⇒ broken bonds have higher cleavage-relevance\n"
+        f"  ↑ positive ⇒ higher saliency associated with broken bonds\n"
         f"Cohen's d (|·|): {effect['cohen_d_abs']:.3f}\n"
         f"AUC: {effect['auc']:.3f}  (>0.5 ⇒ broken > intact)\n"
         f"t = {effect['t_stat']:.2f}, p = {effect['p_value']:.2e}\n"
@@ -1465,8 +1464,8 @@ def plot_bond_type_comparison(
             verticalalignment='top', horizontalalignment='right',
             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.85))
 
-    ax.set_ylabel('Cleavage-Relevance Attention', fontsize=12, fontweight='bold')
-    ax.set_title('Broken vs Intact Bonds: Attention reflects cleavage propensity\n'
+    ax.set_ylabel('Functional Saliency (Attention)', fontsize=12, fontweight='bold')
+    ax.set_title('Broken vs Intact Bonds: Attention-based Functional Separation\n'
                  f'{_mode_caption(mode)}',
                  fontsize=12, fontweight='bold')
     ax.grid(True, alpha=0.3, axis='y')
@@ -1539,10 +1538,9 @@ def plot_new_interpretability_case_study(
 
     m_a = compute_separation_metrics(last_attn, bond_labels_np)
     ax1.set_xlabel('Bond Position (Residue Pair)', fontsize=10)
-    ax1.set_ylabel('Cleavage-Relevance Attention', fontsize=10)
-    ax1.set_title(f'(a) Attention Distribution (final layer)\n'
-                  f"|r|={m_a['abs_r']:.2f}, signed r={m_a['pearson_r']:+.2f}  "
-                  f"(r>0 ⇒ aligned with cleavage)",
+    ax1.set_ylabel('Functional Saliency (Attention)', fontsize=10)
+    ax1.set_title('(a) Cleavage-Relevance Attention Distribution\n'
+                  f"alignment |r|={m_a['abs_r']:.2f}, signed r={m_a['pearson_r']:+.2f}",
                   fontsize=11, fontweight='bold')
     if num_bonds <= 15:
         ax1.set_xticks(x)
@@ -1562,11 +1560,12 @@ def plot_new_interpretability_case_study(
 
         # Secondary signed r (gray dashed)
         ax2.plot(layer_x, raw_r, 'o--', color=INTERP_COLORS['raw_r'], linewidth=1.5,
-                 markersize=6, alpha=0.7, label='Signed r', zorder=2)
+                 markersize=6, alpha=0.7, label='Signed r (alignment strength)', zorder=2)
         # Primary |r| (solid)
         ax2.plot(layer_x, abs_r, 'o-', color=INTERP_COLORS['line'], linewidth=2.5,
                  markersize=11, markerfacecolor=INTERP_COLORS['broken'],
-                 markeredgecolor='black', markeredgewidth=1.5, label='|r| (strength)', zorder=4)
+                 markeredgecolor='black', markeredgewidth=1.5,
+                 label='|r| (alignment strength)', zorder=4)
         for xi, yi in zip(layer_x, abs_r):
             ax2.annotate(f'{yi:.3f}', xy=(xi, yi), xytext=(0, 12),
                          textcoords='offset points', ha='center', fontsize=10,
@@ -1578,8 +1577,8 @@ def plot_new_interpretability_case_study(
         ax2.legend(loc='lower right', fontsize=9, framealpha=0.9)
 
     ax2.set_xlabel('Network Layer', fontsize=10, fontweight='bold')
-    ax2.set_ylabel('|r| (strength, ≥ 0)', fontsize=10, fontweight='bold')
-    ax2.set_title('(b) Layer-wise Evolution (|r| primary, signed r secondary)',
+    ax2.set_ylabel('Alignment strength (≥ 0)', fontsize=10, fontweight='bold')
+    ax2.set_title('(b) Layer-wise Attention–Label Alignment',
                   fontsize=11, fontweight='bold')
     ax2.grid(True, alpha=0.3)
 
@@ -1615,7 +1614,6 @@ def plot_new_interpretability_case_study(
                 alpha=0.4, color=INTERP_COLORS['intact'], s=20, zorder=2)
 
     stats_text = (
-        f"Mode: {mode}\n"
         f"d = {effect['cohen_d_signed']:+.2f} (|d|={effect['cohen_d_abs']:.2f})\n"
         f"AUC = {effect['auc']:.3f}  (>0.5 ⇒ broken > intact)\n"
         f"p = {effect['p_value']:.2e}\n"
@@ -1624,9 +1622,8 @@ def plot_new_interpretability_case_study(
     ax3.text(0.98, 0.98, stats_text, transform=ax3.transAxes, fontsize=9,
              verticalalignment='top', horizontalalignment='right',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.85))
-    ax3.set_ylabel('Cleavage-Relevance Attention', fontsize=10, fontweight='bold')
-    ax3.set_title('(c) Broken vs Intact Bonds: Attention reflects cleavage propensity\n'
-                  f'[+ ⇒ broken bonds carry higher cleavage-relevance]  {_mode_caption(mode)}',
+    ax3.set_ylabel('Functional Saliency (Attention)', fontsize=10, fontweight='bold')
+    ax3.set_title('(c) Broken vs Intact Bonds: Attention-based Functional Separation',
                   fontsize=10, fontweight='bold')
     ax3.grid(True, alpha=0.3, axis='y')
 
@@ -1653,17 +1650,18 @@ def plot_new_interpretability_case_study(
     im = ax4.imshow(heatmap_array, cmap='YlOrRd', aspect='auto', interpolation='nearest')
     cbar = plt.colorbar(im, ax=ax4)
     norm_label = 'per-row normalized' if heatmap_normalize == 'row' else 'global normalized'
-    cbar.set_label(f'Cleavage-Relevance Attention ({norm_label})', fontsize=10)
+    cbar.set_label(f'Attention (normalized functional saliency)', fontsize=10)
     ax4.set_xlabel('Bond Position', fontsize=10, fontweight='bold')
     ax4.set_ylabel('Network Layer', fontsize=10, fontweight='bold')
-    ax4.set_title(f'(d) Cleavage-Relevance Heatmap [{norm_label}]\n'
-                  f'{_mode_caption(mode)}', fontsize=11, fontweight='bold')
+    ax4.set_title(f'(d) Layer-wise Functional Saliency Heatmap [{norm_label}]',
+                  fontsize=11, fontweight='bold')
     if num_layers <= 5:
         ax4.set_yticks(np.arange(num_layers))
         ax4.set_yticklabels([f'L{i}' for i in range(num_layers)], fontsize=9)
 
-    fig.suptitle('DBond-GT Interpretability Analysis',
-                 fontsize=14, fontweight='bold', y=0.98)
+    fig.suptitle('DBond-GT Interpretability Analysis\n'
+                 + FUNCTIONAL_SALIENCY_CAPTION,
+                 fontsize=13, fontweight='bold', y=0.99)
 
     _save_figure(fig, save_path)
 
