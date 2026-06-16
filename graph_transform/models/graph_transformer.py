@@ -680,12 +680,19 @@ class GraphTransformer(nn.Module):
         return edge_features[edge_feature_indices]
     
     def get_attention_weights(self, batch_data: Dict) -> List[torch.Tensor]:
-        """获取注意力权重用于可视化"""
+        """获取注意力权重用于可视化。
+
+        ⚠️ 注意：此方法是简化版，存在两个已知局限：
+            1. 未处理 global node packing（forward 路径在 GAT 前会 packing）
+            2. 历史版本曾跳过 GCN 层（已在本次修复中补回）
+        推荐生产环境使用 utils.attention_extractor.AttentionExtractor，
+        它完整复现 forward 路径。此方法保留仅供简单调试。
+        """
         attention_weights = []
-        
+
         # 节点特征编码
         node_features = self.node_encoder(batch_data)
-        
+
         # 边特征编码
         edge_features = self.edge_encoder(
             batch_data['edge_index'],
@@ -693,11 +700,19 @@ class GraphTransformer(nn.Module):
             batch_data['edge_distances'],
             batch_data.get('edge_attr')
         )
-        
+
         # 重塑节点特征
         batch_size, seq_len, hidden_dim = node_features.shape
         node_features = node_features.view(-1, hidden_dim)
-        
+
+        # BUG 修复：补回被跳过的 GCN 层（与 forward 路径一致）
+        for gcn_layer in self.gcn_layers:
+            node_features = gcn_layer(
+                node_features,
+                batch_data['edge_index'],
+                edge_features,
+            )
+
         # 通过注意力层收集权重
         for gat_layer in self.gat_layers:
             weights = gat_layer.get_attention_weights(
@@ -711,5 +726,5 @@ class GraphTransformer(nn.Module):
                 batch_data['edge_index'],
                 edge_features,
             )
-        
+
         return attention_weights

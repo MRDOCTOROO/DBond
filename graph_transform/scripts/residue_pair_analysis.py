@@ -405,6 +405,11 @@ def main():
                         choices=["svg", "png"])
     parser.add_argument("--alphabet", type=str, default=DEFAULT_ALPHABET,
                         help="字母表（默认与 default.yaml 一致）")
+    parser.add_argument("--filter_empty", action="store_true",
+                        help="过滤掉数据中完全不存在的 AA 行/列 "
+                             "(如本项目测试集缺 C/M/V/W/Z)。输出图更紧凑。")
+    parser.add_argument("--min_total_n", type=int, default=1,
+                        help="filter_empty 时保留 AA 的最低总样本数阈值")
     args = parser.parse_args()
 
     img_ext = ".svg" if args.figure_format == "svg" else ".png"
@@ -491,8 +496,12 @@ def main():
         save_path=fig_path,
         min_n_for_label=50,
         rare_thresholds=(10, 50),
+        filter_empty=args.filter_empty,
+        min_total_n=args.min_total_n,
     )
     logger.info(f"Saved figure: {fig_path}")
+    if args.filter_empty:
+        logger.info("  (filter_empty=True: 已过滤数据中不存在的 AA 行/列)")
 
     # ---- 4. 落盘 CSV + JSON 摘要 ----
     csv_path = os.path.join(args.output_dir, "residue_pair_stats.csv")

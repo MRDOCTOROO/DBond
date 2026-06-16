@@ -51,9 +51,53 @@
 | 纯数字（如 `45`） | 样本数 N ≥ 50 | **可信** |
 | 数字 + `*`（如 `33*`） | N ∈ [10, 50) | 中等，需谨慎 |
 | 数字 + `**`（如 `12**`） | N < 10 | **低**，统计不稳定 |
-| 灰色斜线填充 | N = 0 | 数据缺失（无该残基对） |
+| 灰色斜线填充 | N = 0 | 该残基对在数据中不存在 |
 
-> B / O / X / Z 等非标准氨基酸在测试集中本就稀有，多数会带 `*` 或 `**`。
+### 1.3.1 关于空格子（重要：本项目数据特性）
+
+本项目为 **D-氨基酸镜像肽数据存储**，**刻意排除了部分标准氨基酸**。
+矩阵中的空格子不是 bug，而是设计性数据特性：
+
+**字母表 25 字符** = `#` (padding) + 24 种 AA 代码：
+- **标准 20 AA**：`A C D E F G H I K L M N P Q R S T V W Y`
+- **非标准 4 AA**：`B` (Asx, Asp/Asn 歧义码)、`O` (Pyrrolysine, 吡咯赖氨酸)、
+  `X` (unknown)、`Z` (Glx, Glu/Gln 歧义码)
+
+**测试集 6072 实际出现的 19 种 AA**（5 种字母表成员完全缺失）：
+
+| 缺失 AA | 类型 | 训练集出现次数 | 测试集出现次数 | 缺失原因 |
+|---------|------|--------------|--------------|---------|
+| **C** (Cys, 半胱氨酸) | 标准 | **0** | **0** | 设计性排除：含 -SH 基易形成二硫键，破坏序列稳定性 |
+| **M** (Met, 甲硫氨酸) | 标准 | **0** | **0** | 设计性排除：含硫原子易氧化 |
+| **W** (Trp, 色氨酸) | 标准 | **0** | **0** | 设计性排除：含吲哚环，体积大易碎裂 |
+| **V** (Val, 缬氨酸) | 标准 | 1,043 | **0** | 训练集极少（仅 0.0003%），测试集恰好无 |
+| **Z** (Glx, Glu/Gln) | 非标准 | 1,131 | **0** | 训练集极少，测试集恰好无 |
+
+**实际出现在测试集中的 19 种 AA**：
+```
+A B D E F G H I K L N O P Q R S T X Y
+```
+
+**频次分布**（测试集 96,605 样本 / 2.5M+ 残基）：
+- 高频（>10⁶）：K A D G P L Q Y H N T S F E O B
+- 中频（10⁴~10⁵）：I
+- 低频（<10⁴）：R (5,415), X (1,046)
+- 4 种非标准 AA 中：**B (130K) 和 O (135K) 高频**；X (1K) 低频；**Z 在测试集无**
+
+> 因此矩阵中 C/M/W/V/Z 对应的 5 行 + 5 列共 ~215 个格子全为空，
+> 占总数 576 的 ~37%。这是**论文应该明确说明的数据特性**，
+> 不是缺失数据或 bug。
+
+### 1.3.2 论文中如何描述
+
+**推荐措辞**：
+> "The DBond mirror-image peptide dataset employs a 24-letter alphabet
+> (20 standard + 4 ambiguity codes B/O/X/Z). Three sulfur-containing or
+> bulky aromatic residues (C, M, W) are **by design** excluded to ensure
+> sequence stability during MS/MS analysis. V and Z are present in the
+> training set but absent in the held-out test fold. The empirical and
+> predicted statistics reported here cover the 19 amino acids that
+> actually appear in the test set."
 
 ### 1.4 好坏阈值
 

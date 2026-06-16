@@ -94,8 +94,22 @@ class AttentionExtractor:
                 node_features = packed_nodes[valid_node_mask]
             else:
                 node_features = node_features[valid_seq_mask]
-            
-            # 通过注意力层收集权重
+
+            # ----- GCN 层前向（BUG 修复）-----
+            # 此前此函数直接跳过了 self.model.gcn_layers，导致第一个 GAT 层
+            # (即图上的 L0) 看到的是未经邻域聚合的原始 NodeEncoder 输出，
+            # 与训练/推理 forward() 路径（GCN×3 → GAT×2）严重不一致。
+            # 结果是 L0 的 softmax 注意力塌缩到少数热点（高方差输入），
+            # 表现为图上 "L0 比 L1 更聚焦" 的伪影。
+            # 修复：在 GAT 循环前先依次通过所有 GCN 层，与 forward() 路径对齐。
+            for gcn_layer in self.model.gcn_layers:
+                node_features = gcn_layer(
+                    node_features,
+                    batch_data['edge_index'],
+                    edge_features,
+                )
+
+            # 通过 GAT 注意力层收集权重
             attention_weights = []
             for gat_layer in self.model.gat_layers:
                 weights = gat_layer.get_attention_weights(
@@ -109,7 +123,7 @@ class AttentionExtractor:
                     batch_data['edge_index'],
                     edge_features,
                 )
-            
+
             return attention_weights
     
     def extract_attention_for_sample(self, sample_data: Dict) -> List[torch.Tensor]:

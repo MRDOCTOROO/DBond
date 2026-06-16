@@ -1169,11 +1169,20 @@ def extract_bond_level_attention(
         edge_index_np = edge_index.cpu().numpy()
         for i in range(edge_index_np.shape[1]):
             src, dst = int(edge_index_np[0, i]), int(edge_index_np[1, i])
-            if abs(src - dst) == 1 and src < seq_len - 1 and dst < seq_len:
-                bond_pos = min(src, dst)
-                if i < len(attn_np):
-                    bond_attn[bond_pos] += attn_np[i]
-                    bond_counts[bond_pos] += 1
+            # 仅取相邻残基边（肽键边）
+            if abs(src - dst) != 1:
+                continue
+            # 排除涉及 global node（位于 seq_len 索引）的边。
+            # 修复：旧版条件 `src < seq_len-1 and dst < seq_len` 不对称，
+            # 导致最后一个键 (seq_len-2, seq_len-1) 的反向边 (seq_len-1 → seq_len-2)
+            # 被错误丢弃（因为 src=seq_len-1 不满足 < seq_len-1）。
+            # 新版条件保留所有合法肽键边的双向贡献，仍能正确排除 global node。
+            if not (min(src, dst) < seq_len - 1 and max(src, dst) < seq_len):
+                continue
+            bond_pos = min(src, dst)
+            if i < len(attn_np):
+                bond_attn[bond_pos] += attn_np[i]
+                bond_counts[bond_pos] += 1
     else:
         for i in range(min(seq_len - 1, len(attn_np))):
             bond_attn[i] = attn_np[i]
@@ -1689,6 +1698,8 @@ def plot_residue_pair_matrix(
     min_n_for_label: int = 50,
     rare_thresholds: Tuple[int, int] = (10, 50),
     figsize: Tuple[float, float] = (30, 10.5),
+    filter_empty: bool = False,
+    min_total_n: int = 1,
 ) -> plt.Figure:
     """3-panel residue-pair chemistry matrix.
 
@@ -1710,11 +1721,39 @@ def plot_residue_pair_matrix(
         rare_thresholds: (n_star_star, n_star) thresholds for double/triple marker.
         figsize: figure size; default (30, 10.5) gives ~0.4" per cell with 3
                  square subplots side-by-side, enough room for 2-decimal text.
+        filter_empty: if True, drop AAs that have zero total observations
+                      (rows+cols all empty) from the visualization. Useful when
+                      the dataset by-design excludes certain AAs (e.g., C/M/W
+                      in D-amino-acid mirror peptides).
+        min_total_n:  minimum total count (sum over row + column) for an AA
+                      to be retained when filter_empty=True.
     """
     n_aa = len(aa_labels)
     assert empirical.shape == (n_aa, n_aa)
     assert predicted.shape == (n_aa, n_aa)
     assert counts.shape == (n_aa, n_aa)
+
+    # 可选：过滤掉数据中完全不存在的 AA（按行+列总样本数）
+    if filter_empty:
+        # 行+列总样本数 = 该 AA 作为 N 端或 C 端出现的总次数
+        row_sums = counts.sum(axis=1)
+        col_sums = counts.sum(axis=0)
+        total_per_aa = row_sums + col_sums
+        keep_mask = total_per_aa >= min_total_n
+        kept_idx = np.where(keep_mask)[0]
+        dropped = [aa_labels[i] for i in np.where(~keep_mask)[0]]
+        if len(dropped) > 0:
+            empirical = empirical[keep_mask][:, keep_mask]
+            predicted = predicted[keep_mask][:, keep_mask]
+            counts = counts[keep_mask][:, keep_mask]
+            aa_labels = [aa_labels[i] for i in kept_idx]
+            n_aa = len(aa_labels)
+            # 缩小 figsize 以匹配
+            scale = n_aa / max(len(aa_labels), 1)  # 实际无变化，仅为占位
+            # 自适应：每个 cell 保持 ~0.42" 宽
+            per_cell = 0.42
+            subplot_w = max(7.0, n_aa * per_cell)
+            figsize = (subplot_w * 3 + 2.0, max(7.5, n_aa * per_cell + 2.5))
 
     fig, axes = plt.subplots(1, 3, figsize=figsize)
     # 拓宽左右留白以放下 colorbar；wspace 控制子图间距；
