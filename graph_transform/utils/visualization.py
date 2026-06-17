@@ -9,6 +9,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from matplotlib.ticker import FuncFormatter
 import seaborn as sns
 import networkx as nx
 from typing import Dict, List, Optional, Tuple, Any
@@ -1622,11 +1623,13 @@ def plot_new_interpretability_case_study(
     ax3.scatter(rng.normal(2, 0.06, len(intact_weights)), intact_weights,
                 alpha=0.4, color=INTERP_COLORS['intact'], s=20, zorder=2)
 
+    # 精简 stats_text：保留关键数值，去掉冗长的自然语言 interpretation
+    # （interpretation 由用户在 figure caption 中自行补充）
     stats_text = (
-        f"d = {effect['cohen_d_signed']:+.2f} (|d|={effect['cohen_d_abs']:.2f})\n"
-        f"AUC = {effect['auc']:.3f}  (>0.5 ⇒ broken > intact)\n"
-        f"p = {effect['p_value']:.2e}\n"
-        f"{effect['interpretation']}"
+        f"d = {effect['cohen_d_signed']:+.2f}  "
+        f"(n_broken={effect['n_broken']}, n_intact={effect['n_intact']})\n"
+        f"AUC = {effect['auc']:.3f}\n"
+        f"p = {effect['p_value']:.2e}"
     )
     ax3.text(0.98, 0.98, stats_text, transform=ax3.transAxes, fontsize=9,
              verticalalignment='top', horizontalalignment='right',
@@ -1664,9 +1667,9 @@ def plot_new_interpretability_case_study(
     # 在 panel (d) 标题前加 "(d)" 标识
     ax4.set_title('(d) ' + ax4.get_title(), fontsize=10, fontweight='bold', pad=8)
 
-    fig.suptitle('DBond-GT Interpretability Analysis\n'
-                 + FUNCTIONAL_SALIENCY_CAPTION,
-                 fontsize=13, fontweight='bold', y=0.99)
+    # 精简 suptitle：只保留主标题，详细 interpretation 留给 figure caption
+    fig.suptitle('DBond-GT Interpretability Case Study',
+                 fontsize=13, fontweight='bold', y=0.97)
 
     _save_figure(fig, save_path)
 
@@ -1802,10 +1805,12 @@ def plot_residue_pair_matrix(
                         marker, color, fs = '*', '#34495E', 7.5
                     else:
                         marker, color, fs = '', 'black', 8.5
-                    # diff 面板：带符号，2 位小数；rate 面板：百分比整数
+                    # diff 面板：带符号的百分点（percentage points, pp），
+                    # 与 (a)(b) 保持同样 2-3 字符宽度，避免数字堆叠。
+                    # 例: +0.12 → "+12",  -0.34 → "−34"
                     if is_diff:
                         sign = '+' if val >= 0 else '−'
-                        text = f'{sign}{abs(val):.2f}{marker}'
+                        text = f'{sign}{abs(val*100):.0f}{marker}'
                     else:
                         text = f'{val*100:.0f}{marker}'
                     ax.text(j, i, text, ha='center', va='center',
@@ -1819,7 +1824,7 @@ def plot_residue_pair_matrix(
                        '(b) Model predicted  E[σ(model) | X-Y]  [%]',
                        annotate_values=True)
     im_c = _draw_panel(axes[2], predicted - empirical, diff_vmin, diff_vmax, 'RdBu_r',
-                       '(c) Difference  (predicted − empirical)',
+                       '(c) Difference  (predicted − empirical)  [pp]',
                        annotate_values=True, is_diff=True)
 
     # Colorbars: 放在右侧，pad 略大避免与子图挤在一起
@@ -1828,12 +1833,16 @@ def plot_residue_pair_matrix(
     cb_b = plt.colorbar(im_b, ax=axes[1], fraction=0.038, pad=0.04)
     cb_b.set_label('Predicted probability', fontsize=10)
     cb_c = plt.colorbar(im_c, ax=axes[2], fraction=0.038, pad=0.04)
-    cb_c.set_label('Bias (model − empirical)', fontsize=10)
+    # 用百分点 (pp) 显示 colorbar 刻度，与 cell 注释一致
+    cb_c.ax.yaxis.set_major_formatter(
+        FuncFormatter(lambda v, _: f'{v*100:+.0f}')
+    )
+    cb_c.set_label('Bias (model − empirical)  [pp]', fontsize=10)
 
     fig.suptitle('Residue-Pair Cleavage Chemistry: Empirical vs Model\n'
                  'Rows X = N-terminal side,  Cols Y = C-terminal side   '
                  '|   Panels (a)(b) shown as percentage [%],   '
-                 'Panel (c) shown as signed bias (model − empirical)\n'
+                 'Panel (c) shown as signed bias in percentage points [pp]\n'
                  f'* N∈[{rare_thresholds[0]},{rare_thresholds[1]}), '
                  f'** N<{rare_thresholds[0]} (statistically uncertain, rare AAs B/O/X/Z)',
                  fontsize=13, fontweight='bold', y=0.965)
@@ -2307,15 +2316,10 @@ def plot_aggregate_layer_attention_compact(
     ax.set_xlabel('Bond position (i)', fontsize=10, fontweight='bold')
     ax.set_ylabel('Network layer', fontsize=10, fontweight='bold')
 
-    # 标题：包含进度结论 + 色阶模式
-    focus_progression = ' → '.join(
-        f'L{m["layer"]}:H={m["normalized_entropy"]:.2f}'
-        for m in focus_metrics
-    )
-    scale_note = 'absolute scale' if color_scale == 'absolute' else 'per-row normalized'
+    # 标题：单行精简版（层进度信息已在右侧 H= 文本列显示，无需重复）
+    scale_note = 'absolute' if color_scale == 'absolute' else 'row-normalized'
     ax.set_title(
-        f'Aggregate median attention (n={n_samples} samples, {scale_note})\n'
-        f'Progression: {focus_progression}',
+        f'Aggregate median attention (n={n_samples}, {scale_note})',
         fontsize=10, fontweight='bold', pad=8,
     )
 
@@ -2331,7 +2335,7 @@ def plot_aggregate_layer_attention_compact(
                 verdict, verdict_color = 'moderate', '#F39C12'
             else:
                 verdict, verdict_color = 'diffuse', '#27AE60'
-            text = f'H={ent:.3f}\nT3={top3:.3f}\n{verdict}'
+            text = f'H={ent:.2f}  T3={top3:.2f}\n{verdict}'
             # 用 axes 坐标在右侧定位
             ax.text(1.02, i / max(num_layers - 1, 1), text,
                     transform=ax.transAxes, fontsize=8, va='center', ha='left',

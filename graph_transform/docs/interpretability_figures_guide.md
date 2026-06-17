@@ -358,3 +358,108 @@ A B D E F G H I K L N O P Q R S T X Y
 | Occlusion 单样本 r | ≥ 0.5 | 0.3–0.5 | < 0.3 |
 | Occlusion 聚合 global r | ≥ 0.5 | 0.3–0.5 | < 0.3 |
 | Occlusion 聚合 n_strong / n_valid | ≥ 50% | 20–50% | < 20% |
+
+---
+
+## 六、交叉验证结果解读（Method 5/6/7 实测）
+
+**数据来源**：`results/cross_validation/cross_validation_summary.json`
+**样本**：15 个分层抽样（长度 24-31，覆盖 6 个长度桶）
+
+### 6.1 实测数值汇总
+
+| 方法 | 指标 | 数值 | 解读 |
+|------|------|------|------|
+| **Method 5** | L0 vs L1 Spearman ρ (mean) | **+0.420** | 中等正相关：部分迁移 |
+| | L0 vs L1 ρ (median) | +0.411 | 一致 |
+| | L0 vs L1 ρ (IQR) | [0.33, 0.54] | 跨样本稳定 |
+| **Method 6** | rollout vs L0 ρ | +0.488 | rollout 部分像 L0 |
+| | **rollout vs L1 ρ** | **+0.796** | **rollout 强烈像 L1** |
+| **Method 7** | L0 Pearson r (mean) | +0.168 | **弱相关** |
+| | **L1 Pearson r (mean)** | **+0.324** | **中等相关（≈2× L0）** |
+| | L0 Spearman ρ | +0.323 | 弱-中 |
+| | L1 Spearman ρ | +0.418 | 中等 |
+
+### 6.2 假设验证结果
+
+**原假设**（基于"L0 focused = 真 functional"的直觉）：
+
+| 原假设 | 实测 | 判定 |
+|--------|------|------|
+| L0 ≈ functional importance (r ≈ 0.45) | r = 0.17 | ❌ **推翻** |
+| L1 ≈ information mixing (r ≈ 0.08) | r = 0.32 | ❌ **反转** |
+
+**实际发现**：**L1 才是 functional importance 层；L0 是局部特征提取器，与 task relevance 弱相关。**
+
+### 6.3 三方法联合叙事（**论文推荐措辞**）
+
+```
+L0 (focused, H=0.74, top3=0.70)
+   │
+   │  • 局部结构特征提取
+   │  • 与 task relevance: r = 0.17 (弱)
+   │  • 提供基础特征但不直接对齐任务
+   │
+   ▼  Method 5: ρ(L0,L1) = 0.42 → 部分重组（保留约 42% 位置排序）
+L1 (diffuse, H=0.98, top3=0.28)
+   │
+   │  • 重新分配 attention 到 task-relevant 键
+   │  • 与 task relevance: r = 0.32 (中等, 2× L0)
+   │  • 实现 feature → task alignment
+   │
+   ▼  Method 6: rollout 最像 L1 (ρ=0.80)
+Rollout
+   │
+   └─→ 模型的"有效注意力"由 L1 主导
+```
+
+### 6.4 推荐的论文段落（直接可用）
+
+> **Layer-wise functional specialization.**
+> To dissect how the GraphTransformer allocates attention across its two GAT
+> layers, we performed three complementary cross-validation analyses on 15
+> stratified subsamples of the held-out test set.
+>
+> **(i) Rank correlation between layers** (Method 5): The per-sample Spearman
+> ρ between L0 and L1 bond-level attention is +0.42 ± 0.14 (median +0.41,
+> IQR [0.33, 0.54]). This indicates **substantial but incomplete migration**:
+> L1 preserves roughly 42% of L0's positional ranking while reorganizing
+> the rest.
+>
+> **(ii) Attention rollout** (Method 6, Abnar & Zuidema 2020): The cumulative
+> input→output attention flow correlates strongly with L1 (ρ = +0.80) and
+> moderately with L0 (ρ = +0.49), confirming that the model's effective
+> attention is **dominated by the deeper layer**.
+>
+> **(iii) Attention–occlusion agreement** (Method 7): Pearson r between each
+> layer's attention and the causal occlusion sensitivity is +0.17 for L0 and
+> +0.32 for L1 (Spearman ρ: +0.32 vs +0.42). The deeper layer is roughly
+> **twice as aligned** with causal importance.
+>
+> Together, these analyses reveal a **division of labor**: L0 extracts
+> **focused local structural features** (entropy 0.74, top-3 share 0.70) that
+> are not yet task-aligned, while L1 **redistributes** attention across
+> multiple cleavage-relevant positions (entropy 0.98, top-3 share 0.28),
+> achieving moderate functional alignment. Importantly, attention in either
+> individual layer is **not** a complete explanation of the model's behavior
+> (r < 0.5), justifying the use of occlusion as a complementary attribution
+> method.
+
+### 6.5 反直觉但合理的解释
+
+**为什么 "diffuse" 的 L1 反而更 functional？**
+
+- "Diffuse" ≠ "random"。L1 的高熵意味着 attention **均匀分布到多个重要键**，
+  而不是聚焦到错误的少数键。
+- L0 的 "focused" 是**结构特征主导的聚焦**（如 GCN 平滑后的特定 motif），
+  与断裂无关。
+- L1 的 "diffuse" 是**任务驱动的广覆盖**（覆盖所有可能断裂的键），
+  与 occlusion 高度一致。
+
+### 6.6 对项目方法学的启示
+
+1. **不能直接用单层 attention 解释模型**（任何层 r < 0.5）
+2. **rollout 是更好的代理**（如果一定要用 attention 做解释）
+3. **occlusion 仍是最可信的归因**（因果性保证）
+4. 论文应明确声明：attention 在本研究中**部分 functional**，
+   不应过度声明 "attention = explanation"
