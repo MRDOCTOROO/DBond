@@ -40,6 +40,13 @@ from .visualization import (
     # 聚合图层注意力（基于多样本的群体平均模式，比单样本更可信）
     plot_aggregate_layer_attention,
     plot_aggregate_layer_attention_compact,
+    # 交叉验证：证明 attention 是否有用（Method 5/6/7）
+    compute_attention_rank_correlation,
+    plot_attention_rank_correlation,
+    compute_attention_rollout,
+    plot_attention_rollout,
+    compute_attention_occlusion_correlation,
+    plot_attention_occlusion_correlation,
 )
 from .interpretability import (
     plot_interpretability_case_study,
@@ -85,4 +92,11 @@ __all__ = [
     # 聚合图层注意力（基于多样本的群体平均模式，比单样本更可信）
     'plot_aggregate_layer_attention',
     'plot_aggregate_layer_attention_compact',
+    # 交叉验证：证明 attention 是否有用（Method 5/6/7）
+    'compute_attention_rank_correlation',
+    'plot_attention_rank_correlation',
+    'compute_attention_rollout',
+    'plot_attention_rollout',
+    'compute_attention_occlusion_correlation',
+    'plot_attention_occlusion_correlation',
 ]

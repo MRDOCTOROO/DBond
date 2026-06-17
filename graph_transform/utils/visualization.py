@@ -2489,9 +2489,689 @@ def plot_aggregate_layer_attention(
         'interpretation': (
             'Layer-wise focus progression (median across samples): '
             + ' → '.join(
-                f"L{m['layer']}({m['normalized_entropy']:.3f})"
+                f"L{m['layer']}(H={m['normalized_entropy']:.3f})"
                 for m in focus_metrics
             )
         ),
     }
     return fig, summary
+
+
+# =============================================================================
+# Cross-validation: proving attention is (or isn't) functionally meaningful
+# =============================================================================
+
+# Method 5: Attention Rank Correlation (Spearman ρ between layers)
+# Method 6: Attention Rollout (Abnar & Zuidema 2020)
+# Method 7: Attention–Occlusion Correlation (per layer)
+
+
+def compute_attention_rank_correlation(
+    attention_weights_list: List[List[torch.Tensor]],
+    edge_indices: List[Optional[torch.Tensor]],
+    sequences: List[str],
+    max_seq_len: int = 30,
+) -> Dict[str, Any]:
+    """Method 5: 逐样本计算 L0 与 L1（及更深层）bond-level attention 的 Spearman ρ。
+
+    解读：
+        - ρ ≈ +1：两层关注相同位置（只是平滑度不同）→ 浅层 pattern 被保留
+        - ρ ≈ 0：两层关注完全不同位置 → 发生了 attention migration / reconstruction
+        - ρ < 0：两层关注方向相反 → 反直觉，提示训练异常
+
+    对每个样本：
+        1. 提取 L0 bond attention (length = num_bonds)
+        2. 提取 L1 bond attention (length = num_bonds)
+        3. 计算 Spearman ρ
+    跨样本聚合：返回每对层组合的 ρ 分布。
+
+    Returns:
+        Dict 含：
+          - per_sample_rho: List[float] 每个样本的 ρ 值（L0 vs L1）
+          - mean_rho, median_rho, std_rho
+          - layer_pairs: [(0,1), (0,2), ...] 所有层对组合
+          - per_pair_metrics: 每对的统计
+    """
+    from scipy.stats import spearmanr
+
+    n_samples = len(attention_weights_list)
+    if n_samples == 0:
+        raise ValueError("empty attention_weights_list")
+    num_layers = len(attention_weights_list[0])
+
+    # 收集每层每样本的 bond attention
+    per_layer_bond_attn: List[List[np.ndarray]] = [[] for _ in range(num_layers)]
+    for attn_weights, edge_idx, seq in zip(attention_weights_list, edge_indices, sequences):
+        for layer_idx in range(num_layers):
+            bond_attn, _ = extract_bond_level_attention(
+                attn_weights[layer_idx], edge_idx, seq, max_seq_len,
+            )
+            per_layer_bond_attn[layer_idx].append(bond_attn)
+
+    # 所相邻层对（含 L0 vs L_last 等远端对）
+    layer_pairs = []
+    for i in range(num_layers):
+        for j in range(i + 1, num_layers):
+            layer_pairs.append((i, j))
+    if num_layers == 2:
+        # 2 层时只有 (0, 1)
+        pass
+
+    per_pair_metrics: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    for (la, lb) in layer_pairs:
+        rhos: List[float] = []
+        for k in range(n_samples):
+            a = per_layer_bond_attn[la][k]
+            b = per_layer_bond_attn[lb][k]
+            if len(a) < 2 or len(b) < 2:
+                continue
+            if np.std(a) == 0 or np.std(b) == 0:
+                rhos.append(float('nan'))
+                continue
+            try:
+                rho, _ = spearmanr(a, b)
+                rhos.append(float(rho))
+            except Exception:
+                rhos.append(float('nan'))
+        valid = [r for r in rhos if not np.isnan(r)]
+        per_pair_metrics[(la, lb)] = {
+            'per_sample_rho': rhos,
+            'mean_rho': float(np.mean(valid)) if valid else float('nan'),
+            'median_rho': float(np.median(valid)) if valid else float('nan'),
+            'std_rho': float(np.std(valid)) if valid else float('nan'),
+            'iqr': (
+                float(np.percentile(valid, 25)),
+                float(np.percentile(valid, 75)),
+            ) if valid else (float('nan'), float('nan')),
+            'n_valid': len(valid),
+            'n_total': len(rhos),
+        }
+
+    return {
+        'num_samples': n_samples,
+        'num_layers': num_layers,
+        'layer_pairs': layer_pairs,
+        'per_pair_metrics': per_pair_metrics,
+    }
+
+
+def plot_attention_rank_correlation(
+    rank_corr_summary: Dict[str, Any],
+    save_path: Optional[str] = None,
+    figsize: Tuple[float, float] = (14, 6),
+) -> plt.Figure:
+    """可视化 Method 5 结果：左图分布，右图示例样本 L0 vs L1 scatter。
+
+    由于示例样本 scatter 需要原始 attention 数据（不在 summary 中），
+    此函数仅绘制左图分布。如需 scatter，调用方自行绘制。
+    """
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    plt.subplots_adjust(wspace=0.3, left=0.07, right=0.97, top=0.85, bottom=0.15)
+
+    per_pair = rank_corr_summary['per_pair_metrics']
+
+    # 左：每对层的 ρ 分布 boxplot
+    ax = axes[0]
+    pair_labels = [f"L{a}vsL{b}" for (a, b) in rank_corr_summary['layer_pairs']]
+    box_data = []
+    for (a, b) in rank_corr_summary['layer_pairs']:
+        rhos = per_pair[(a, b)]['per_sample_rho']
+        box_data.append([r for r in rhos if not np.isnan(r)])
+
+    if box_data and any(len(d) > 0 for d in box_data):
+        bp = ax.boxplot(box_data, tick_labels=pair_labels, patch_artist=True, widths=0.5,
+                        showmeans=True,
+                        meanprops=dict(marker='D', markerfacecolor='white', markersize=7))
+        for patch in bp['boxes']:
+            patch.set_facecolor(INTERP_COLORS['fill'])
+            patch.set_alpha(0.6)
+        for median in bp['medians']:
+            median.set_color('black')
+            median.set_linewidth(2)
+        # 散点
+        rng = np.random.default_rng(42)
+        for i, d in enumerate(box_data):
+            if d:
+                jitter = rng.normal(0, 0.06, size=len(d))
+                ax.scatter(np.full(len(d), i + 1) + jitter, d,
+                           alpha=0.5, color=INTERP_COLORS['broken'],
+                           s=25, edgecolor='black', linewidth=0.3, zorder=3)
+        ax.axhline(0, color='gray', linewidth=0.5, alpha=0.5)
+        ax.axhline(0.7, color=INTERP_COLORS['highlight'], linestyle=':',
+                   linewidth=1.0, alpha=0.7, label='ρ=0.7 (strong)')
+        ax.axhline(0.3, color=INTERP_COLORS['raw_r'], linestyle=':',
+                   linewidth=1.0, alpha=0.7, label='ρ=0.3 (weak)')
+        ax.legend(loc='lower right', fontsize=8, framealpha=0.9)
+    ax.set_ylabel('Spearman ρ (L_a vs L_b bond attention)',
+                  fontsize=10, fontweight='bold')
+    ax.set_title('(a) Per-sample rank correlation between layers',
+                 fontsize=10, fontweight='bold')
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # 右：聚合统计柱状图
+    ax = axes[1]
+    pairs = rank_corr_summary['layer_pairs']
+    if pairs:
+        means = [per_pair[p]['mean_rho'] for p in pairs]
+        medians = [per_pair[p]['median_rho'] for p in pairs]
+        stds = [per_pair[p]['std_rho'] for p in pairs]
+        x = np.arange(len(pairs))
+        w = 0.35
+        ax.bar(x - w/2, means, w, yerr=stds, label='Mean ± std',
+               color=INTERP_COLORS['broken'], alpha=0.75,
+               capsize=5, edgecolor='black', linewidth=0.5)
+        ax.bar(x + w/2, medians, w, label='Median',
+               color=INTERP_COLORS['intact'], alpha=0.75,
+               edgecolor='black', linewidth=0.5)
+        ax.set_xticks(x)
+        ax.set_xticklabels([f'L{a}vsL{b}' for (a, b) in pairs])
+        ax.axhline(0, color='gray', linewidth=0.5)
+        ax.axhline(0.7, color=INTERP_COLORS['highlight'], linestyle=':',
+                   linewidth=1.0, alpha=0.6, label='strong (0.7)')
+        ax.legend(loc='lower right', fontsize=8)
+    ax.set_ylabel('Spearman ρ', fontsize=10, fontweight='bold')
+    ax.set_title('(b) Aggregate rank correlation per layer pair',
+                 fontsize=10, fontweight='bold')
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # 总标题 + 解读提示
+    interpretations = []
+    for (a, b) in pairs:
+        m = per_pair[(a, b)]['mean_rho']
+        if np.isnan(m):
+            verdict = 'undefined'
+        elif m >= 0.7:
+            verdict = 'positions preserved (only smoothed)'
+        elif m >= 0.3:
+            verdict = 'partial migration'
+        elif m >= -0.3:
+            verdict = 'complete reconstruction'
+        else:
+            verdict = 'inversion (suspicious)'
+        interpretations.append(f'L{a}vsL{b}: ρ={m:+.3f} → {verdict}')
+
+    fig.suptitle(
+        'Method 5: Attention Rank Correlation Between Layers\n'
+        + ' | '.join(interpretations),
+        fontsize=11, fontweight='bold', y=0.97,
+    )
+
+    _save_figure(fig, save_path)
+    return fig
+
+
+# -----------------------------------------------------------------------------
+# Method 6: Attention Rollout (Abnar & Zuidema 2020)
+# -----------------------------------------------------------------------------
+
+def _build_node_attention_matrix(
+    attention_weights: torch.Tensor,
+    edge_index: torch.Tensor,
+    num_nodes: int,
+    add_identity: bool = True,
+    normalize: str = 'row',
+) -> np.ndarray:
+    """从 GAT edge attention 构建节点 × 节点 attention 矩阵。
+
+    Args:
+        attention_weights: [num_edges] 或 [num_edges, num_heads]，head 维会平均
+        edge_index:        [2, num_edges]，edge_index[0]=src, [1]=dst
+        num_nodes:         节点数（含或不含 global node 由调用方决定）
+        add_identity:      是否加 I（rollout 标准做法）
+        normalize:         'row' / 'col' / 'none'
+                           - 'row': 每行归一化（信息"扩散"解释）
+                           - 'col': 每列归一化（GAT 默认 softmax over src per dst）
+                           - 'none': 不归一化
+    """
+    if attention_weights.dim() == 2:
+        attn_np = attention_weights.mean(dim=1).cpu().numpy()
+    else:
+        attn_np = attention_weights.cpu().numpy()
+
+    A = np.zeros((num_nodes, num_nodes), dtype=np.float64)
+    edge_np = edge_index.cpu().numpy()
+    n_edges = edge_np.shape[1]
+    for i in range(min(n_edges, len(attn_np))):
+        src, dst = int(edge_np[0, i]), int(edge_np[1, i])
+        if 0 <= src < num_nodes and 0 <= dst < num_nodes:
+            A[src, dst] += float(attn_np[i])
+
+    if add_identity:
+        A = A + np.eye(num_nodes)
+
+    if normalize == 'row':
+        row_sum = A.sum(axis=1, keepdims=True)
+        row_sum[row_sum == 0] = 1.0
+        A = A / row_sum
+    elif normalize == 'col':
+        col_sum = A.sum(axis=0, keepdims=True)
+        col_sum[col_sum == 0] = 1.0
+        A = A / col_sum
+
+    return A
+
+
+def compute_attention_rollout(
+    attention_weights_list: List[List[torch.Tensor]],
+    edge_indices: List[Optional[torch.Tensor]],
+    sequences: List[str],
+    max_seq_len: int = 30,
+    normalize: str = 'row',
+) -> Dict[str, Any]:
+    """Method 6: Attention Rollout (Abnar & Zuidema 2020).
+
+    对每个样本：
+        A_rollout = (A_0 + I) @ (A_1 + I) @ ... @ (A_L + I)
+
+    其中 A_l 是第 l 层 GAT 的 node × node attention 矩阵（head 平均）。
+    加 I 是为了保留节点自身信息（标准 rollout 做法）。
+
+    解读：
+        - Rollout 显示"输入节点对最终表示的累积影响"
+        - 若 rollout 仍聚焦在 L0 的热点位置 → 浅层 pattern 通过深层被保留
+        - 若 rollout 完全扩散 → 深层确实重新分配了 attention
+        - 若 rollout 聚焦在 L1 之外的新位置 → 多层累积导致新的关键点
+
+    Returns:
+        Dict 含：
+          - rollout_bond_attn: List[np.ndarray] 每个样本的 rollout bond-level attention
+          - per_layer_focus: rollout 与每层 attention 的 Spearman ρ
+                             (判断 rollout 最像哪一层)
+    """
+    from scipy.stats import spearmanr
+
+    n_samples = len(attention_weights_list)
+    if n_samples == 0:
+        raise ValueError("empty attention_weights_list")
+    num_layers = len(attention_weights_list[0])
+
+    rollout_bond_attn_list: List[np.ndarray] = []
+    per_layer_bond_attn_for_compare: List[List[np.ndarray]] = [[] for _ in range(num_layers)]
+
+    for attn_weights, edge_idx, seq in zip(attention_weights_list, edge_indices, sequences):
+        if edge_idx is None:
+            continue
+        seq_len = min(len(seq), max_seq_len)
+        # rollout 在 residue 子图上做（排除 global node）
+        num_nodes = seq_len
+
+        # 逐层构建 + 累积乘
+        rollout = np.eye(num_nodes)
+        for layer_idx in range(num_layers):
+            A_l = _build_node_attention_matrix(
+                attn_weights[layer_idx], edge_idx, num_nodes,
+                add_identity=True, normalize=normalize,
+            )
+            rollout = rollout @ A_l
+
+        # 从 rollout 矩阵提取 bond-level attention
+        # rollout[i, j] = info flow from i to j
+        # 键 i 连接 i 和 i+1，取 rollout[i, i+1] 和 rollout[i+1, i] 的平均
+        bond_attn = np.zeros(seq_len - 1)
+        for i in range(seq_len - 1):
+            bond_attn[i] = (rollout[i, i + 1] + rollout[i + 1, i]) / 2.0
+        rollout_bond_attn_list.append(bond_attn)
+
+        # 同时收集每层 bond attention 用于比较
+        for layer_idx in range(num_layers):
+            layer_bond_attn, _ = extract_bond_level_attention(
+                attn_weights[layer_idx], edge_idx, seq, max_seq_len,
+            )
+            per_layer_bond_attn_for_compare[layer_idx].append(layer_bond_attn)
+
+    # rollout 与每层 attention 的相关性
+    per_layer_correlation: List[Dict[str, float]] = []
+    for layer_idx in range(num_layers):
+        rhos: List[float] = []
+        for k in range(min(len(rollout_bond_attn_list),
+                           len(per_layer_bond_attn_for_compare[layer_idx]))):
+            a = rollout_bond_attn_list[k]
+            b = per_layer_bond_attn_for_compare[layer_idx][k]
+            n = min(len(a), len(b))
+            if n < 2:
+                continue
+            if np.std(a[:n]) == 0 or np.std(b[:n]) == 0:
+                continue
+            try:
+                rho, _ = spearmanr(a[:n], b[:n])
+                rhos.append(float(rho))
+            except Exception:
+                pass
+        per_layer_correlation.append({
+            'layer': layer_idx,
+            'mean_rho_rollout_vs_layer': float(np.mean(rhos)) if rhos else float('nan'),
+            'median_rho': float(np.median(rhos)) if rhos else float('nan'),
+            'n_samples': len(rhos),
+        })
+
+    return {
+        'num_samples': len(rollout_bond_attn_list),
+        'num_layers': num_layers,
+        'normalize': normalize,
+        'rollout_bond_attn': rollout_bond_attn_list,
+        'per_layer_correlation': per_layer_correlation,
+    }
+
+
+def plot_attention_rollout(
+    rollout_summary: Dict[str, Any],
+    attention_weights_list: List[List[torch.Tensor]],
+    edge_indices: List[Optional[torch.Tensor]],
+    sequences: List[str],
+    max_seq_len: int = 30,
+    max_bonds_show: int = 15,
+    save_path: Optional[str] = None,
+    figsize: Tuple[float, float] = (16, 6),
+) -> plt.Figure:
+    """可视化 Method 6：rollout 与各层 attention 的 bond-level pattern 对比。
+
+    左：每层 + rollout 的群体中位数 bond attention 折线图
+    右：rollout 与每层的 Spearman ρ 柱状图
+    """
+    n_samples = rollout_summary['num_samples']
+    num_layers = rollout_summary['num_layers']
+    max_bonds = min(max_bonds_show, max_seq_len - 1)
+
+    # 收集每层 + rollout 的 bond attention
+    per_layer_bond = [[] for _ in range(num_layers)]
+    rollout_bond = []
+    for k, (attn_weights, edge_idx, seq) in enumerate(
+        zip(attention_weights_list, edge_indices, sequences)
+    ):
+        if k >= n_samples:
+            break
+        seq_len = min(len(seq), max_seq_len)
+        for layer_idx in range(num_layers):
+            ba, _ = extract_bond_level_attention(
+                attn_weights[layer_idx], edge_idx, seq, max_seq_len,
+            )
+            per_layer_bond[layer_idx].append(ba[:max_bonds])
+        if k < len(rollout_summary['rollout_bond_attn']):
+            r = rollout_summary['rollout_bond_attn'][k]
+            rollout_bond.append(r[:max_bonds])
+
+    # 计算中位数
+    def _median_padded(lst):
+        if not lst:
+            return np.zeros(max_bonds)
+        max_len = max(len(x) for x in lst)
+        padded = [np.pad(x, (0, max_len - len(x)), constant_values=np.nan) for x in lst]
+        stacked = np.vstack(padded)
+        with np.errstate(all='ignore'):
+            return np.nanmedian(stacked, axis=0)[:max_bonds]
+
+    layer_medians = [_median_padded(per_layer_bond[i]) for i in range(num_layers)]
+    rollout_median = _median_padded(rollout_bond)
+
+    # 绘图
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    plt.subplots_adjust(wspace=0.3, left=0.07, right=0.97, top=0.85, bottom=0.15)
+
+    # 左：折线对比
+    ax = axes[0]
+    x = np.arange(max_bonds)
+    layer_colors = ['#95A5A6', '#3498DB', '#9B59B6', '#16A085', '#F39C12']
+    for layer_idx in range(num_layers):
+        color = layer_colors[layer_idx % len(layer_colors)]
+        # 归一化到自身最大值便于对比形状
+        m = layer_medians[layer_idx]
+        m_norm = m / (m.max() if m.max() > 0 else 1.0)
+        ax.plot(x, m_norm, 'o--', color=color, linewidth=1.5,
+                markersize=5, alpha=0.7, label=f'L{layer_idx} (per-row normed)', zorder=2)
+    rollout_norm = rollout_median / (rollout_median.max() if rollout_median.max() > 0 else 1.0)
+    ax.plot(x, rollout_norm, 's-', color=INTERP_COLORS['broken'], linewidth=2.8,
+            markersize=10, markeredgecolor='black', markeredgewidth=1.3,
+            label='Rollout (per-row normed)', zorder=4)
+    ax.axhline(0, color='gray', linewidth=0.5, alpha=0.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(i) for i in x], fontsize=8)
+    ax.set_xlabel('Bond position', fontsize=10, fontweight='bold')
+    ax.set_ylabel('Median attention (per-row normalized)', fontsize=10, fontweight='bold')
+    ax.set_title('(a) Layer-wise vs Rollout bond attention pattern',
+                 fontsize=10, fontweight='bold')
+    ax.legend(loc='upper right', fontsize=8, framealpha=0.9)
+    ax.grid(True, alpha=0.3)
+
+    # 右：rollout 与每层的 ρ 柱状图
+    ax = axes[1]
+    per_layer_corr = rollout_summary['per_layer_correlation']
+    layer_ids = [m['layer'] for m in per_layer_corr]
+    rhos = [m['mean_rho_rollout_vs_layer'] for m in per_layer_corr]
+    x = np.arange(len(layer_ids))
+    bars = ax.bar(x, rhos, color=[layer_colors[i % len(layer_colors)] for i in layer_ids],
+                  alpha=0.8, edgecolor='black', linewidth=0.5)
+    for bar, r in zip(bars, rhos):
+        if not np.isnan(r):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                    f'{r:+.3f}', ha='center', fontsize=10, fontweight='bold')
+    ax.axhline(0, color='gray', linewidth=0.5)
+    ax.axhline(0.7, color=INTERP_COLORS['highlight'], linestyle=':',
+               linewidth=1.0, alpha=0.7, label='ρ=0.7 (strong)')
+    ax.set_xticks(x)
+    ax.set_xticklabels([f'L{i}' for i in layer_ids])
+    ax.set_ylim(min(-0.1, min(rhos + [0]) - 0.1), max(0.9, max(rhos + [0]) + 0.15))
+    ax.set_ylabel('Spearman ρ (rollout vs layer)', fontsize=10, fontweight='bold')
+    ax.set_title('(b) Which layer does rollout resemble?',
+                 fontsize=10, fontweight='bold')
+    ax.legend(loc='lower right', fontsize=8)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    fig.suptitle(
+        f'Method 6: Attention Rollout (n={n_samples} samples, '
+        f'normalize={rollout_summary["normalize"]})\n'
+        f'Rollout reveals cumulative input→output attention flow across all layers',
+        fontsize=11, fontweight='bold', y=0.97,
+    )
+
+    _save_figure(fig, save_path)
+    return fig
+
+
+# -----------------------------------------------------------------------------
+# Method 7: Attention–Occlusion Correlation (per layer)
+# -----------------------------------------------------------------------------
+
+def compute_attention_occlusion_correlation(
+    attention_weights_list: List[List[torch.Tensor]],
+    edge_indices: List[Optional[torch.Tensor]],
+    sequences: List[str],
+    occlusion_matrices: List[np.ndarray],
+    max_seq_len: int = 30,
+) -> Dict[str, Any]:
+    """Method 7: 逐层计算 attention 与 occlusion 敏感度的相关性。
+
+    验证：哪一层的 attention 与因果归因（occlusion）最一致？
+        - L_X attention ≈ occlusion → 该层 attention 反映 functional importance
+        - L_Y attention ⊥ occlusion → 该层 attention 仅做 information mixing
+
+    每层 attention 转为 residue × bond 矩阵 [seq_len, num_bonds]，
+    与 occlusion sensitivity [seq_len, num_bonds] 计算 Pearson r 和 Spearman ρ。
+
+    Args:
+        attention_weights_list: 每个样本的 [layer_0, layer_1, ...]
+        edge_indices:           每个样本的 edge_index
+        sequences:              每个样本的序列
+        occlusion_matrices:     每个样本的 occlusion sensitivity [seq_len, num_bonds]
+    """
+    from scipy.stats import spearmanr
+
+    n_samples = len(attention_weights_list)
+    if n_samples == 0:
+        raise ValueError("empty attention_weights_list")
+    if len(occlusion_matrices) != n_samples:
+        raise ValueError(
+            f"Length mismatch: {n_samples} attention samples vs "
+            f"{len(occlusion_matrices)} occlusion matrices"
+        )
+    num_layers = len(attention_weights_list[0])
+
+    per_layer_per_sample_r: List[List[float]] = [[] for _ in range(num_layers)]
+    per_layer_per_sample_rho: List[List[float]] = [[] for _ in range(num_layers)]
+
+    for k in range(n_samples):
+        attn_weights = attention_weights_list[k]
+        edge_idx = edge_indices[k]
+        seq = sequences[k]
+        occ = occlusion_matrices[k]
+
+        seq_len = min(len(seq), max_seq_len)
+        num_bonds = seq_len - 1
+        occ_mat = occ[:seq_len, :num_bonds] if occ.shape[0] >= seq_len and occ.shape[1] >= num_bonds else None
+        if occ_mat is None or occ_mat.size < 2:
+            continue
+
+        for layer_idx in range(num_layers):
+            # 构建 residue × bond attention 矩阵
+            residue_attn = build_residue_attention_matrix(
+                attn_weights[layer_idx], edge_idx, seq_len,
+            )
+            res_bond_attn = collapse_to_residue_bond_attention(residue_attn, seq_len)
+            att_mat = res_bond_attn[:seq_len, :num_bonds]
+            if att_mat.size < 2 or np.std(att_mat) == 0 or np.std(occ_mat) == 0:
+                per_layer_per_sample_r[layer_idx].append(float('nan'))
+                per_layer_per_sample_rho[layer_idx].append(float('nan'))
+                continue
+            try:
+                r = float(np.corrcoef(att_mat.flatten(), occ_mat.flatten())[0, 1])
+                rho, _ = spearmanr(att_mat.flatten(), occ_mat.flatten())
+                per_layer_per_sample_r[layer_idx].append(r)
+                per_layer_per_sample_rho[layer_idx].append(float(rho))
+            except Exception:
+                per_layer_per_sample_r[layer_idx].append(float('nan'))
+                per_layer_per_sample_rho[layer_idx].append(float('nan'))
+
+    per_layer_metrics: List[Dict[str, Any]] = []
+    for layer_idx in range(num_layers):
+        valid_r = [x for x in per_layer_per_sample_r[layer_idx] if not np.isnan(x)]
+        valid_rho = [x for x in per_layer_per_sample_rho[layer_idx] if not np.isnan(x)]
+        per_layer_metrics.append({
+            'layer': layer_idx,
+            'mean_pearson_r': float(np.mean(valid_r)) if valid_r else float('nan'),
+            'median_pearson_r': float(np.median(valid_r)) if valid_r else float('nan'),
+            'std_pearson_r': float(np.std(valid_r)) if valid_r else float('nan'),
+            'mean_spearman_rho': float(np.mean(valid_rho)) if valid_rho else float('nan'),
+            'median_spearman_rho': float(np.median(valid_rho)) if valid_rho else float('nan'),
+            'n_valid': len(valid_r),
+        })
+
+    return {
+        'num_samples': n_samples,
+        'num_layers': num_layers,
+        'per_layer_metrics': per_layer_metrics,
+        'per_layer_per_sample_r': per_layer_per_sample_r,
+        'per_layer_per_sample_rho': per_layer_per_sample_rho,
+    }
+
+
+def plot_attention_occlusion_correlation(
+    attn_occ_summary: Dict[str, Any],
+    save_path: Optional[str] = None,
+    figsize: Tuple[float, float] = (14, 6),
+) -> plt.Figure:
+    """可视化 Method 7：左图 per-sample 分布 boxplot，右图 per-layer 聚合柱状图。
+
+    解读：
+        - 若 L0 mean r ≈ 0.4-0.5, L1 mean r ≈ 0.1-0.2：
+            → "L0 attention ≈ functional importance"（你的猜想得到验证）
+            → "L1 attention ≈ information mixing"（深层不再代表 importance）
+        - 若两层都 ≈ 0：attention 都不解释 model behavior
+        - 若两层都 > 0.5：attention 始终是 importance 的良好代理
+    """
+    per_layer = attn_occ_summary['per_layer_metrics']
+    per_sample_r = attn_occ_summary['per_layer_per_sample_r']
+    num_layers = attn_occ_summary['num_layers']
+
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    plt.subplots_adjust(wspace=0.3, left=0.07, right=0.97, top=0.85, bottom=0.15)
+
+    # 左：per-sample 分布 boxplot
+    ax = axes[0]
+    layer_labels = [f'L{m["layer"]}' for m in per_layer]
+    box_data = [[x for x in per_sample_r[i] if not np.isnan(x)]
+                for i in range(num_layers)]
+    if any(len(d) > 0 for d in box_data):
+        bp = ax.boxplot(box_data, tick_labels=layer_labels, patch_artist=True, widths=0.5,
+                        showmeans=True,
+                        meanprops=dict(marker='D', markerfacecolor='white', markersize=8))
+        layer_colors = ['#95A5A6', '#3498DB', '#9B59B6', '#16A085']
+        for i, patch in enumerate(bp['boxes']):
+            patch.set_facecolor(layer_colors[i % len(layer_colors)])
+            patch.set_alpha(0.6)
+        for median in bp['medians']:
+            median.set_color('black')
+            median.set_linewidth(2)
+        rng = np.random.default_rng(42)
+        for i, d in enumerate(box_data):
+            if d:
+                jitter = rng.normal(0, 0.06, size=len(d))
+                ax.scatter(np.full(len(d), i + 1) + jitter, d,
+                           alpha=0.5, color=INTERP_COLORS['broken'],
+                           s=25, edgecolor='black', linewidth=0.3, zorder=3)
+        ax.axhline(0, color='gray', linewidth=0.5, alpha=0.5)
+        ax.axhline(0.5, color=INTERP_COLORS['highlight'], linestyle=':',
+                   linewidth=1.0, alpha=0.7, label='r=0.5 (strong)')
+        ax.axhline(0.3, color=INTERP_COLORS['raw_r'], linestyle=':',
+                   linewidth=1.0, alpha=0.7, label='r=0.3 (moderate)')
+        ax.legend(loc='lower right', fontsize=8, framealpha=0.9)
+    ax.set_ylabel('Pearson r (attention vs occlusion)',
+                  fontsize=10, fontweight='bold')
+    ax.set_title('(a) Per-sample correlation distribution per layer',
+                 fontsize=10, fontweight='bold')
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # 右：per-layer 聚合
+    ax = axes[1]
+    layer_ids = [m['layer'] for m in per_layer]
+    means_r = [m['mean_pearson_r'] for m in per_layer]
+    means_rho = [m['mean_spearman_rho'] for m in per_layer]
+    stds_r = [m['std_pearson_r'] for m in per_layer]
+    x = np.arange(len(layer_ids))
+    w = 0.35
+    ax.bar(x - w/2, means_r, w, yerr=stds_r, label='Pearson r (mean ± std)',
+           color=INTERP_COLORS['broken'], alpha=0.75,
+           capsize=5, edgecolor='black', linewidth=0.5)
+    ax.bar(x + w/2, means_rho, w, label='Spearman ρ (mean)',
+           color=INTERP_COLORS['intact'], alpha=0.75,
+           edgecolor='black', linewidth=0.5)
+    for i, (r, rho) in enumerate(zip(means_r, means_rho)):
+        if not np.isnan(r):
+            ax.text(i - w/2, r + 0.02, f'{r:+.2f}',
+                    ha='center', fontsize=9, fontweight='bold')
+        if not np.isnan(rho):
+            ax.text(i + w/2, rho + 0.02, f'{rho:+.2f}',
+                    ha='center', fontsize=9, fontweight='bold')
+    ax.axhline(0, color='gray', linewidth=0.5)
+    ax.axhline(0.5, color=INTERP_COLORS['highlight'], linestyle=':',
+               linewidth=1.0, alpha=0.6, label='strong (0.5)')
+    ax.set_xticks(x)
+    ax.set_xticklabels([f'L{i}' for i in layer_ids])
+    ax.set_ylabel('Correlation with occlusion', fontsize=10, fontweight='bold')
+    ax.set_title('(b) Per-layer attention ↔ occlusion agreement',
+                 fontsize=10, fontweight='bold')
+    ax.legend(loc='upper right', fontsize=8)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # 总标题 + 解读
+    interpretations = []
+    for m in per_layer:
+        r = m['mean_pearson_r']
+        if np.isnan(r):
+            verdict = 'undefined'
+        elif r >= 0.5:
+            verdict = '≈ functional importance'
+        elif r >= 0.3:
+            verdict = 'partial importance'
+        elif r >= 0.1:
+            verdict = 'information mixing'
+        else:
+            verdict = 'orthogonal to importance'
+        interpretations.append(f'L{m["layer"]}: r={r:+.3f} → {verdict}')
+
+    fig.suptitle(
+        f'Method 7: Attention–Occlusion Correlation per Layer\n'
+        + ' | '.join(interpretations),
+        fontsize=11, fontweight='bold', y=0.97,
+    )
+
+    _save_figure(fig, save_path)
+    return fig
