@@ -1638,13 +1638,18 @@ def plot_new_interpretability_case_study(
 
     # ---------- (d) Aggregate layer attention (replaces old heatmap) ----------
     # 旧版：mean + row-normalized heatmap（5 个样本）
-    # 新版：median + 绝对值色阶 + entropy/top-3 量化指标（N 个案例样本）
-    # 用 group truth 的群体模式替代单样本热力图，避免异常样本误导
+    # 新版：median + 量化聚焦度指标（N 个案例样本）
+    # 色阶映射 heatmap_normalize 参数：'row'（默认，视觉与指标一致）
+    #                          或 'absolute'（保留层间大小，但低量级层不可见）
     ax4 = axes[1, 1]
     # 调整 panel (d) 子图位置，给右侧 metrics 文本列留空间
-    # 通过 set_position 缩小宽度，腾出右侧 0.18 的空间
     pos = ax4.get_position()
     ax4.set_position([pos.x0, pos.y0, pos.width * 0.72, pos.height])
+
+    # heatmap_normalize 历史值: 'row' 或 'global'。映射到新的 color_scale：
+    #   'row' / 'global' → 'row'（视觉一致，推荐）
+    #   'absolute'       → 'absolute'（保留大小，但视觉可能与指标矛盾）
+    panel_d_color_scale = 'absolute' if heatmap_normalize == 'absolute' else 'row'
 
     _, panel_d_summary = plot_aggregate_layer_attention_compact(
         attention_weights_list, edge_indices, sequences,
@@ -1653,6 +1658,7 @@ def plot_new_interpretability_case_study(
         max_bonds_show=min(15, max_seq_len - 1),
         focus_thresholds=(0.85, 0.95),
         show_right_metrics=True,
+        color_scale=panel_d_color_scale,
     )
     panel_d_focus_metrics = panel_d_summary['layer_focus_metrics']
     # 在 panel (d) 标题前加 "(d)" 标识
@@ -2206,18 +2212,19 @@ def plot_aggregate_layer_attention_compact(
     focus_thresholds: Tuple[float, float] = (0.85, 0.95),
     figsize: Tuple[float, float] = (10, 4),
     show_right_metrics: bool = True,
+    color_scale: str = "row",
 ) -> Tuple[Optional[plt.Figure], Dict[str, object]]:
     """紧凑版聚合图层注意力图（单 subplot，适配嵌入 case study panel d）。
 
     与 `plot_aggregate_layer_attention`（多 subplot 详细版）的区别：
         - 本函数输出/绘制到单个 axes，便于嵌入 2×2 case study 的 panel (d)
-        - 用 heatmap（layer × bond），绝对值色阶（保留层间大小差异）
+        - 用 heatmap（layer × bond），可切换 absolute / row-normalized 色阶
         - 右侧文本列显示每层的 entropy + top-3 share + 聚焦度判定
 
     解读：
-        - 浅层（L0）应熵高（接近 1.0）= 分散
-        - 深层（LN）应熵低（< 0.85）= 聚焦到少数键
-        - 若所有层熵都接近 1.0：可能 GCN 修复未生效，或模型未学到层间分化
+        - 浅层（L0）应熵低（< 0.85）= focused（少数键占大头）
+        - 深层（LN）应熵高（≥ 0.95）= diffuse（均匀分布）
+        - 若所有层熵都接近 1.0：模型未学到层间分化
 
     Args:
         attention_weights_list: 每个样本的 [layer_0, layer_1, ...] attention
@@ -2234,6 +2241,9 @@ def plot_aggregate_layer_attention_compact(
                                 entropy ≥ thr[1] → diffuse
         figsize:                standalone 模式的 figure 大小
         show_right_metrics:     是否在右侧显示 entropy + top-3 文本列
+        color_scale:            "row" = 每层独立归一化 [0,1]（默认，视觉与指标一致）
+                                "absolute" = 所有层共用 [0, global_max]（保留层间大小差异，
+                                但低量级层的内部模式不可见）
 
     Returns:
         (fig, summary) — fig 在嵌入模式下为 None
@@ -2259,10 +2269,33 @@ def plot_aggregate_layer_attention_compact(
     else:
         fig = None
 
-    # 绝对值色阶：所有层共用 [0, global_max]
-    global_max = float(layer_median.max()) if layer_max_safe(layer_median) > 0 else 1.0
-    im = ax.imshow(layer_median, cmap='YlOrRd', aspect='auto',
-                   vmin=0, vmax=global_max, interpolation='nearest',
+    # 色阶选择
+    if color_scale == "absolute":
+        # 绝对值色阶：所有层共用 [0, global_max]
+        # 注意：低量级层（如 L0 attention 很小）会全部映射到浅色，
+        # 导致即使该层 entropy 低（focused）也看不出热点。视觉与指标会矛盾。
+        global_max = layer_max_safe(layer_median)
+        if global_max <= 0:
+            global_max = 1.0
+        display_matrix = layer_median
+        vmin, vmax = 0.0, float(global_max)
+        cbar_label = 'Median attention (absolute)'
+    elif color_scale == "row":
+        # 行归一化：每层独立缩放到 [0, 1]
+        # 视觉与指标一致：focused 层会看到少数深色热点，diffuse 层会看到均匀中色。
+        # 代价：丢失层间绝对大小比较。
+        display_matrix = np.zeros_like(layer_median)
+        for i in range(num_layers):
+            row = layer_median[i]
+            r_max = float(row.max()) if row.max() > 0 else 1.0
+            display_matrix[i] = row / r_max
+        vmin, vmax = 0.0, 1.0
+        cbar_label = 'Median attention (per-layer normalized)'
+    else:
+        raise ValueError(f"Unknown color_scale: {color_scale!r}. Use 'row' or 'absolute'.")
+
+    im = ax.imshow(display_matrix, cmap='YlOrRd', aspect='auto',
+                   vmin=vmin, vmax=vmax, interpolation='nearest',
                    origin='lower')  # L0 在底部，LN 在顶部
 
     # 主图：层 × 键热力图
@@ -2274,13 +2307,14 @@ def plot_aggregate_layer_attention_compact(
     ax.set_xlabel('Bond position (i)', fontsize=10, fontweight='bold')
     ax.set_ylabel('Network layer', fontsize=10, fontweight='bold')
 
-    # 标题：包含进度结论
+    # 标题：包含进度结论 + 色阶模式
     focus_progression = ' → '.join(
         f'L{m["layer"]}:H={m["normalized_entropy"]:.2f}'
         for m in focus_metrics
     )
+    scale_note = 'absolute scale' if color_scale == 'absolute' else 'per-row normalized'
     ax.set_title(
-        f'Aggregate median attention (n={n_samples} samples, absolute scale)\n'
+        f'Aggregate median attention (n={n_samples} samples, {scale_note})\n'
         f'Progression: {focus_progression}',
         fontsize=10, fontweight='bold', pad=8,
     )
@@ -2308,15 +2342,15 @@ def plot_aggregate_layer_attention_compact(
     # Colorbar（仅在 standalone 模式，避免嵌入时挤占空间）
     if fig is not None:
         cbar = plt.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
-        cbar.set_label('Median attention (functional saliency)', fontsize=9)
+        cbar.set_label(cbar_label, fontsize=9)
 
     summary = {
         'n_samples': n_samples,
         'num_layers': num_layers,
         'max_bonds_shown': max_bonds,
         'layer_focus_metrics': focus_metrics,
-        'color_scale': 'absolute',
-        'global_max': global_max,
+        'color_scale': color_scale,
+        'global_max_absolute': layer_max_safe(layer_median),
         'interpretation': (
             'Layer-wise focus progression (median across samples): '
             + ' → '.join(

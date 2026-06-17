@@ -239,8 +239,10 @@ def main():
     parser.add_argument("--figure_format", type=str, default="svg", choices=["svg", "png"],
                         help="图像输出格式: svg(矢量,浏览器可编辑文本) 或 png")
     parser.add_argument("--heatmap_normalize", type=str, default="row",
-                        choices=["row", "global"],
-                        help="热力图归一化: row(每层独立[0,1]) 或 global(跨层同尺度)")
+                        choices=["row", "global", "absolute"],
+                        help="Panel (d) 色阶模式: row(默认,每层独立归一化,视觉与指标一致) / "
+                             "global(同 row, 兼容旧名) / absolute(保留层间绝对大小,但低量级层"
+                             "的内部模式不可见,视觉可能与 entropy 指标矛盾)")
     
     args = parser.parse_args()
     img_ext = ".svg" if args.figure_format == "svg" else ".png"
