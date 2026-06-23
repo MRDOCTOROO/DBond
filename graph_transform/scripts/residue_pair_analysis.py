@@ -522,6 +522,23 @@ def main():
     else:
         reliable_sorted = reliable
 
+    # 按预测残差 diff = predicted - empirical 的符号拆分高估/低估，
+    # 各自取 |diff| 最大的 10 个对。
+    # 注：早期版本用 reliable_sorted.head/tail(10)，但 reliable_sorted 是
+    # 按 abs_diff 降序排列的，head 取的是“绝对误差最大”（不分方向），
+    # tail 取的是“绝对误差最小”（拟合最好），与字段名含义不符。此处修正。
+    summary_cols = ["X", "Y", "N", "empirical", "predicted", "diff"]
+    reliable_over = (
+        reliable[reliable["diff"] > 0]
+        .sort_values("abs_diff", ascending=False)
+        .head(10)
+    )
+    reliable_under = (
+        reliable[reliable["diff"] < 0]
+        .sort_values("abs_diff", ascending=False)
+        .head(10)
+    )
+
     # 全局指标
     valid_mask = ~np.isnan(empirical_mat)
     if valid_mask.sum() > 0:
@@ -543,12 +560,18 @@ def main():
         "reliable_pairs_n_ge_50": int((counts_mat >= 50).sum()),
         "global_pearson_r_empirical_vs_predicted": global_corr,
         "global_mae_predicted_vs_empirical": mae,
-        "top_overestimates": reliable_sorted.head(10)[
-            ["X", "Y", "N", "empirical", "predicted", "diff"]
-        ].to_dict(orient="records"),
-        "top_underestimates": reliable_sorted.tail(10)[
-            ["X", "Y", "N", "empirical", "predicted", "diff"]
-        ].to_dict(orient="records"),
+        "top_overestimates": (
+            reliable_over[summary_cols].to_dict(orient="records")
+            if len(reliable) > 0 else []
+        ),
+        "top_underestimates": (
+            reliable_under[summary_cols].to_dict(orient="records")
+            if len(reliable) > 0 else []
+        ),
+        "best_fit_pairs": (
+            reliable_sorted.tail(10)[summary_cols].to_dict(orient="records")
+            if len(reliable) > 0 else []
+        ),
     }
     json_path = os.path.join(args.output_dir, "residue_pair_summary.json")
     with open(json_path, "w", encoding="utf-8") as f:
