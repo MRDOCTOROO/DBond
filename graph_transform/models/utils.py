@@ -6,10 +6,12 @@
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ModelConfig:
@@ -178,48 +180,6 @@ class WeightInitialization:
         
         init_method = init_methods[method]
         model.apply(init_method)
-
-
-class ActivationFunctions:
-    """激活函数集合"""
-    
-    @staticmethod
-    def gelu(x: torch.Tensor) -> torch.Tensor:
-        """GELU激活函数"""
-        return 0.5 * x * (1.0 + torch.erf(x / math.sqrt(2.0)))
-    
-    @staticmethod
-    def swish(x: torch.Tensor) -> torch.Tensor:
-        """Swish激活函数"""
-        return x * torch.sigmoid(x)
-    
-    @staticmethod
-    def mish(x: torch.Tensor) -> torch.Tensor:
-        """Mish激活函数"""
-        return x * torch.tanh(F.softplus(x))
-    
-    @staticmethod
-    def leaky_relu_custom(x: torch.Tensor, negative_slope: float = 0.2) -> torch.Tensor:
-        """自定义LeakyReLU"""
-        return F.leaky_relu(x, negative_slope=negative_slope)
-    
-    @staticmethod
-    def get_activation(name: str) -> callable:
-        """获取激活函数"""
-        activations = {
-            'relu': F.relu,
-            'gelu': ActivationFunctions.gelu,
-            'swish': ActivationFunctions.swish,
-            'mish': ActivationFunctions.mish,
-            'tanh': torch.tanh,
-            'sigmoid': torch.sigmoid,
-            'leaky_relu': ActivationFunctions.leaky_relu_custom
-        }
-        
-        if name not in activations:
-            raise ValueError(f"Unknown activation function: {name}")
-        
-        return activations[name]
 
 
 class Regularization:
@@ -435,12 +395,18 @@ class CheckpointManager:
             device = next(model.parameters()).device
         
         checkpoint = torch.load(filepath, map_location=device)
-        
-        model.load_state_dict(checkpoint['model_state_dict'])
-        
+
+        # strict=False：容忍结构差异（例如已移除未使用的 layer_norms 字段），打印缺失/多余键以便排查。
+        missing, unexpected = model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        if missing or unexpected:
+            logger.warning(
+                "checkpoint %s 存在结构差异 — missing: %s, unexpected: %s",
+                filepath, missing, unexpected,
+            )
+
         if optimizer is not None:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        
+
         return checkpoint
 
 

@@ -46,10 +46,13 @@ cache/
 
 # 虚拟环境与工具目录
 .venv/
-.claude/
+.claude/*
 .kilo/
 
  # 其他忽略
 *.pyc
 *.pt
 *.svg
+*.png
+CLAUDE.md
+plans/*

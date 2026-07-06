@@ -288,9 +288,13 @@ class GraphDataLoader:
         env_vars = torch.stack([item['env_vars'] for item in batch], dim=0)
         seq_lens = torch.tensor([item['seq_len'] for item in batch], dtype=torch.long)
         node_lens = torch.tensor([item.get('node_len', item['seq_len']) for item in batch], dtype=torch.long)
-        
+
         batch_size = len(batch)
         max_seq_len = int(seq_lens.max().item()) if batch_size > 0 else 0
+        # 预先算好 max_node_len / max_bonds（Python int），供 forward 直接使用，
+        # 避免 forward 里对 GPU 张量做 .max().item() 造成每步一次 CUDA→CPU 同步。
+        max_node_len = int(node_lens.max().item()) if batch_size > 0 else 0
+        max_bonds = max(max_seq_len - 1, 0)
         
         # 批处理边索引（需要偏移）
         node_offsets = torch.cumsum(
@@ -323,8 +327,7 @@ class GraphDataLoader:
         batch_edge_types = torch.cat(batch_edge_types, dim=0)
         batch_edge_distances = torch.cat(batch_edge_distances, dim=0)
         
-        # 填充标签（键级别，长度=seq_len-1）
-        max_bonds = max(max_seq_len - 1, 0)
+        # 填充标签（键级别，长度=seq_len-1）；max_bonds 已在前面算好
         if max_bonds > 0:
             batch_labels = pad_sequence(labels_list, batch_first=True, padding_value=0.0)
             bond_positions = torch.arange(max_bonds, dtype=torch.long)
@@ -353,6 +356,8 @@ class GraphDataLoader:
             'env_vars': env_vars,
             'seq_lens': seq_lens,
             'node_lens': node_lens,
+            'max_node_len': max_node_len,
+            'max_bonds': max_bonds,
             'batch_size': batch_size
         }
         

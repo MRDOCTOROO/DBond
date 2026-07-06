@@ -422,27 +422,38 @@ class Trainer:
     def _backward_pass(self, loss: torch.Tensor):
         """反向传播"""
         self.optimizer.zero_grad(set_to_none=True)
-        
+
         if self.use_amp:
             self.scaler.scale(loss).backward()
-            
+
             self.scaler.unscale_(self.optimizer)
-            self.last_grad_norm = self._compute_grad_norm()
-            
-            # 梯度裁剪
+            # clip_grad_norm_ 内部会计算全局梯度范数，直接复用其返回值，
+            # 避免在 _compute_grad_norm 里逐参数 .item() 造成每参数一次 CPU sync。
             if self.gradient_clip_norm > 0:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clip_norm)
-            
+                grad_norm_tensor = torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), self.gradient_clip_norm,
+                )
+            else:
+                grad_norm_tensor = self._total_grad_norm_tensor()
+            self.last_grad_norm = float(grad_norm_tensor.item())
+            if not torch.isfinite(grad_norm_tensor):
+                self.last_grad_norm = float('inf')
+
             self.scaler.step(self.optimizer)
             self.scaler.update()
         else:
             loss.backward()
-            self.last_grad_norm = self._compute_grad_norm()
-            
-            # 梯度裁剪
+            # 同 AMP 分支：复用 clip_grad_norm_ 的范数，避免重复计算。
             if self.gradient_clip_norm > 0:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clip_norm)
-            
+                grad_norm_tensor = torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), self.gradient_clip_norm,
+                )
+            else:
+                grad_norm_tensor = self._total_grad_norm_tensor()
+            self.last_grad_norm = float(grad_norm_tensor.item())
+            if not torch.isfinite(grad_norm_tensor):
+                self.last_grad_norm = float('inf')
+
             self.optimizer.step()
 
     def _maybe_sync_device(self):
@@ -541,18 +552,22 @@ class Trainer:
                 parts.append(f"{key}={value}")
         return ", ".join(parts)
 
-    def _compute_grad_norm(self) -> float:
-        """计算当前参数梯度的 L2 范数。"""
-        total = 0.0
+    def _total_grad_norm_tensor(self) -> torch.Tensor:
+        """以单次规约计算所有参数梯度的全局 L2 范数（返回标量张量，仅一次 .item() sync）。
+
+        用于未启用梯度裁剪（gradient_clip_norm<=0）时仍记录梯度范数；启用裁剪时直接复用
+        clip_grad_norm_ 的返回值，无需调用本方法。包含非有限值时返回 inf 张量。
+        """
+        sq_sum = None
         for parameter in self.model.parameters():
             if parameter.grad is None:
                 continue
             grad = parameter.grad.detach()
-            if not torch.isfinite(grad).all():
-                return float('inf')
-            grad_norm = grad.norm(2)
-            total += float(grad_norm.item()) ** 2
-        return total ** 0.5
+            sq = grad.float().pow(2).sum()
+            sq_sum = sq if sq_sum is None else sq_sum + sq
+        if sq_sum is None:
+            return torch.tensor(0.0)
+        return sq_sum.sqrt()
 
     def _ensure_finite_tensor(self, tensor: torch.Tensor, name: str, batch_data: Dict[str, Any]) -> None:
         """检测非有限值并尽早失败，避免后续整轮训练都被 NaN 污染。"""

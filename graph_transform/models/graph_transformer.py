@@ -441,15 +441,13 @@ class GraphTransformer(nn.Module):
             nn.Dropout(config.dropout),
             nn.Linear(self.hidden_dim, 1)
         )
-        
-        # 保留旧字段以兼容已有 checkpoint；前向不再使用外层残差/LN 包装。
-        self.layer_norms = nn.ModuleList([
-            nn.LayerNorm(config.hidden_dim) for _ in range(config.num_gcn_layers + config.num_gat_layers)
-        ])
+
+        # 注：曾存在未参与前向的 self.layer_norms 字段（仅占用显存、搬移到设备）。
+        # 已移除；加载含该字段的旧 checkpoint 时 CheckpointManager 使用 strict=False 并告警。
 
         self.enable_timing = False
         self.last_forward_timing = {}
-        
+
         self._init_weights()
     
     def _init_weights(self):
@@ -524,7 +522,13 @@ class GraphTransformer(nn.Module):
         valid_seq_mask = seq_positions.unsqueeze(0) < seq_lens_tensor.unsqueeze(1)
 
         if self.use_global_node:
-            max_node_len = int(node_lens_tensor.max().item()) if batch_size > 0 else 0
+            # 优先用 collate 阶段算好的 Python int，避免在 GPU 张量上 .max().item() 同步；
+            # 兼容旧调用路径（未注入该键时回退到逐次同步计算）。
+            precomputed_max_node_len = batch_data.get('max_node_len')
+            if precomputed_max_node_len is not None:
+                max_node_len = int(precomputed_max_node_len)
+            else:
+                max_node_len = int(node_lens_tensor.max().item()) if batch_size > 0 else 0
             packed_nodes = node_features.new_zeros((batch_size, max_node_len, hidden_dim))
             if max_seq_len > 0:
                 packed_nodes[:, :max_seq_len] = node_features[:, :max_seq_len]
@@ -574,7 +578,13 @@ class GraphTransformer(nn.Module):
         
         # 构建相邻键的特征并预测断裂
         bond_counts = torch.clamp(seq_lens_tensor - 1, min=0)
-        max_bonds = int(bond_counts.max().item()) if batch_size > 0 else 0
+        # 优先用 collate 阶段算好的 Python int，避免在 GPU 张量上 .max().item() 同步；
+        # 兼容旧调用路径（未注入该键时回退到逐次同步计算）。
+        precomputed_max_bonds = batch_data.get('max_bonds')
+        if precomputed_max_bonds is not None:
+            max_bonds = int(precomputed_max_bonds)
+        else:
+            max_bonds = int(bond_counts.max().item()) if batch_size > 0 else 0
         predictions = torch.zeros(batch_size, max_bonds, device=node_features.device)
 
         if max_bonds > 0:

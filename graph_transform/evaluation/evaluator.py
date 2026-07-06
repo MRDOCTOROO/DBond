@@ -28,21 +28,25 @@ class Evaluator:
                  model: nn.Module,
                  device: torch.device = torch.device('cpu'),
                  config: Dict[str, Any] = None,
-                 logger: Optional[logging.Logger] = None):
+                 logger: Optional[logging.Logger] = None,
+                 allow_target_aware_threshold: bool = True):
         """
         初始化评估器
-        
+
         Args:
             model: 模型
             device: 计算设备
             config: 配置
             logger: 日志记录器
+            allow_target_aware_threshold: 是否允许使用依赖被评估集标签/预测分布的阈值策略
+                （adaptive/optimal）。test 评估应设为 False 以避免阈值挑选造成的数据泄露；
+                train/val 评估可保持 True。evaluate/collect_prediction_outputs 还支持按调用覆盖。
         """
         self.model = model
         self.device = device
         self.config = config or {}
         self.logger = logger or logging.getLogger(__name__)
-        
+
         # 评估配置
         self.eval_config = self.config.get('evaluation', {})
         self.use_amp = self.config.get('device', {}).get('use_amp', False)
@@ -52,25 +56,40 @@ class Evaluator:
         self.debug_config = self.config.get('debug', {})
         self.profile_memory = self.debug_config.get('profile_memory', False)
         self.force_gc_on_eval_end = self.debug_config.get('force_gc_on_eval_end', False)
-        
+
         # 指标计算器
-        self.metrics_calculator = BinaryBondMetrics(self.eval_config)
-        
+        self.allow_target_aware_threshold = allow_target_aware_threshold
+        self.metrics_calculator = BinaryBondMetrics(self.eval_config, allow_target_aware_threshold=allow_target_aware_threshold)
+
         # 将模型移动到设备
         self.model.to(self.device)
     
-    def evaluate(self, data_loader: DataLoader) -> Dict[str, float]:
+    def evaluate(self, data_loader: DataLoader, allow_target_aware: Optional[bool] = None) -> Dict[str, float]:
         """
         评估模型
-        
+
         Args:
             data_loader: 数据加载器
-            
+            allow_target_aware: 按调用覆盖是否允许 target-aware 阈值策略；None 表示沿用评估器默认。
+                test 评估应传 False 以避免用被评估集标签挑选阈值造成的数据泄露。
+
         Returns:
             Dict[str, float]: 评估指标
         """
         self.model.eval()
-        
+
+        prev_flag = self.metrics_calculator.allow_target_aware_threshold
+        if allow_target_aware is not None:
+            self.metrics_calculator.allow_target_aware_threshold = allow_target_aware
+        try:
+            return self._evaluate_impl(data_loader)
+        finally:
+            self.metrics_calculator.allow_target_aware_threshold = prev_flag
+
+    def _evaluate_impl(self, data_loader: DataLoader) -> Dict[str, float]:
+        """evaluate 的内部实现，不处理 allow_target_aware 覆盖。"""
+        self.model.eval()
+
         # 重置指标
         self.metrics_calculator.reset()
         
@@ -186,8 +205,17 @@ class Evaluator:
         
         return metrics
 
-    def collect_prediction_outputs(self, data_loader: DataLoader, threshold: Optional[float] = None) -> Dict[str, Any]:
-        """收集逐样本评估输出，便于保存预测结果文件。"""
+    def collect_prediction_outputs(self, data_loader: DataLoader, threshold: Optional[float] = None,
+                                   allow_target_aware: bool = False) -> Dict[str, Any]:
+        """收集逐样本评估输出，便于保存预测结果文件。
+
+        Args:
+            data_loader: 数据加载器
+            threshold: 显式阈值。为 None 时按 ``allow_target_aware`` 决定：
+                ``False``（默认）→ 使用配置中的固定阈值，避免用被评估集标签挑选阈值造成的数据泄露；
+                ``True`` → 允许走 adaptive/optimal 策略（仅在 val/train 评估场景使用）。
+            allow_target_aware: 阈值回退是否允许 target-aware 策略，默认 False（保守，无泄露）。
+        """
         self.model.eval()
 
         sample_logits = []
@@ -221,15 +249,19 @@ class Evaluator:
                     )
 
         if threshold is None:
-            valid_logits = [row for row in sample_logits if row.size > 0]
-            valid_targets = [row for row in sample_targets if row.size > 0]
-            if valid_logits and valid_targets:
-                flat_logits = np.concatenate(valid_logits, axis=0).astype(np.float32)
-                flat_targets = np.concatenate(valid_targets, axis=0).astype(np.int32)
-                flat_probabilities = _sigmoid_if_needed(flat_logits)
-                threshold = BinaryBondMetrics(self.eval_config)._get_threshold(flat_probabilities, flat_targets)
-            else:
+            if not allow_target_aware:
+                # 默认走固定阈值，避免用被评估集标签挑选阈值（test 数据泄露）。
                 threshold = float(self.eval_config.get('threshold', 0.5))
+            else:
+                valid_logits = [row for row in sample_logits if row.size > 0]
+                valid_targets = [row for row in sample_targets if row.size > 0]
+                if valid_logits and valid_targets:
+                    flat_logits = np.concatenate(valid_logits, axis=0).astype(np.float32)
+                    flat_targets = np.concatenate(valid_targets, axis=0).astype(np.int32)
+                    flat_probabilities = _sigmoid_if_needed(flat_logits)
+                    threshold = BinaryBondMetrics(self.eval_config, allow_target_aware_threshold=True)._get_threshold(flat_probabilities, flat_targets)
+                else:
+                    threshold = float(self.eval_config.get('threshold', 0.5))
 
         pred_strings = []
         true_strings = []

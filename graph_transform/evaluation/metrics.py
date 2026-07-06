@@ -7,6 +7,7 @@ example-based / label-based 指标。
 
 from __future__ import annotations
 
+import logging
 from collections import OrderedDict
 from typing import Any, Dict, List
 
@@ -73,6 +74,8 @@ TASK_EXTRA_METRIC_ORDER = (
     "gpu_mem_end_free_mb",
     "gpu_mem_total_mb",
 )
+
+logger = logging.getLogger(__name__)
 
 
 def order_binary_bond_metric_dict(metrics: Dict[str, float]) -> Dict[str, float]:
@@ -203,10 +206,14 @@ def _label_f1_micro(gt: np.ndarray, pred: np.ndarray, beta: float = 1.0) -> floa
 class BinaryBondMetrics:
     """键级别二分类评估指标，同时输出 dbond_m 同口径指标。"""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], allow_target_aware_threshold: bool = True):
         self.config = config
         self.threshold = config.get("threshold", 0.5)
         self.threshold_strategy = config.get("threshold_strategy", "fixed")
+        # 当为 False 时（如 test 评估），禁止使用依赖被评估集标签/预测分布的策略，
+        # 强制回退到固定阈值，避免阈值挑选造成的数据泄露。
+        self.allow_target_aware_threshold = allow_target_aware_threshold
+        self._target_aware_warned = False
         self.all_valid_predictions: List[np.ndarray] = []
         self.all_valid_targets: List[np.ndarray] = []
         self.sample_predictions: List[np.ndarray] = []
@@ -316,6 +323,17 @@ class BinaryBondMetrics:
 
     def _get_threshold(self, predictions: np.ndarray, targets: np.ndarray) -> float:
         if self.threshold_strategy == "fixed":
+            return self.threshold
+        # target-aware 策略（adaptive/optimal）会使用被评估集自身的标签或预测分布，
+        # 在 test 评估上会构成阈值泄露。当 allow_target_aware_threshold=False 时回退到固定阈值。
+        if self.threshold_strategy in ("adaptive", "optimal") and not self.allow_target_aware_threshold:
+            if not self._target_aware_warned:
+                logger.warning(
+                    "threshold_strategy=%r 会使用被评估集的标签/预测分布，"
+                    "已强制回退到固定阈值 %.3f 以避免数据泄露。",
+                    self.threshold_strategy, self.threshold,
+                )
+                self._target_aware_warned = True
             return self.threshold
         if self.threshold_strategy == "adaptive":
             return float(np.mean(predictions))
