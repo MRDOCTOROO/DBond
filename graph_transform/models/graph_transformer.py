@@ -585,7 +585,9 @@ class GraphTransformer(nn.Module):
             max_bonds = int(precomputed_max_bonds)
         else:
             max_bonds = int(bond_counts.max().item()) if batch_size > 0 else 0
-        predictions = torch.zeros(batch_size, max_bonds, device=node_features.device)
+        # dtype 跟随 node_features：AMP 下模型输出为 half，predictions 容器也需 half，
+        # 否则 predictions[valid_bond_mask] = bond_logits_flat 会因 dtype 不匹配而崩。
+        predictions = torch.zeros(batch_size, max_bonds, device=node_features.device, dtype=node_features.dtype)
 
         if max_bonds > 0:
             bond_positions = torch.arange(max_bonds, device=node_features.device)
@@ -620,7 +622,7 @@ class GraphTransformer(nn.Module):
             bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
             predictions[valid_bond_mask] = bond_logits_flat
         else:
-            bond_logits_flat = torch.empty(0, device=node_features.device)
+            bond_logits_flat = torch.empty(0, device=node_features.device, dtype=node_features.dtype)
 
         if timing_enabled:
             _maybe_sync(node_features.device, True)
