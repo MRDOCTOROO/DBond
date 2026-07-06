@@ -152,6 +152,13 @@ def build_ablation_tag(config: Dict[str, Any]) -> str:
     elif ablation_config.get('gat_only', False):
         tags.append('gat_only')
 
+    if ablation_config.get('no_message_passing', False):
+        tags.append('no_message_passing')
+    if ablation_config.get('no_edge_attr', False):
+        tags.append('no_edge_attr')
+    if ablation_config.get('no_state_env', False):
+        tags.append('no_state_env')
+
     return "_".join(tags) if tags else "baseline"
 
 
@@ -165,10 +172,17 @@ def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
     logging_config = config.setdefault('logging', {})
     experiment_config = config.setdefault('experiment', {})
 
-    if ablation_config.get('use_sequence_graph', False) and ablation_config.get('use_hybrid_graph', False):
-        raise ValueError("ablation.use_sequence_graph and ablation.use_hybrid_graph cannot both be true.")
-    if ablation_config.get('gcn_only', False) and ablation_config.get('gat_only', False):
-        raise ValueError("ablation.gcn_only and ablation.gat_only cannot both be true.")
+    # 互斥校验：一次只允许开一个消融开关，保护单变量原则
+    exclusive_flags = [
+        'use_sequence_graph', 'use_hybrid_graph', 'disable_global_node',
+        'gcn_only', 'gat_only', 'no_message_passing', 'no_edge_attr', 'no_state_env',
+    ]
+    active_flags = [f for f in exclusive_flags if ablation_config.get(f, False)]
+    if len(active_flags) > 1:
+        raise ValueError(
+            "单变量原则：一次只能开启一个消融开关，当前同时开启了: "
+            f"{active_flags}"
+        )
 
     if ablation_config.get('use_sequence_graph', False):
         data_config['graph_strategy'] = 'sequence'
@@ -178,10 +192,31 @@ def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
     if ablation_config.get('disable_global_node', False):
         model_config['use_global_node'] = False
 
+    # 骨干对比：5×GAT 基线 → 等深度 5×GCN（只换骨干类型，不换深度，保证单变量）
     if ablation_config.get('gcn_only', False):
+        total_depth = int(model_config.get('num_gcn_layers', 0)) + int(model_config.get('num_gat_layers', 0))
+        model_config['num_gcn_layers'] = max(total_depth, 1)
         model_config['num_gat_layers'] = 0
+    # 注：gat_only 在 5×GAT 基线下退化为基线本身（num_gcn 已为 0），无需特殊处理，保留标志语义
     elif ablation_config.get('gat_only', False):
         model_config['num_gcn_layers'] = 0
+
+    # (1) w/o Message Passing：双零层，bond head 直接吃 NodeEncoder 输出
+    if ablation_config.get('no_message_passing', False):
+        model_config['num_gcn_layers'] = 0
+        model_config['num_gat_layers'] = 0
+
+    # (2) w/o Edge Features：关闭 raw edge_attr + GAT 边偏置/门控（三处边使用点同时失效）
+    if ablation_config.get('no_edge_attr', False):
+        model_config['use_raw_edge_attr'] = False
+        model_config['gat_use_edge_bias'] = False
+        model_config['gat_use_edge_gate'] = False
+
+    # (3) w/o State/Env：经 ModelConfig 传播到 GraphBuilder，使 state/env 在
+    # 节点编码器 / 全局节点 / edge_attr 三处使用点同时失效
+    if ablation_config.get('no_state_env', False):
+        model_config['use_state_features'] = False
+        model_config['use_env_features'] = False
 
     if ablation_config.get('rebuild_cache', False):
         data_config['rebuild_cache'] = True
