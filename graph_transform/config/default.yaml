@@ -14,8 +14,8 @@ model:
   concat_heads: true
   
   # 网络结构配置
-  num_gcn_layers: 0
-  num_gat_layers: 5
+  num_gcn_layers: 3
+  num_gat_layers: 2
   
   # 序列配置
   max_seq_len: 32
@@ -230,30 +230,32 @@ experiment:
   # 可重现性
   benchmark: true
 
-# 消融实验配置（单变量工作流）
-# 工作流：一次只开一个开关 → 跑 5 折 → 改回 false → 开下一个。
-# 互斥校验：同时开多个会 raise ValueError（在 apply_ablation_config 中）。
-# tag 设 null 时自动推导（baseline / sequence_graph / hybrid_graph / no_global_node /
-#   gcn_only / gat_only / no_message_passing / no_edge_attr / no_state_env）
+# 消融实验配置
 ablation:
-  tag: null                    # null=自动推导；baseline 表示干净基线
+  # 建议始终给每个实验一个唯一 tag；会自动拼到 checkpoint/result/log 目录下
+  # 例如 checkpoints/graph_transform/sequence_graph/20260422_123456/
+  # 设为 null 时，会根据下方开关自动推导 baseline / sequence_graph / hybrid_graph / no_global_node / gcn_only / gat_only
+  tag: sequence_graph
+  # 如不填写，则默认使用 experiment.name 作为基名，再自动拼接 tag
   base_experiment_name: null
 
-  # 图结构消融（覆盖 data.graph_strategy）
-  use_sequence_graph: false    # true → graph_strategy='sequence'
-  use_hybrid_graph: false      # true → graph_strategy='hybrid'
+  # 第一类：图结构是否真的有用
+  # baseline: 两个都 false，沿用 data.graph_strategy
+  # sequence_graph: use_sequence_graph=true
+  # hybrid_graph: use_hybrid_graph=true
+  use_sequence_graph: true
+  use_hybrid_graph: false
 
-  # 全局节点消融
-  disable_global_node: false   # true → use_global_node=false
+  # 第二类：全局建模是否有用
+  # no_global_node: true
+  disable_global_node: false
 
-  # 骨干对比
-  gcn_only: false              # true → 5×GAT 基线 → 等深度 5×GCN（只换骨干类型，不换深度）
-  gat_only: false              # 注：5×GAT 基线下退化为基线本身，一般不用
-
-  # 模块消融（单变量）
-  no_message_passing: false    # (1) w/o Message Passing：双零层，bond head 直接吃 encoder 输出
-  no_edge_attr: false          # (2) w/o Edge Features：关 raw_attr + GAT 边偏置/门控
-  no_state_env: false          # (3) w/o State/Env：关前体/环境变量（三处使用点同时生效）
+  # 第三类：主干到底是谁在起作用
+  # baseline: 两个都 false
+  # GCN-only: gcn_only=true
+  # GAT-only: gat_only=true
+  gcn_only: false
+  gat_only: false
 
   # 图结构相关消融切换后如需强制重建缓存可开启
   rebuild_cache: true
