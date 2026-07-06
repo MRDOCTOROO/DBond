@@ -48,6 +48,11 @@ class GraphBuilder:
         self.use_global_node = _get_config_value(config, 'use_global_node', False)
         self.env_feature_name = _get_config_value(config, 'env_feature_name', 'rt')
         self.env_feature_scale = float(_get_config_value(config, 'env_feature_scale', 0.01))
+        # 状态/环境特征消融开关：与 NodeEncoder / global_node_proj 保持一致，
+        # 关闭后 charge/pep_mass/intensity/nce/scan_num 不再写入 edge_attr，
+        # 使 state/env 消融在三处使用点（节点级 / 全局节点 / 边级）同时生效。
+        self.use_state_features = _get_config_value(config, 'use_state_features', True)
+        self.use_env_features = _get_config_value(config, 'use_env_features', True)
         self._distance_min_scale = 0.8
         self._edge_cache = {}
 
@@ -321,11 +326,18 @@ class GraphBuilder:
         inv_distance = 1.0 / (1.0 + edge_distances_f)
 
         base_features = torch.stack([edge_types_f, edge_distances_f, inv_distance], dim=1)
-        env_features = torch.tensor(
-            [
+        # state/env 消融：与 NodeEncoder / global_node_proj 一致，关闭时置零，
+        # 使 charge/pep_mass/intensity/nce/scan_num 不再通过 edge_attr 漏入模型。
+        if self.use_state_features:
+            state_vals = [
                 sample_features.get('charge', 0.0) * 0.1,
                 sample_features.get('pep_mass', 0.0) / 2000.0,
                 math.log1p(max(sample_features.get('intensity', 0.0), 0.0)) / 20.0,
+            ]
+        else:
+            state_vals = [0.0, 0.0, 0.0]
+        if self.use_env_features:
+            env_vals = [
                 sample_features.get('nce', 0.0) * 0.01,
                 self._normalize_secondary_env_feature(
                     sample_features.get(
@@ -333,7 +345,11 @@ class GraphBuilder:
                         sample_features.get('rt', 0.0),
                     )
                 ),
-            ],
+            ]
+        else:
+            env_vals = [0.0, 0.0]
+        env_features = torch.tensor(
+            state_vals + env_vals,
             dtype=torch.float32,
             device=base_features.device,
         ).unsqueeze(0).expand(base_features.size(0), -1)

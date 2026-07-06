@@ -24,7 +24,7 @@ model:
   edge_types: ["sequence", "distance", "functional", "long_range", "global"]
   edge_embedding_dim: 16
   distance_embedding_dim: 16
-  max_distance: 100
+  max_distance: 10
   use_edge_type_embedding: true
   use_distance_embedding: true
   use_raw_edge_attr: true
@@ -33,14 +33,14 @@ model:
   bond_use_edge_repr: true
   bond_use_diff_feature: true
   bond_use_product_feature: true
-  use_long_range_edges: true
+  use_long_range_edges: false
   long_range_stride: 10
   long_range_hops: 1
   use_global_node: true
   num_classes: 1
 
 training:
-  epochs: 60
+  epochs: 100
   batch_size: 1024
   learning_rate: 0.0001
   weight_decay: 0.0001
