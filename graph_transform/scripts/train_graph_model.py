@@ -35,6 +35,11 @@ from models import GraphTransformer
 from torch.nn.parameter import UninitializedParameter
 from models.utils import build_model_config, CheckpointManager, LearningRateScheduler
 from data import GraphDataset, GraphDataLoader, CachedGraphDataset
+try:
+    from data.optimized_graph_dataset import PreprocessedGraphDataset, OptimizedGraphDataLoader
+except ImportError:
+    PreprocessedGraphDataset = None
+    OptimizedGraphDataLoader = None
 from training import Trainer, BinaryBondLoss
 from evaluation import Evaluator
 from evaluation.metrics import metric_rows, metric_display_name
@@ -147,6 +152,13 @@ def build_ablation_tag(config: Dict[str, Any]) -> str:
     elif ablation_config.get('gat_only', False):
         tags.append('gat_only')
 
+    if ablation_config.get('no_message_passing', False):
+        tags.append('no_message_passing')
+    if ablation_config.get('no_edge_attr', False):
+        tags.append('no_edge_attr')
+    if ablation_config.get('no_state_env', False):
+        tags.append('no_state_env')
+
     return "_".join(tags) if tags else "baseline"
 
 
@@ -160,10 +172,17 @@ def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
     logging_config = config.setdefault('logging', {})
     experiment_config = config.setdefault('experiment', {})
 
-    if ablation_config.get('use_sequence_graph', False) and ablation_config.get('use_hybrid_graph', False):
-        raise ValueError("ablation.use_sequence_graph and ablation.use_hybrid_graph cannot both be true.")
-    if ablation_config.get('gcn_only', False) and ablation_config.get('gat_only', False):
-        raise ValueError("ablation.gcn_only and ablation.gat_only cannot both be true.")
+    # 互斥校验：一次只允许开一个消融开关，保护单变量原则
+    exclusive_flags = [
+        'use_sequence_graph', 'use_hybrid_graph', 'disable_global_node',
+        'gcn_only', 'gat_only', 'no_message_passing', 'no_edge_attr', 'no_state_env',
+    ]
+    active_flags = [f for f in exclusive_flags if ablation_config.get(f, False)]
+    if len(active_flags) > 1:
+        raise ValueError(
+            "单变量原则：一次只能开启一个消融开关，当前同时开启了: "
+            f"{active_flags}"
+        )
 
     if ablation_config.get('use_sequence_graph', False):
         data_config['graph_strategy'] = 'sequence'
@@ -173,10 +192,31 @@ def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
     if ablation_config.get('disable_global_node', False):
         model_config['use_global_node'] = False
 
+    # 骨干对比：5×GAT 基线 → 等深度 5×GCN（只换骨干类型，不换深度，保证单变量）
     if ablation_config.get('gcn_only', False):
+        total_depth = int(model_config.get('num_gcn_layers', 0)) + int(model_config.get('num_gat_layers', 0))
+        model_config['num_gcn_layers'] = max(total_depth, 1)
         model_config['num_gat_layers'] = 0
+    # 注：gat_only 在 5×GAT 基线下退化为基线本身（num_gcn 已为 0），无需特殊处理，保留标志语义
     elif ablation_config.get('gat_only', False):
         model_config['num_gcn_layers'] = 0
+
+    # (1) w/o Message Passing：双零层，bond head 直接吃 NodeEncoder 输出
+    if ablation_config.get('no_message_passing', False):
+        model_config['num_gcn_layers'] = 0
+        model_config['num_gat_layers'] = 0
+
+    # (2) w/o Edge Features：关闭 raw edge_attr + GAT 边偏置/门控（三处边使用点同时失效）
+    if ablation_config.get('no_edge_attr', False):
+        model_config['use_raw_edge_attr'] = False
+        model_config['gat_use_edge_bias'] = False
+        model_config['gat_use_edge_gate'] = False
+
+    # (3) w/o State/Env：经 ModelConfig 传播到 GraphBuilder，使 state/env 在
+    # 节点编码器 / 全局节点 / edge_attr 三处使用点同时失效
+    if ablation_config.get('no_state_env', False):
+        model_config['use_state_features'] = False
+        model_config['use_env_features'] = False
 
     if ablation_config.get('rebuild_cache', False):
         data_config['rebuild_cache'] = True
@@ -467,6 +507,20 @@ def create_model(config: Dict[str, Any], device: torch.device) -> nn.Module:
     return model
 
 
+def _resolve_preprocessed_path(data_config: Dict[str, Any], split: str) -> str:
+    """解析某个 split 对应的预处理 .pt 文件路径。
+
+    约定（可被 data.preprocessed_paths 覆盖）：
+        {preprocessed_dir}/{split}.pt
+    其中 preprocessed_dir 默认 'cache/preprocessed'。
+    """
+    explicit = data_config.get('preprocessed_paths') or {}
+    if split in explicit:
+        return explicit[split]
+    preprocessed_dir = data_config.get('preprocessed_dir', 'cache/preprocessed')
+    return os.path.join(preprocessed_dir, f'{split}.pt')
+
+
 def create_datasets(config: Dict[str, Any]) -> tuple:
     """创建数据集"""
     data_config = config['data']
@@ -474,41 +528,42 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
     model_config = build_model_config(config)
 
     dataset_cls = CachedGraphDataset if data_config.get('cache_graphs', False) else GraphDataset
-    
-    # 训练数据集
-    train_kwargs = {
-        'csv_path': data_config['train_csv_path'],
-        'config': model_config,
-        'max_seq_len': data_config['max_seq_len'],
-        'graph_strategy': data_config['graph_strategy'],
-        'augmentation': data_config.get('augmentation', False),
-        'split': 'train'
-    }
-    if dataset_cls is CachedGraphDataset:
-        train_kwargs.update({
-            'cache_dir': data_config.get('cache_dir', 'cache/graph_data'),
-            'rebuild_cache': data_config.get('rebuild_cache', False),
-            'cache_full_graphs': data_config.get('cache_full_graphs', False),
-        })
-    train_dataset = dataset_cls(**train_kwargs)
-    
-    # 验证数据集
-    if data_config.get('val_csv_path'):
-        val_kwargs = {
-            'csv_path': data_config['val_csv_path'],
+
+    def _build(csv_path, split, augmentation):
+        """构造单个 split 的数据集；当 data.preprocessed=True 时走离线预处理路径。"""
+        if data_config.get('preprocessed', False):
+            if PreprocessedGraphDataset is None:
+                raise ImportError("data.preprocessed=True 但无法导入 PreprocessedGraphDataset；"
+                                  "请先用 scripts/preprocess_graph_data.py 生成 .pt 文件。")
+            pt_path = _resolve_preprocessed_path(data_config, split)
+            return PreprocessedGraphDataset(
+                data_path=pt_path,
+                config=model_config,
+                augmentation=augmentation,
+                split=split,
+            )
+        kwargs = {
+            'csv_path': csv_path,
             'config': model_config,
             'max_seq_len': data_config['max_seq_len'],
             'graph_strategy': data_config['graph_strategy'],
-            'augmentation': False,
-            'split': 'val'
+            'augmentation': augmentation,
+            'split': split,
         }
         if dataset_cls is CachedGraphDataset:
-            val_kwargs.update({
+            kwargs.update({
                 'cache_dir': data_config.get('cache_dir', 'cache/graph_data'),
                 'rebuild_cache': data_config.get('rebuild_cache', False),
                 'cache_full_graphs': data_config.get('cache_full_graphs', False),
             })
-        val_dataset = dataset_cls(**val_kwargs)
+        return dataset_cls(**kwargs)
+
+    # 训练数据集
+    train_dataset = _build(data_config['train_csv_path'], 'train', data_config.get('augmentation', False))
+
+    # 验证数据集
+    if data_config.get('val_csv_path'):
+        val_dataset = _build(data_config['val_csv_path'], 'val', False)
     else:
         # 从训练集分割验证集；优先读取 training.validation_split
         val_split = training_config.get(
@@ -533,21 +588,7 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
     # 测试数据集
     test_dataset = None
     if data_config.get('test_csv_path'):
-        test_kwargs = {
-            'csv_path': data_config['test_csv_path'],
-            'config': model_config,
-            'max_seq_len': data_config['max_seq_len'],
-            'graph_strategy': data_config['graph_strategy'],
-            'augmentation': False,
-            'split': 'test'
-        }
-        if dataset_cls is CachedGraphDataset:
-            test_kwargs.update({
-                'cache_dir': data_config.get('cache_dir', 'cache/graph_data'),
-                'rebuild_cache': data_config.get('rebuild_cache', False),
-                'cache_full_graphs': data_config.get('cache_full_graphs', False),
-            })
-        test_dataset = dataset_cls(**test_kwargs)
+        test_dataset = _build(data_config['test_csv_path'], 'test', False)
     
     # 打印数据集统计信息
     logger.info("Dataset Statistics:")
@@ -570,7 +611,7 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
     return train_dataset, val_dataset, test_dataset
 
 
-def create_data_loaders(train_dataset, val_dataset, test_dataset, 
+def create_data_loaders(train_dataset, val_dataset, test_dataset,
                         config: Dict[str, Any]) -> tuple:
     """创建数据加载器"""
     data_config = config['data']
@@ -578,45 +619,45 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset,
     performance_config = config.get('performance', {})
     persistent_workers = performance_config.get('persistent_workers', False)
     prefetch_factor = performance_config.get('prefetch_factor')
-    
-    # 训练数据加载器
-    train_loader = GraphDataLoader(
-        dataset=train_dataset,
+
+    # 预处理路径走 OptimizedGraphDataLoader；否则保持原 GraphDataLoader。
+    use_optimized = data_config.get('preprocessed', False) and OptimizedGraphDataLoader is not None
+    loader_cls = OptimizedGraphDataLoader if use_optimized else GraphDataLoader
+
+    common_kwargs = dict(
         batch_size=training_config['batch_size'],
-        shuffle=True,
         num_workers=data_config.get('num_workers', 4),
         pin_memory=data_config.get('pin_memory', True),
-        drop_last=data_config.get('drop_last', False),
         persistent_workers=persistent_workers,
         prefetch_factor=prefetch_factor,
     )
-    
+
+    # 训练数据加载器
+    train_loader = loader_cls(
+        dataset=train_dataset,
+        shuffle=True,
+        drop_last=data_config.get('drop_last', False),
+        **common_kwargs,
+    )
+
     # 验证数据加载器
     val_loader = None
     if val_dataset is not None:
-        val_loader = GraphDataLoader(
+        val_loader = loader_cls(
             dataset=val_dataset,
-            batch_size=training_config['batch_size'],
             shuffle=False,
-            num_workers=data_config.get('num_workers', 4),
-            pin_memory=data_config.get('pin_memory', True),
             drop_last=False,
-            persistent_workers=persistent_workers,
-            prefetch_factor=prefetch_factor,
+            **common_kwargs,
         )
-    
+
     # 测试数据加载器
     test_loader = None
     if test_dataset is not None:
-        test_loader = GraphDataLoader(
+        test_loader = loader_cls(
             dataset=test_dataset,
-            batch_size=training_config['batch_size'],
             shuffle=False,
-            num_workers=data_config.get('num_workers', 4),
-            pin_memory=data_config.get('pin_memory', True),
             drop_last=False,
-            persistent_workers=persistent_workers,
-            prefetch_factor=prefetch_factor,
+            **common_kwargs,
         )
     
     logger.info(
@@ -1000,13 +1041,14 @@ def main():
 
         logger.info("Starting final evaluation on test set...")
         test_start = time.perf_counter()
-        test_metrics = evaluator.evaluate(test_loader)
+        # test 评估禁止使用 target-aware 阈值策略，避免用被评估集标签挑选阈值造成的数据泄露。
+        test_metrics = evaluator.evaluate(test_loader, allow_target_aware=False)
         logger.info(f"Test - Loss: {test_metrics['loss']:.4f}, "
                    f"F1: {test_metrics['f1']:.4f}")
         test_step = history['epoch'][-1] if history['epoch'] else 0
         log_metrics_to_tensorboard(tb_writers, 'test', test_metrics, test_step)
         if config.get('evaluation', {}).get('save_outputs', True):
-            prediction_outputs = evaluator.collect_prediction_outputs(test_loader)
+            prediction_outputs = evaluator.collect_prediction_outputs(test_loader, allow_target_aware=False)
             checkpoint_reference = best_checkpoint_path if (val_loader is not None and os.path.exists(best_checkpoint_path)) else os.path.join(checkpoint_dir, 'current_in_memory_model')
             evaluation_id = build_evaluation_id(checkpoint_reference, 'test')
             evaluation_config = config.get('evaluation', {})
