@@ -196,17 +196,29 @@ class GraphBuilder:
         return self._finalize_edges(edge_indices, edge_types, edge_distances, seq_len, include_optional)
 
     def _build_hybrid_edges(self, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        seq_edge_index, seq_edge_types, seq_edge_distances, _ = self._build_sequence_edges(seq_len, include_optional=False)
+        # hybrid = distance 边 + 长程边（在 distance 基础上强制叠加稀疏长程连接，
+        # 不依赖 use_long_range_edges 全局开关，保证 hybrid 与 distance 有实质区别）。
         dist_edge_index, dist_edge_types, dist_edge_distances, _ = self._build_distance_edges(seq_len, include_optional=False)
 
-        all_edges = torch.cat([seq_edge_index, dist_edge_index], dim=1)
-        all_types = torch.cat([seq_edge_types, dist_edge_types])
-        all_distances = torch.cat([seq_edge_distances, dist_edge_distances])
+        edge_indices = dist_edge_index.t().tolist() if dist_edge_index.numel() > 0 else []
+        edge_types = dist_edge_types.tolist() if dist_edge_types.numel() > 0 else []
+        edge_distances = dist_edge_distances.tolist() if dist_edge_distances.numel() > 0 else []
 
-        edge_indices = all_edges.t().tolist() if all_edges.numel() > 0 else []
-        edge_types = all_types.tolist() if all_types.numel() > 0 else []
-        edge_distances = all_distances.tolist() if all_distances.numel() > 0 else []
+        # 手动叠加长程边（与 _add_long_range_edges 同语义），不受全局开关影响
+        long_range_type = 3
+        for i in range(seq_len):
+            for hop in range(1, self.long_range_hops + 1):
+                j = i + hop * self.long_range_stride
+                if j >= seq_len:
+                    break
+                seq_dist = j - i
+                edge_indices.append([i, j])
+                edge_indices.append([j, i])
+                edge_types.extend([long_range_type, long_range_type])
+                edge_dist = min(seq_dist, self.max_distance)
+                edge_distances.extend([edge_dist, edge_dist])
 
+        # include_optional=True 让 _finalize_edges 叠加 global 节点边（与基线一致）
         return self._finalize_edges(edge_indices, edge_types, edge_distances, seq_len, include_optional=True)
 
     def _finalize_edges(self,
