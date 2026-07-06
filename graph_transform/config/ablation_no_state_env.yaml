@@ -122,3 +122,11 @@ debug:
   check_nan_inf: true
   log_grad_norm: true
   save_nonfinite_batch: true
+
+# 消融实验标识（与 default.yaml 的 ablation 段对齐）
+# 显式指定 tag，避免 build_ablation_tag 误判为 "baseline" 导致输出路径与
+# 真 baseline 混淆。本实验的消融变量是 use_state_features/use_env_features
+# （由上方 model 段控制），无需开启 ablation 段的其他开关。
+ablation:
+  tag: no_state_env
+  base_experiment_name: null
