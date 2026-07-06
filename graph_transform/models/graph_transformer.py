@@ -585,9 +585,8 @@ class GraphTransformer(nn.Module):
             max_bonds = int(precomputed_max_bonds)
         else:
             max_bonds = int(bond_counts.max().item()) if batch_size > 0 else 0
-        # dtype 跟随 node_features：AMP 下模型输出为 half，predictions 容器也需 half，
-        # 否则 predictions[valid_bond_mask] = bond_logits_flat 会因 dtype 不匹配而崩。
-        predictions = torch.zeros(batch_size, max_bonds, device=node_features.device, dtype=node_features.dtype)
+        # predictions 容器固定 float32；AMP 下 bond_logits 在赋值处用 .to() 对齐。
+        predictions = torch.zeros(batch_size, max_bonds, device=node_features.device)
 
         if max_bonds > 0:
             bond_positions = torch.arange(max_bonds, device=node_features.device)
@@ -620,9 +619,11 @@ class GraphTransformer(nn.Module):
                 bond_feature_parts.append(h_src * h_dst)
             bond_features = torch.cat(bond_feature_parts, dim=-1)
             bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
-            predictions[valid_bond_mask] = bond_logits_flat
+            # AMP 下 bond_head 输出为 half，predictions 容器为 float32，需对齐 dtype 后赋值。
+            # （autocast 不改 NodeEncoder 的 embedding 查表输出，故 node_features.dtype 不可靠）
+            predictions[valid_bond_mask] = bond_logits_flat.to(predictions.dtype)
         else:
-            bond_logits_flat = torch.empty(0, device=node_features.device, dtype=node_features.dtype)
+            bond_logits_flat = torch.empty(0, device=node_features.device)
 
         if timing_enabled:
             _maybe_sync(node_features.device, True)
