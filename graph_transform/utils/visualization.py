@@ -1759,24 +1759,53 @@ def plot_residue_pair_matrix(
             subplot_w = max(7.0, n_aa * per_cell)
             figsize = (subplot_w * 3 + 2.0, max(7.5, n_aa * per_cell + 2.5))
 
+    # ---- Nature/Cell 风格统一为百分比（0-100）----
+    # 输入 empirical/predicted 是 [0,1] 比例；这里一次性放大到百分比，
+    # 使 cell 数字、colorbar、bias 三者单位一致，避免 0.68 vs 68 混乱。
+    emp_pct = empirical * 100.0
+    pred_pct = predicted * 100.0
+    diff_pct = pred_pct - emp_pct  # percentage points (pp)
+
+    # ---- reliable cells (N >= rare_thresholds[1]) 的全局一致性指标 ----
+    # 仅基于统计可靠的残基对计算，与 caption 中报告的指标语义一致。
+    reliable_mask = counts >= rare_thresholds[1]
+    if reliable_mask.sum() >= 2:
+        r_value = float(np.corrcoef(
+            emp_pct[reliable_mask], pred_pct[reliable_mask]
+        )[0, 1])
+        mae_value = float(np.mean(np.abs(diff_pct[reliable_mask])))
+    else:
+        r_value = float('nan')
+        mae_value = float('nan')
+
+    # 稀有 AA（B/O/X/Z）的 tick label 用浅色，主规律 AA 不变。
+    rare_aa_set = {'B', 'O', 'X', 'Z'}
+
     fig, axes = plt.subplots(1, 3, figsize=figsize)
-    # 拓宽左右留白以放下 colorbar；wspace 控制子图间距；
-    # R-24 可读性优化：顶部留 0.12 给放大后的单行 suptitle，
-    # 底部留 0.14 给新增的 figure-level legend。
-    plt.subplots_adjust(wspace=0.40, left=0.05, right=0.97, top=0.88, bottom=0.14)
+    # 期刊 figure 不内嵌总标题（suptitle），故 top 留白收紧；
+    # 底部留白给 figure-level legend + Pearson r/MAE 统计行。
+    plt.subplots_adjust(wspace=0.40, left=0.05, right=0.97, top=0.90, bottom=0.16)
 
-    # Shared colour scale for (a) and (b) so they are directly comparable
-    rate_vmin, rate_vmax = 0.0, 1.0
-    diff_vmin, diff_vmax = -0.5, 0.5
+    # (a)(b) 共享 0-100 的百分比色阶，便于直接比较；
+    # (c) 收紧到 ±20 pp 并 clip，使小偏差可读（R-24）。
+    rate_vmin, rate_vmax = 0.0, 100.0
+    diff_vmin, diff_vmax = -20.0, 20.0
 
-    def _draw_panel(ax, matrix, vmin, vmax, cmap, title, annotate_values: bool,
-                    is_diff: bool = False):
+    def _draw_panel(ax, matrix, vmin, vmax, cmap, title,
+                    annotate_values: bool, is_diff: bool = False):
         im = ax.imshow(matrix, cmap=cmap, aspect='equal',
                        vmin=vmin, vmax=vmax, interpolation='nearest')
         ax.set_xticks(np.arange(n_aa))
         ax.set_yticks(np.arange(n_aa))
+        # tick label：稀有 AA 浅色化，主规律 AA 正常黑色
         ax.set_xticklabels(aa_labels, fontsize=11)
         ax.set_yticklabels(aa_labels, fontsize=11)
+        for tick_label, aa in zip(ax.get_xticklabels(), aa_labels):
+            if aa in rare_aa_set:
+                tick_label.set_color('#888888')
+        for tick_label, aa in zip(ax.get_yticklabels(), aa_labels):
+            if aa in rare_aa_set:
+                tick_label.set_color('#888888')
         ax.set_xlabel('C-terminal residue Y', fontsize=12, fontweight='bold',
                       labelpad=6)
         ax.set_ylabel('N-terminal residue X', fontsize=12, fontweight='bold',
@@ -1788,7 +1817,8 @@ def plot_residue_pair_matrix(
         ax.grid(which='minor', color='white', linestyle='-', linewidth=0.6)
         ax.tick_params(which='minor', bottom=False, left=False)
 
-        # Annotate values with rare-AA markers
+        # 只在 (a) Empirical 面板标注数值（实验事实，便于读者精读）；
+        # (b)(c) 仅靠颜色（Nature/Cell 风格，颜色已高度一致即可直接比较）。
         if annotate_values:
             for i in range(n_aa):
                 for j in range(n_aa):
@@ -1801,58 +1831,37 @@ def plot_residue_pair_matrix(
                                                    linewidth=0.3, zorder=1))
                         continue
                     val = matrix[i, j]
-                    # 统一字号与颜色（R-24 可读性优化）：
-                    # 稀有度不再用字体大小/颜色编码，改由 figure legend 说明。
-                    # 保留 * / ** 尾缀作为稀有度提示。
                     if n < rare_thresholds[0]:
                         marker = '**'
                     elif n < rare_thresholds[1]:
                         marker = '*'
                     else:
                         marker = ''
-                    # diff 面板：带符号的百分点（percentage points, pp），
-                    # 与 (a)(b) 保持同样 2-3 字符宽度，避免数字堆叠。
-                    # 例: +0.12 → "+12",  -0.34 → "−34"
-                    if is_diff:
-                        sign = '+' if val >= 0 else '−'
-                        text = f'{sign}{abs(val*100):.0f}{marker}'
-                    else:
-                        text = f'{val*100:.0f}{marker}'
+                    text = f'{val:.0f}{marker}'
                     ax.text(j, i, text, ha='center', va='center',
                             fontsize=9.5, color='black')
         return im
 
-    im_a = _draw_panel(axes[0], empirical, rate_vmin, rate_vmax, 'YlOrRd',
-                       '(a) Empirical [%]',
+    im_a = _draw_panel(axes[0], emp_pct, rate_vmin, rate_vmax, 'YlOrRd',
+                       '(a) Empirical',
                        annotate_values=True)
-    im_b = _draw_panel(axes[1], predicted, rate_vmin, rate_vmax, 'YlOrRd',
-                       '(b) Model [%]',
-                       annotate_values=True)
-    im_c = _draw_panel(axes[2], predicted - empirical, diff_vmin, diff_vmax, 'RdBu_r',
-                       '(c) Bias [pp]',
-                       annotate_values=True, is_diff=True)
+    im_b = _draw_panel(axes[1], pred_pct, rate_vmin, rate_vmax, 'YlOrRd',
+                       '(b) Model',
+                       annotate_values=False)
+    im_c = _draw_panel(axes[2], diff_pct, diff_vmin, diff_vmax, 'RdBu_r',
+                       '(c) Bias',
+                       annotate_values=False, is_diff=True)
 
-    # Colorbars: 放在右侧，pad 略大避免与子图挤在一起。
-    # label 同样极简化（R-24），详细含义移至 figure caption。
+    # Colorbars：统一百分比单位，与 cell 数字一致。
     cb_a = plt.colorbar(im_a, ax=axes[0], fraction=0.038, pad=0.04)
-    cb_a.set_label('Cleavage rate', fontsize=10)
+    cb_a.set_label('Cleavage rate (%)', fontsize=10)
     cb_b = plt.colorbar(im_b, ax=axes[1], fraction=0.038, pad=0.04)
-    cb_b.set_label('Predicted prob.', fontsize=10)
+    cb_b.set_label('Model probability (%)', fontsize=10)
     cb_c = plt.colorbar(im_c, ax=axes[2], fraction=0.038, pad=0.04)
-    # 用百分点 (pp) 显示 colorbar 刻度，与 cell 注释一致
-    cb_c.ax.yaxis.set_major_formatter(
-        FuncFormatter(lambda v, _: f'{v*100:+.0f}')
-    )
-    cb_c.set_label('Bias [pp]', fontsize=10)
+    cb_c.set_label('Bias (pp)', fontsize=10)
+    # bias colorbar 保留 ±20 整数刻度；超出 ±20 的值已被 clip 到端点色。
 
-    # R-24 可读性优化：suptitle 只保留单句总标题，其余说明（轴含义、单位、
-    # 稀有度图例）分别由子图轴标签、子图标题、底部 figure legend 承载，
-    # 完整的数学定义（P(broken|X−Y)、E[σ(model)|X−Y]、predicted−empirical）
-    # 一并移至论文 figure caption。
-    fig.suptitle('Residue-Pair Cleavage Chemistry',
-                 fontsize=15, fontweight='bold', y=0.97)
-
-    # 底部 figure-level legend：用 proxy artist 说明稀有度标记与空格含义
+    # ---- 底部 figure-level legend：稀有度标记 + 空格说明 ----
     legend_handles = [
         mpatches.Patch(facecolor='#EEEEEE', edgecolor='#BBBBBB',
                        linewidth=0.5, label='N/A (no observation)'),
@@ -1861,12 +1870,19 @@ def plot_residue_pair_matrix(
                       label=f'N ∈ [{rare_thresholds[0]}, {rare_thresholds[1]})'),
         mlines.Line2D([], [], color='black', marker='$**$', linestyle='None',
                       markersize=12,
-                      label=f'N < {rare_thresholds[0]} '
-                            f'(rare AAs B/O/X/Z, statistically uncertain)'),
+                      label=f'N < {rare_thresholds[0]} (rare AA, statistically uncertain)'),
     ]
     fig.legend(handles=legend_handles, loc='lower center',
-               bbox_to_anchor=(0.5, 0.01), ncol=3, frameon=False,
+               bbox_to_anchor=(0.5, 0.055), ncol=3, frameon=False,
                fontsize=10, handlelength=1.5, columnspacing=2.0)
+
+    # ---- 底部定量统计行：reliable cells 的 Pearson r 与 MAE ----
+    if not np.isnan(r_value):
+        stats_text = (f'Pearson r = {r_value:.3f}    '
+                      f'MAE = {mae_value:.1f} pp    '
+                      f'(over N ≥ {rare_thresholds[1]} residue pairs)')
+        fig.text(0.5, 0.015, stats_text, ha='center', va='bottom',
+                 fontsize=10, style='italic', color='#333333')
 
     _save_figure(fig, save_path)
     return fig
