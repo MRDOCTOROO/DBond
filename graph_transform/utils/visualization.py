@@ -1777,9 +1777,9 @@ def plot_residue_pair_matrix(
         ax.set_yticks(np.arange(n_aa))
         ax.set_xticklabels(aa_labels, fontsize=11)
         ax.set_yticklabels(aa_labels, fontsize=11)
-        ax.set_xlabel('C-terminal residue  Y', fontsize=12, fontweight='bold',
+        ax.set_xlabel('C-terminal residue Y', fontsize=12, fontweight='bold',
                       labelpad=6)
-        ax.set_ylabel('N-terminal residue  X', fontsize=12, fontweight='bold',
+        ax.set_ylabel('N-terminal residue X', fontsize=12, fontweight='bold',
                       labelpad=6)
         ax.set_title(title, fontsize=13, fontweight='bold', pad=10)
         # 让每个 cell 的边界清晰（小网格线）
@@ -1823,30 +1823,33 @@ def plot_residue_pair_matrix(
         return im
 
     im_a = _draw_panel(axes[0], empirical, rate_vmin, rate_vmax, 'YlOrRd',
-                       'A  Empirical cleavage rate  P(broken | X−Y)  [%]',
+                       '(a) Empirical [%]',
                        annotate_values=True)
     im_b = _draw_panel(axes[1], predicted, rate_vmin, rate_vmax, 'YlOrRd',
-                       'B  Model predicted  E[σ(model) | X−Y]  [%]',
+                       '(b) Model [%]',
                        annotate_values=True)
     im_c = _draw_panel(axes[2], predicted - empirical, diff_vmin, diff_vmax, 'RdBu_r',
-                       'C  Difference  (predicted − empirical)  [pp]',
+                       '(c) Bias [pp]',
                        annotate_values=True, is_diff=True)
 
-    # Colorbars: 放在右侧，pad 略大避免与子图挤在一起
+    # Colorbars: 放在右侧，pad 略大避免与子图挤在一起。
+    # label 同样极简化（R-24），详细含义移至 figure caption。
     cb_a = plt.colorbar(im_a, ax=axes[0], fraction=0.038, pad=0.04)
     cb_a.set_label('Cleavage rate', fontsize=10)
     cb_b = plt.colorbar(im_b, ax=axes[1], fraction=0.038, pad=0.04)
-    cb_b.set_label('Predicted probability', fontsize=10)
+    cb_b.set_label('Predicted prob.', fontsize=10)
     cb_c = plt.colorbar(im_c, ax=axes[2], fraction=0.038, pad=0.04)
     # 用百分点 (pp) 显示 colorbar 刻度，与 cell 注释一致
     cb_c.ax.yaxis.set_major_formatter(
         FuncFormatter(lambda v, _: f'{v*100:+.0f}')
     )
-    cb_c.set_label('Bias (model − empirical)  [pp]', fontsize=10)
+    cb_c.set_label('Bias [pp]', fontsize=10)
 
-    # R-24 可读性优化：suptitle 只保留单行总标题，其余说明（轴含义、单位、
-    # 稀有度图例）分别由子图轴标签、子图标题、底部 figure legend 承载。
-    fig.suptitle('Residue-Pair Cleavage Chemistry: Empirical vs Model',
+    # R-24 可读性优化：suptitle 只保留单句总标题，其余说明（轴含义、单位、
+    # 稀有度图例）分别由子图轴标签、子图标题、底部 figure legend 承载，
+    # 完整的数学定义（P(broken|X−Y)、E[σ(model)|X−Y]、predicted−empirical）
+    # 一并移至论文 figure caption。
+    fig.suptitle('Residue-Pair Cleavage Chemistry',
                  fontsize=15, fontweight='bold', y=0.97)
 
     # 底部 figure-level legend：用 proxy artist 说明稀有度标记与空格含义
