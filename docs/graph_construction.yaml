@@ -1,0 +1,116 @@
+# Graph Construction Strategies for Mirror-Image Peptides
+meta:
+  profile: academic-paper
+  figureType: architecture
+  theme: academic-color
+  layout: horizontal
+  routing: orthogonal
+  title: 'Graph Construction Strategies for Mirror-Image Peptides'
+  description: 'Sequence / Distance / Hybrid graphs with global virtual node and edge-type legend.'
+  legend: 'Edge types: 0 backbone (black solid), 1 short-distance (blue solid), 2 long-distance (orange solid), 3 long-range (purple dashed), 4 global (green dotted).'
+  canvas: '1750x1050'
+
+modules:
+  - id: seq_panel
+    label: '(a) Sequence Graph  (d_max = 1)'
+  - id: dist_panel
+    label: '(b) Distance Graph  (d_max > 1)'
+  - id: hyb_panel
+    label: '(c) Hybrid Graph  (Distance + Long-range)'
+  - id: global_panel
+    label: '(d) Global Node  (type 4)'
+  - id: legend_panel
+    label: '(e) Edge Type Legend'
+
+nodes:
+  # ============ Panel (a): Sequence Graph — nodes 110px apart ============
+  - { id: s1, label: 'a1', type: feature, module: seq_panel, position: { x: 120, y: 240 }, size: small }
+  - { id: s2, label: 'a2', type: feature, module: seq_panel, position: { x: 230, y: 240 }, size: small }
+  - { id: s3, label: 'a3', type: feature, module: seq_panel, position: { x: 340, y: 240 }, size: small }
+  - { id: s4, label: 'a4', type: feature, module: seq_panel, position: { x: 450, y: 240 }, size: small }
+  - { id: s5, label: 'a5', type: feature, module: seq_panel, position: { x: 560, y: 240 }, size: small }
+  - { id: s6, label: 'a6', type: feature, module: seq_panel, position: { x: 670, y: 240 }, size: small }
+
+  # ============ Panel (b): Distance Graph ============
+  - { id: d1, label: 'a1', type: feature, module: dist_panel, position: { x: 830, y: 240 }, size: small }
+  - { id: d2, label: 'a2', type: feature, module: dist_panel, position: { x: 940, y: 240 }, size: small }
+  - { id: d3, label: 'a3', type: feature, module: dist_panel, position: { x: 1050, y: 240 }, size: small }
+  - { id: d4, label: 'a4', type: feature, module: dist_panel, position: { x: 1160, y: 240 }, size: small }
+  - { id: d5, label: 'a5', type: feature, module: dist_panel, position: { x: 1270, y: 240 }, size: small }
+  - { id: d6, label: 'a6', type: feature, module: dist_panel, position: { x: 1380, y: 240 }, size: small }
+
+  # ============ Panel (c): Hybrid Graph ============
+  - { id: h1, label: 'a1', type: feature, module: hyb_panel, position: { x: 1540, y: 240 }, size: small }
+  - { id: h2, label: 'a2', type: feature, module: hyb_panel, position: { x: 1650, y: 240 }, size: small }
+  - { id: h3, label: 'a3', type: feature, module: hyb_panel, position: { x: 1760, y: 240 }, size: small }
+  - { id: h4, label: 'a4', type: feature, module: hyb_panel, position: { x: 1870, y: 240 }, size: small }
+
+  # ============ Panel (d): Global Node ============
+  - { id: gv, label: 'v_g', type: attention, module: global_panel, position: { x: 395, y: 560 }, size: medium }
+  - { id: g1, label: 'a1', type: feature, module: global_panel, position: { x: 120, y: 760 }, size: small }
+  - { id: g2, label: 'a2', type: feature, module: global_panel, position: { x: 230, y: 760 }, size: small }
+  - { id: g3, label: 'a3', type: feature, module: global_panel, position: { x: 340, y: 760 }, size: small }
+  - { id: g4, label: 'a4', type: feature, module: global_panel, position: { x: 450, y: 760 }, size: small }
+  - { id: g5, label: 'a5', type: feature, module: global_panel, position: { x: 560, y: 760 }, size: small }
+  - { id: g6, label: 'a6', type: feature, module: global_panel, position: { x: 670, y: 760 }, size: small }
+
+  # ============ Panel (e): Legend ============
+  - { id: leg_s0, label: '──────', type: text, module: legend_panel, bounds: { x: 760, y: 510, width: 120, height: 34 }, style: { fontSize: 20, fontColor: '#212121', align: center } }
+  - { id: leg_t0, label: 'type 0   Backbone / sequence edge  ( |i-j| = 1 )', type: text, module: legend_panel, bounds: { x: 890, y: 510, width: 600, height: 34 }, style: { fontSize: 14, align: left } }
+  - { id: leg_s1, label: '──────', type: text, module: legend_panel, bounds: { x: 760, y: 570, width: 120, height: 34 }, style: { fontSize: 20, fontColor: '#1971C2', align: center } }
+  - { id: leg_t1, label: 'type 1   Short-distance edge  ( d_ij <= 2 )', type: text, module: legend_panel, bounds: { x: 890, y: 570, width: 600, height: 34 }, style: { fontSize: 14, align: left, fontColor: '#1971C2' } }
+  - { id: leg_s2, label: '──────', type: text, module: legend_panel, bounds: { x: 760, y: 630, width: 120, height: 34 }, style: { fontSize: 20, fontColor: '#E8590C', align: center } }
+  - { id: leg_t2, label: 'type 2   Long-distance edge  ( d_ij > 2, <= d_max )', type: text, module: legend_panel, bounds: { x: 890, y: 630, width: 600, height: 34 }, style: { fontSize: 14, align: left, fontColor: '#E8590C' } }
+  - { id: leg_s3, label: '- - - -', type: text, module: legend_panel, bounds: { x: 760, y: 690, width: 120, height: 34 }, style: { fontSize: 20, fontColor: '#7048E8', align: center } }
+  - { id: leg_t3, label: 'type 3   Long-range edge  ( stride Delta, dashed )', type: text, module: legend_panel, bounds: { x: 890, y: 690, width: 600, height: 34 }, style: { fontSize: 14, align: left, fontColor: '#7048E8' } }
+  - { id: leg_s4, label: '. . . .', type: text, module: legend_panel, bounds: { x: 760, y: 750, width: 120, height: 34 }, style: { fontSize: 20, fontColor: '#2F9E44', align: center } }
+  - { id: leg_t4, label: 'type 4   Global node edge  ( v_g <-> v_i, dotted )', type: text, module: legend_panel, bounds: { x: 890, y: 750, width: 600, height: 34 }, style: { fontSize: 14, align: left, fontColor: '#2F9E44' } }
+  - id: leg_note
+    label: 'Node legend:  a_i (blue circle) = residue node;   v_g (green circle) = global virtual node.'
+    type: text
+    module: legend_panel
+    bounds: { x: 760, y: 820, width: 730, height: 30 }
+    style: { fontSize: 13, fontColor: '#616161', align: left }
+
+edges:
+  # ===== (a) Sequence Graph: backbone, type 0 (black solid) =====
+  - { from: s1, to: s2, type: primary, style: { strokeColor: '#212121', strokeWidth: 2, endArrow: 'none' } }
+  - { from: s2, to: s3, type: primary, style: { strokeColor: '#212121', strokeWidth: 2, endArrow: 'none' } }
+  - { from: s3, to: s4, type: primary, style: { strokeColor: '#212121', strokeWidth: 2, endArrow: 'none' } }
+  - { from: s4, to: s5, type: primary, style: { strokeColor: '#212121', strokeWidth: 2, endArrow: 'none' } }
+  - { from: s5, to: s6, type: primary, style: { strokeColor: '#212121', strokeWidth: 2, endArrow: 'none' } }
+
+  # ===== (b) Distance Graph =====
+  # consecutive: type 1 (blue solid)
+  - { from: d1, to: d2, type: primary, style: { strokeColor: '#1971C2', strokeWidth: 2, endArrow: 'none' } }
+  - { from: d2, to: d3, type: primary, style: { strokeColor: '#1971C2', strokeWidth: 2, endArrow: 'none' } }
+  - { from: d3, to: d4, type: primary, style: { strokeColor: '#1971C2', strokeWidth: 2, endArrow: 'none' } }
+  - { from: d4, to: d5, type: primary, style: { strokeColor: '#1971C2', strokeWidth: 2, endArrow: 'none' } }
+  - { from: d5, to: d6, type: primary, style: { strokeColor: '#1971C2', strokeWidth: 2, endArrow: 'none' } }
+  # skip-1 distance arcs: type 2 (orange solid) — distinct exit slots to avoid shared corridor
+  - { from: d1, to: d3, type: data, style: { strokeColor: '#E8590C', strokeWidth: 2, endArrow: 'none', exitX: 1, exitY: 0.35, entryX: 0, entryY: 0.35 }, waypoints: [ { x: 905, y: 175 }, { x: 1010, y: 175 } ] }
+  - { from: d2, to: d4, type: data, style: { strokeColor: '#E8590C', strokeWidth: 2, endArrow: 'none', exitX: 1, exitY: 0.65, entryX: 0, entryY: 0.65 }, waypoints: [ { x: 1015, y: 200 }, { x: 1120, y: 200 } ] }
+  - { from: d3, to: d5, type: data, style: { strokeColor: '#E8590C', strokeWidth: 2, endArrow: 'none', exitX: 1, exitY: 0.35, entryX: 0, entryY: 0.35 }, waypoints: [ { x: 1125, y: 175 }, { x: 1230, y: 175 } ] }
+  - { from: d4, to: d6, type: data, style: { strokeColor: '#E8590C', strokeWidth: 2, endArrow: 'none', exitX: 1, exitY: 0.65, entryX: 0, entryY: 0.65 }, waypoints: [ { x: 1235, y: 200 }, { x: 1340, y: 200 } ] }
+  # one skip-2 arc, higher: type 2 (exits top)
+  - { from: d1, to: d4, type: data, style: { strokeColor: '#E8590C', strokeWidth: 2, endArrow: 'none', exitX: 1, exitY: 0.15, entryX: 0, entryY: 0.15 }, waypoints: [ { x: 905, y: 130 }, { x: 1120, y: 130 } ] }
+
+  # ===== (c) Hybrid Graph =====
+  # consecutive: type 1
+  - { from: h1, to: h2, type: primary, style: { strokeColor: '#1971C2', strokeWidth: 2, endArrow: 'none' } }
+  - { from: h2, to: h3, type: primary, style: { strokeColor: '#1971C2', strokeWidth: 2, endArrow: 'none' } }
+  - { from: h3, to: h4, type: primary, style: { strokeColor: '#1971C2', strokeWidth: 2, endArrow: 'none' } }
+  # distance arcs: type 2
+  - { from: h1, to: h3, type: data, style: { strokeColor: '#E8590C', strokeWidth: 2, endArrow: 'none', exitX: 1, exitY: 0.35, entryX: 0, entryY: 0.35 }, waypoints: [ { x: 1615, y: 175 }, { x: 1720, y: 175 } ] }
+  - { from: h2, to: h4, type: data, style: { strokeColor: '#E8590C', strokeWidth: 2, endArrow: 'none', exitX: 1, exitY: 0.65, entryX: 0, entryY: 0.65 }, waypoints: [ { x: 1725, y: 200 }, { x: 1830, y: 200 } ] }
+  - { from: h1, to: h4, type: data, style: { strokeColor: '#E8590C', strokeWidth: 2, endArrow: 'none', exitX: 1, exitY: 0.15, entryX: 0, entryY: 0.15 }, waypoints: [ { x: 1615, y: 130 }, { x: 1830, y: 130 } ] }
+  # long-range edge: type 3 (purple dashed), highest arch (exits top, distinct slot)
+  - { from: h1, to: h4, type: dependency, style: { strokeColor: '#7048E8', strokeWidth: 2, dashed: true, dashPattern: '8 4', endArrow: 'none', exitX: 1, exitY: 0.05, entryX: 0, entryY: 0.05 }, waypoints: [ { x: 1615, y: 90 }, { x: 1830, y: 90 } ] }
+
+  # ===== (d) Global Node edges: type 4 (green dotted) =====
+  - { from: gv, to: g1, type: bidirectional, style: { strokeColor: '#2F9E44', strokeWidth: 2, dashed: true, dashPattern: '1 4', endArrow: 'none' } }
+  - { from: gv, to: g2, type: bidirectional, style: { strokeColor: '#2F9E44', strokeWidth: 2, dashed: true, dashPattern: '1 4', endArrow: 'none' } }
+  - { from: gv, to: g3, type: bidirectional, style: { strokeColor: '#2F9E44', strokeWidth: 2, dashed: true, dashPattern: '1 4', endArrow: 'none' } }
+  - { from: gv, to: g4, type: bidirectional, style: { strokeColor: '#2F9E44', strokeWidth: 2, dashed: true, dashPattern: '1 4', endArrow: 'none' } }
+  - { from: gv, to: g5, type: bidirectional, style: { strokeColor: '#2F9E44', strokeWidth: 2, dashed: true, dashPattern: '1 4', endArrow: 'none' } }
+  - { from: gv, to: g6, type: bidirectional, style: { strokeColor: '#2F9E44', strokeWidth: 2, dashed: true, dashPattern: '1 4', endArrow: 'none' } }

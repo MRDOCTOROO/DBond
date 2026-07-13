@@ -1766,6 +1766,11 @@ def plot_residue_pair_matrix(
     pred_pct = predicted * 100.0
     diff_pct = pred_pct - emp_pct  # percentage points (pp)
 
+    # ---- 自适应图例：仅当数据中确实存在低频 cell 时才显示 */** 标记 ----
+    # 否则图例与图内容不一致（见 R-24 复审：数据全 N≥50 时星号从未触发）。
+    has_rare_single = bool(((counts > 0) & (counts < rare_thresholds[1])).any())
+    has_rare_double = bool(((counts > 0) & (counts < rare_thresholds[0])).any())
+
     # ---- reliable cells (N >= rare_thresholds[1]) 的全局一致性指标 ----
     # 仅基于统计可靠的残基对计算，与 caption 中报告的指标语义一致。
     reliable_mask = counts >= rare_thresholds[1]
@@ -1861,20 +1866,33 @@ def plot_residue_pair_matrix(
     cb_c.set_label('Bias (pp)', fontsize=10)
     # bias colorbar 保留 ±20 整数刻度；超出 ±20 的值已被 clip 到端点色。
 
-    # ---- 底部 figure-level legend：稀有度标记 + 空格说明 ----
-    legend_handles = [
-        mpatches.Patch(facecolor='#EEEEEE', edgecolor='#BBBBBB',
-                       linewidth=0.5, label='N/A (no observation)'),
-        mlines.Line2D([], [], color='black', marker='$*$', linestyle='None',
-                      markersize=12,
-                      label=f'N ∈ [{rare_thresholds[0]}, {rare_thresholds[1]})'),
-        mlines.Line2D([], [], color='black', marker='$**$', linestyle='None',
-                      markersize=12,
-                      label=f'N < {rare_thresholds[0]} (rare AA, statistically uncertain)'),
-    ]
-    fig.legend(handles=legend_handles, loc='lower center',
-               bbox_to_anchor=(0.5, 0.055), ncol=3, frameon=False,
-               fontsize=10, handlelength=1.5, columnspacing=2.0)
+    # ---- 底部 figure-level legend：自适应显示 ----
+    # N/A 始终显示（只要存在空 cell）；*/** 仅在数据中确实存在低频 cell 时显示，
+    # 保证图例与图内容绝对一致（R-24 复审：避免解释不存在的标记）。
+    legend_handles = []
+    has_empty = bool((counts == 0).any())
+    if has_empty:
+        legend_handles.append(
+            mpatches.Patch(facecolor='#EEEEEE', edgecolor='#BBBBBB',
+                           linewidth=0.5, label='N/A (no observation)')
+        )
+    if has_rare_single:
+        legend_handles.append(
+            mlines.Line2D([], [], color='black', marker='$*$', linestyle='None',
+                          markersize=12,
+                          label=f'N ∈ [{rare_thresholds[0]}, {rare_thresholds[1]})')
+        )
+    if has_rare_double:
+        legend_handles.append(
+            mlines.Line2D([], [], color='black', marker='$**$', linestyle='None',
+                          markersize=12,
+                          label=f'N < {rare_thresholds[0]} (rare AA, statistically uncertain)')
+        )
+    if legend_handles:
+        fig.legend(handles=legend_handles, loc='lower center',
+                   bbox_to_anchor=(0.5, 0.055),
+                   ncol=len(legend_handles), frameon=False,
+                   fontsize=10, handlelength=1.5, columnspacing=2.0)
 
     # ---- 底部定量统计行：reliable cells 的 Pearson r 与 MAE ----
     if not np.isnan(r_value):
