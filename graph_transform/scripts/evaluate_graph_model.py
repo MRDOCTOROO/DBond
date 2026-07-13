@@ -25,6 +25,7 @@ from models.utils import build_model_config, CheckpointManager
 from data import GraphDataset, GraphDataLoader, CachedGraphDataset
 from evaluation import Evaluator
 from evaluation.metrics import metric_rows
+from train_graph_model import apply_ablation_config
 
 
 def setup_logging() -> logging.Logger:
@@ -162,6 +163,8 @@ def main():
         raise FileNotFoundError(f"Checkpoint not found: {args.checkpoint}")
 
     config = load_config(args.config, args.test_csv)
+    config = apply_ablation_config(config)
+    logger.info("Resolved ablation tag: %s", config.get("ablation", {}).get("resolved_tag", "baseline"))
     threshold = args.threshold if args.threshold is not None else config.get("evaluation", {}).get("threshold", 0.5)
     evaluation_config = config.get("evaluation", {})
 

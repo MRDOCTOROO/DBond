@@ -1,0 +1,439 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2024-01-01T00:00:00.000Z" agent="Draw.io" version="21.0.0">
+  <diagram id="graph-transform" name="Graph Construction">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title" value="Graph Construction: Sequence Graph vs Distance Graph" style="text;html=1;fontSize=24;fontStyle=1;align=center;verticalAlign=middle;fontColor=#1e1e1e;" vertex="1" parent="1">
+          <mxGeometry x="100" y="10" width="700" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Sequence Graph Container -->
+        <mxCell id="seq_container" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;strokeColor=#a5d8ff;strokeWidth=2;strokeDashPattern=8 4;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="30" y="60" width="940" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="seq_title" value="Sequence Graph" style="text;html=1;fontSize=18;fontStyle=1;align=left;verticalAlign=middle;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="50" y="70" width="200" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Sequence Graph Nodes -->
+        <mxCell id="seq_n1" value="1" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#1971c2;fillColor=#d0ebff;fontSize=16;fontStyle=1;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="60" y="140" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="seq_l1" value="a₁" style="text;html=1;fontSize=14;align=center;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="65" y="195" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="seq_n2" value="2" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#1971c2;fillColor=#d0ebff;fontSize=16;fontStyle=1;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="160" y="140" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="seq_l2" value="a₂" style="text;html=1;fontSize=14;align=center;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="165" y="195" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="seq_n3" value="3" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#1971c2;fillColor=#d0ebff;fontSize=16;fontStyle=1;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="260" y="140" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="seq_l3" value="a₃" style="text;html=1;fontSize=14;align=center;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="265" y="195" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="seq_n4" value="4" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#1971c2;fillColor=#d0ebff;fontSize=16;fontStyle=1;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="360" y="140" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="seq_l4" value="a₄" style="text;html=1;fontSize=14;align=center;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="365" y="195" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="seq_n5" value="5" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#1971c2;fillColor=#d0ebff;fontSize=16;fontStyle=1;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="460" y="140" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="seq_l5" value="a₅" style="text;html=1;fontSize=14;align=center;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="465" y="195" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="seq_n6" value="6" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#1971c2;fillColor=#d0ebff;fontSize=16;fontStyle=1;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="560" y="140" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="seq_l6" value="a₆" style="text;html=1;fontSize=14;align=center;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="565" y="195" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="seq_n7" value="7" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#1971c2;fillColor=#d0ebff;fontSize=16;fontStyle=1;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="660" y="140" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="seq_l7" value="a₇" style="text;html=1;fontSize=14;align=center;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="665" y="195" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="seq_n8" value="8" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#1971c2;fillColor=#d0ebff;fontSize=16;fontStyle=1;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="760" y="140" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="seq_l8" value="a₈" style="text;html=1;fontSize=14;align=center;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="765" y="195" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="seq_n9" value="9" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#1971c2;fillColor=#d0ebff;fontSize=16;fontStyle=1;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="860" y="140" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="seq_l9" value="a₉" style="text;html=1;fontSize=14;align=center;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="865" y="195" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- Sequence Graph Edges -->
+        <mxCell id="seq_e1" style="endArrow=none;strokeColor=#1971c2;strokeWidth=2;" edge="1" source="seq_n1" target="seq_n2" parent="1" />
+        <mxCell id="seq_e2" style="endArrow=none;strokeColor=#1971c2;strokeWidth=2;" edge="1" source="seq_n2" target="seq_n3" parent="1" />
+        <mxCell id="seq_e3" style="endArrow=none;strokeColor=#1971c2;strokeWidth=2;" edge="1" source="seq_n3" target="seq_n4" parent="1" />
+        <mxCell id="seq_e4" style="endArrow=none;strokeColor=#1971c2;strokeWidth=2;" edge="1" source="seq_n4" target="seq_n5" parent="1" />
+        <mxCell id="seq_e5" style="endArrow=none;strokeColor=#1971c2;strokeWidth=2;" edge="1" source="seq_n5" target="seq_n6" parent="1" />
+        <mxCell id="seq_e6" style="endArrow=none;strokeColor=#1971c2;strokeWidth=2;" edge="1" source="seq_n6" target="seq_n7" parent="1" />
+        <mxCell id="seq_e7" style="endArrow=none;strokeColor=#1971c2;strokeWidth=2;" edge="1" source="seq_n7" target="seq_n8" parent="1" />
+        <mxCell id="seq_e8" style="endArrow=none;strokeColor=#1971c2;strokeWidth=2;" edge="1" source="seq_n8" target="seq_n9" parent="1" />
+
+        <!-- Direction Arrow -->
+        <mxCell id="seq_dir" value="Peptide Chain Direction" style="text;html=1;fontSize=14;align=center;fontColor=#7048e8;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="380" y="100" width="170" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="seq_dir_arrow" style="endArrow=classic;strokeColor=#7048e8;strokeWidth=2;strokeDashPattern=8 4;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="60" y="120" as="sourcePoint" />
+            <mxPoint x="920" y="120" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Sequence Graph Info Box -->
+        <mxCell id="seq_info" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#868e96;fillColor=#f8f9fa;" vertex="1" parent="1">
+          <mxGeometry x="620" y="70" width="330" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="seq_info_text" value="Edge definition: eᵢⱼ ∈ E, when |i - j| = 1&lt;br&gt;Number of edges: L - 1 = 8 edges&lt;br&gt;Node degree: internal = 2, endpoint = 1" style="text;html=1;fontSize=12;align=left;verticalAlign=top;fontColor=#1971c2;spacingLeft=5;" vertex="1" parent="1">
+          <mxGeometry x="625" y="75" width="320" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Distance Graph Container -->
+        <mxCell id="dist_container" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;strokeColor=#69db7c;strokeWidth=2;strokeDashPattern=8 4;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="30" y="280" width="940" height="240" as="geometry" />
+        </mxCell>
+        <mxCell id="dist_title" value="Distance Graph (d_max = 3)" style="text;html=1;fontSize=18;fontStyle=1;align=left;verticalAlign=middle;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="50" y="290" width="300" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Distance Graph Nodes -->
+        <mxCell id="dist_n1" value="1" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#2f9e44;fillColor=#d3f9d8;fontSize=16;fontStyle=1;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="60" y="360" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="dist_l1" value="a₁" style="text;html=1;fontSize=14;align=center;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="65" y="415" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dist_n2" value="2" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#2f9e44;fillColor=#d3f9d8;fontSize=16;fontStyle=1;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="160" y="360" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="dist_l2" value="a₂" style="text;html=1;fontSize=14;align=center;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="165" y="415" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dist_n3" value="3" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#2f9e44;fillColor=#d3f9d8;fontSize=16;fontStyle=1;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="260" y="360" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="dist_l3" value="a₃" style="text;html=1;fontSize=14;align=center;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="265" y="415" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dist_n4" value="4" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#2f9e44;fillColor=#d3f9d8;fontSize=16;fontStyle=1;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="360" y="360" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="dist_l4" value="a₄" style="text;html=1;fontSize=14;align=center;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="365" y="415" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dist_n5" value="5" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#2f9e44;fillColor=#d3f9d8;fontSize=16;fontStyle=1;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="460" y="360" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="dist_l5" value="a₅" style="text;html=1;fontSize=14;align=center;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="465" y="415" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dist_n6" value="6" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#2f9e44;fillColor=#d3f9d8;fontSize=16;fontStyle=1;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="560" y="360" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="dist_l6" value="a₆" style="text;html=1;fontSize=14;align=center;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="565" y="415" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dist_n7" value="7" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#2f9e44;fillColor=#d3f9d8;fontSize=16;fontStyle=1;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="660" y="360" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="dist_l7" value="a₇" style="text;html=1;fontSize=14;align=center;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="665" y="415" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dist_n8" value="8" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#2f9e44;fillColor=#d3f9d8;fontSize=16;fontStyle=1;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="760" y="360" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="dist_l8" value="a₈" style="text;html=1;fontSize=14;align=center;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="765" y="415" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dist_n9" value="9" style="ellipse;whiteSpace=wrap;html=1;strokeColor=#2f9e44;fillColor=#d3f9d8;fontSize=16;fontStyle=1;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="860" y="360" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="dist_l9" value="a₉" style="text;html=1;fontSize=14;align=center;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="865" y="415" width="40" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- Distance Graph Edges: |i-j|=1 (green solid) -->
+        <mxCell id="dist_d1_1" style="endArrow=none;strokeColor=#2f9e44;strokeWidth=2;curved=1;" edge="1" source="dist_n1" target="dist_n2" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="110" y="340" />
+              <mxPoint x="160" y="340" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d1_2" style="endArrow=none;strokeColor=#2f9e44;strokeWidth=2;curved=1;" edge="1" source="dist_n2" target="dist_n3" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="210" y="340" />
+              <mxPoint x="260" y="340" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d1_3" style="endArrow=none;strokeColor=#2f9e44;strokeWidth=2;curved=1;" edge="1" source="dist_n3" target="dist_n4" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="310" y="340" />
+              <mxPoint x="360" y="340" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d1_4" style="endArrow=none;strokeColor=#2f9e44;strokeWidth=2;curved=1;" edge="1" source="dist_n4" target="dist_n5" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="410" y="340" />
+              <mxPoint x="460" y="340" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d1_5" style="endArrow=none;strokeColor=#2f9e44;strokeWidth=2;curved=1;" edge="1" source="dist_n5" target="dist_n6" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="510" y="340" />
+              <mxPoint x="560" y="340" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d1_6" style="endArrow=none;strokeColor=#2f9e44;strokeWidth=2;curved=1;" edge="1" source="dist_n6" target="dist_n7" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="610" y="340" />
+              <mxPoint x="660" y="340" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d1_7" style="endArrow=none;strokeColor=#2f9e44;strokeWidth=2;curved=1;" edge="1" source="dist_n7" target="dist_n8" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="710" y="340" />
+              <mxPoint x="760" y="340" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d1_8" style="endArrow=none;strokeColor=#2f9e44;strokeWidth=2;curved=1;" edge="1" source="dist_n8" target="dist_n9" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="810" y="340" />
+              <mxPoint x="860" y="340" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Distance Graph Edges: |i-j|=2 (yellow dashed) -->
+        <mxCell id="dist_d2_1" style="endArrow=none;strokeColor=#fcc419;strokeWidth=2;strokeDashPattern=8 4;curved=1;" edge="1" source="dist_n1" target="dist_n3" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="160" y="310" />
+              <mxPoint x="260" y="310" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d2_2" style="endArrow=none;strokeColor=#fcc419;strokeWidth=2;strokeDashPattern=8 4;curved=1;" edge="1" source="dist_n2" target="dist_n4" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="210" y="310" />
+              <mxPoint x="360" y="310" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d2_3" style="endArrow=none;strokeColor=#fcc419;strokeWidth=2;strokeDashPattern=8 4;curved=1;" edge="1" source="dist_n3" target="dist_n5" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="310" y="310" />
+              <mxPoint x="460" y="310" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d2_4" style="endArrow=none;strokeColor=#fcc419;strokeWidth=2;strokeDashPattern=8 4;curved=1;" edge="1" source="dist_n4" target="dist_n6" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="410" y="310" />
+              <mxPoint x="560" y="310" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d2_5" style="endArrow=none;strokeColor=#fcc419;strokeWidth=2;strokeDashPattern=8 4;curved=1;" edge="1" source="dist_n5" target="dist_n7" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="510" y="310" />
+              <mxPoint x="660" y="310" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d2_6" style="endArrow=none;strokeColor=#fcc419;strokeWidth=2;strokeDashPattern=8 4;curved=1;" edge="1" source="dist_n6" target="dist_n8" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="610" y="310" />
+              <mxPoint x="760" y="310" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d2_7" style="endArrow=none;strokeColor=#fcc419;strokeWidth=2;strokeDashPattern=8 4;curved=1;" edge="1" source="dist_n7" target="dist_n9" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="710" y="310" />
+              <mxPoint x="860" y="310" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Distance Graph Edges: |i-j|=3 (red dotted) -->
+        <mxCell id="dist_d3_1" style="endArrow=none;strokeColor=#e03131;strokeWidth=2;strokeDashPattern=2 4;curved=1;" edge="1" source="dist_n1" target="dist_n4" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="160" y="280" />
+              <mxPoint x="360" y="280" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d3_2" style="endArrow=none;strokeColor=#e03131;strokeWidth=2;strokeDashPattern=2 4;curved=1;" edge="1" source="dist_n2" target="dist_n5" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="210" y="280" />
+              <mxPoint x="460" y="280" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d3_3" style="endArrow=none;strokeColor=#e03131;strokeWidth=2;strokeDashPattern=2 4;curved=1;" edge="1" source="dist_n3" target="dist_n6" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="310" y="280" />
+              <mxPoint x="560" y="280" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d3_4" style="endArrow=none;strokeColor=#e03131;strokeWidth=2;strokeDashPattern=2 4;curved=1;" edge="1" source="dist_n4" target="dist_n7" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="410" y="280" />
+              <mxPoint x="660" y="280" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d3_5" style="endArrow=none;strokeColor=#e03131;strokeWidth=2;strokeDashPattern=2 4;curved=1;" edge="1" source="dist_n5" target="dist_n8" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="510" y="280" />
+              <mxPoint x="760" y="280" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="dist_d3_6" style="endArrow=none;strokeColor=#e03131;strokeWidth=2;strokeDashPattern=2 4;curved=1;" edge="1" source="dist_n6" target="dist_n9" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="610" y="280" />
+              <mxPoint x="860" y="280" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Distance Graph Info Box -->
+        <mxCell id="dist_info" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#868e96;fillColor=#f8f9fa;" vertex="1" parent="1">
+          <mxGeometry x="620" y="290" width="330" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="dist_info_text" value="Edge definition: eᵢⱼ ∈ E, when |i - j| ≤ d_max&lt;br&gt;Number of edges: 20 edges&lt;br&gt;Node degree: internal = 6, endpoint = 3" style="text;html=1;fontSize=12;align=left;verticalAlign=top;fontColor=#2f9e44;spacingLeft=5;" vertex="1" parent="1">
+          <mxGeometry x="625" y="295" width="320" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Bottom Container -->
+        <mxCell id="bottom_container" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#868e96;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="30" y="540" width="940" height="180" as="geometry" />
+        </mxCell>
+
+        <!-- Legend -->
+        <mxCell id="legend_title" value="Legend (d_max = 3 example)" style="text;html=1;fontSize=14;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="50" y="555" width="200" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="legend_d1" value="" style="endArrow=none;strokeColor=#2f9e44;strokeWidth=2;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="60" y="600" as="sourcePoint" />
+            <mxPoint x="120" y="600" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="legend_d1_text" value="|i - j| = 1 (adjacent residues)" style="text;html=1;fontSize=12;align=left;" vertex="1" parent="1">
+          <mxGeometry x="130" y="590" width="180" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="legend_d2" value="" style="endArrow=none;strokeColor=#fcc419;strokeWidth=2;strokeDashPattern=8 4;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="60" y="630" as="sourcePoint" />
+            <mxPoint x="120" y="630" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="legend_d2_text" value="|i - j| = 2 (1 residue apart)" style="text;html=1;fontSize=12;align=left;" vertex="1" parent="1">
+          <mxGeometry x="130" y="620" width="180" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="legend_d3" value="" style="endArrow=none;strokeColor=#e03131;strokeWidth=2;strokeDashPattern=2 4;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="60" y="660" as="sourcePoint" />
+            <mxPoint x="120" y="660" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="legend_d3_text" value="|i - j| = 3 (2 residues apart)" style="text;html=1;fontSize=12;align=left;" vertex="1" parent="1">
+          <mxGeometry x="130" y="650" width="180" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- Text Description: Sequence Graph -->
+        <mxCell id="desc_seq" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=5;strokeColor=#a5d8ff;strokeWidth=1;fillColor=#f0f7ff;" vertex="1" parent="1">
+          <mxGeometry x="400" y="555" width="260" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="desc_seq_title" value="Sequence Graph" style="text;html=1;fontSize=14;fontStyle=1;align=left;verticalAlign=middle;fontColor=#1971c2;" vertex="1" parent="1">
+          <mxGeometry x="415" y="565" width="150" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="desc_seq_content" value="• Edge rule: |i - j| = 1 (adjacent only)&lt;br&gt;• Graph structure: Linear chain&lt;br&gt;• Info coverage: Local neighbors only&lt;br&gt;• Complexity: O(L)&lt;br&gt;• Example (L=9): 8 edges" style="text;html=1;fontSize=11;align=left;verticalAlign=top;fontColor=#1e1e1e;spacingLeft=5;spacingTop=2;" vertex="1" parent="1">
+          <mxGeometry x="415" y="590" width="235" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- Text Description: Distance Graph -->
+        <mxCell id="desc_dist" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=5;strokeColor=#69db7c;strokeWidth=1;fillColor=#f0fff4;" vertex="1" parent="1">
+          <mxGeometry x="680" y="555" width="270" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="desc_dist_title" value="Distance Graph (d_max = 3)" style="text;html=1;fontSize=14;fontStyle=1;align=left;verticalAlign=middle;fontColor=#2f9e44;" vertex="1" parent="1">
+          <mxGeometry x="695" y="565" width="220" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="desc_dist_content" value="• Edge rule: |i - j| ≤ d_max&lt;br&gt;• Graph structure: Dense local connections&lt;br&gt;• Info coverage: Local + short-range&lt;br&gt;• Complexity: O(L · d_max)&lt;br&gt;• Example (L=9): 20 edges" style="text;html=1;fontSize=11;align=left;verticalAlign=top;fontColor=#1e1e1e;spacingLeft=5;spacingTop=2;" vertex="1" parent="1">
+          <mxGeometry x="695" y="590" width="245" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- Note -->
+        <mxCell id="note" value="Note: When d_max = 1, Distance Graph degenerates to Sequence Graph." style="text;html=1;fontSize=12;align=center;verticalAlign=middle;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="350" y="730" width="350" height="20" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

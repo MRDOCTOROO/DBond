@@ -207,12 +207,14 @@ def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
         model_config['num_gat_layers'] = 0
 
     # (2) w/o Edge Features：彻底切断所有边信息途径
+    #   - use_edge_features: 关闭 GCN 层的边特征门控（防止未来开启 GCN 时重新引入边信息）
     #   - use_raw_edge_attr: 关闭 8 维原始物理属性融合
     #   - gat_use_edge_bias/gate: 关闭 GAT 注意力的边偏置与门控
     #   - bond_use_edge_repr: 切断 bond head 的 e_ij（此前的主要泄漏点）
     #   - use_edge_type_embedding/use_distance_embedding: 让 EdgeEncoder 输出退化为无信息常量
     #   注：仅关前三项时，bond head 仍能经 e_ij 拿到 type+distance 嵌入，导致消融后指标不降反升（隐式正则化）。
     if ablation_config.get('no_edge_attr', False):
+        model_config['use_edge_features'] = False
         model_config['use_raw_edge_attr'] = False
         model_config['gat_use_edge_bias'] = False
         model_config['gat_use_edge_gate'] = False

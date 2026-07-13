@@ -252,7 +252,7 @@ ablation:
 
   # 模块消融（单变量）
   no_message_passing: false    # (1) w/o Message Passing：双零层，bond head 直接吃 encoder 输出
-  no_edge_attr: false          # (2) w/o Edge Features：彻底关边（raw_attr+GAT偏置门控+bond e_ij+type/distance嵌入）
+  no_edge_attr: false          # (2) w/o Edge Features：彻底关边（GCN边门控+raw_attr+GAT偏置门控+bond e_ij+type/distance嵌入）
   no_state_env: false          # (3) w/o State/Env：关前体/环境变量（三处使用点同时生效）
 
   # 图结构相关消融切换后如需强制重建缓存可开启

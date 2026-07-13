@@ -9,6 +9,8 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import matplotlib.patches as mpatches
+import matplotlib.lines as mlines
 from matplotlib.ticker import FuncFormatter
 import seaborn as sns
 import networkx as nx
@@ -1759,8 +1761,9 @@ def plot_residue_pair_matrix(
 
     fig, axes = plt.subplots(1, 3, figsize=figsize)
     # 拓宽左右留白以放下 colorbar；wspace 控制子图间距；
-    # 底部留 0.10 给坐标轴说明；顶部留 0.17 给总标题。
-    plt.subplots_adjust(wspace=0.40, left=0.05, right=0.97, top=0.83, bottom=0.10)
+    # R-24 可读性优化：顶部留 0.12 给放大后的单行 suptitle，
+    # 底部留 0.14 给新增的 figure-level legend。
+    plt.subplots_adjust(wspace=0.40, left=0.05, right=0.97, top=0.88, bottom=0.14)
 
     # Shared colour scale for (a) and (b) so they are directly comparable
     rate_vmin, rate_vmax = 0.0, 1.0
@@ -1772,13 +1775,13 @@ def plot_residue_pair_matrix(
                        vmin=vmin, vmax=vmax, interpolation='nearest')
         ax.set_xticks(np.arange(n_aa))
         ax.set_yticks(np.arange(n_aa))
-        ax.set_xticklabels(aa_labels, fontsize=10)
-        ax.set_yticklabels(aa_labels, fontsize=10)
+        ax.set_xticklabels(aa_labels, fontsize=11)
+        ax.set_yticklabels(aa_labels, fontsize=11)
         ax.set_xlabel('C-terminal residue  Y', fontsize=12, fontweight='bold',
                       labelpad=6)
         ax.set_ylabel('N-terminal residue  X', fontsize=12, fontweight='bold',
                       labelpad=6)
-        ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+        ax.set_title(title, fontsize=13, fontweight='bold', pad=10)
         # 让每个 cell 的边界清晰（小网格线）
         ax.set_xticks(np.arange(-0.5, n_aa, 1), minor=True)
         ax.set_yticks(np.arange(-0.5, n_aa, 1), minor=True)
@@ -1798,13 +1801,15 @@ def plot_residue_pair_matrix(
                                                    linewidth=0.3, zorder=1))
                         continue
                     val = matrix[i, j]
-                    # 动态字体大小 + 颜色：稀有 AA 用更小字体 + 灰色
+                    # 统一字号与颜色（R-24 可读性优化）：
+                    # 稀有度不再用字体大小/颜色编码，改由 figure legend 说明。
+                    # 保留 * / ** 尾缀作为稀有度提示。
                     if n < rare_thresholds[0]:
-                        marker, color, fs = '**', '#34495E', 7.0
+                        marker = '**'
                     elif n < rare_thresholds[1]:
-                        marker, color, fs = '*', '#34495E', 7.5
+                        marker = '*'
                     else:
-                        marker, color, fs = '', 'black', 8.5
+                        marker = ''
                     # diff 面板：带符号的百分点（percentage points, pp），
                     # 与 (a)(b) 保持同样 2-3 字符宽度，避免数字堆叠。
                     # 例: +0.12 → "+12",  -0.34 → "−34"
@@ -1814,17 +1819,17 @@ def plot_residue_pair_matrix(
                     else:
                         text = f'{val*100:.0f}{marker}'
                     ax.text(j, i, text, ha='center', va='center',
-                            fontsize=fs, color=color)
+                            fontsize=9.5, color='black')
         return im
 
     im_a = _draw_panel(axes[0], empirical, rate_vmin, rate_vmax, 'YlOrRd',
-                       '(a) Empirical cleavage rate  P(broken | X-Y)  [%]',
+                       'A  Empirical cleavage rate  P(broken | X−Y)  [%]',
                        annotate_values=True)
     im_b = _draw_panel(axes[1], predicted, rate_vmin, rate_vmax, 'YlOrRd',
-                       '(b) Model predicted  E[σ(model) | X-Y]  [%]',
+                       'B  Model predicted  E[σ(model) | X−Y]  [%]',
                        annotate_values=True)
     im_c = _draw_panel(axes[2], predicted - empirical, diff_vmin, diff_vmax, 'RdBu_r',
-                       '(c) Difference  (predicted − empirical)  [pp]',
+                       'C  Difference  (predicted − empirical)  [pp]',
                        annotate_values=True, is_diff=True)
 
     # Colorbars: 放在右侧，pad 略大避免与子图挤在一起
@@ -1839,13 +1844,26 @@ def plot_residue_pair_matrix(
     )
     cb_c.set_label('Bias (model − empirical)  [pp]', fontsize=10)
 
-    fig.suptitle('Residue-Pair Cleavage Chemistry: Empirical vs Model\n'
-                 'Rows X = N-terminal side,  Cols Y = C-terminal side   '
-                 '|   Panels (a)(b) shown as percentage [%],   '
-                 'Panel (c) shown as signed bias in percentage points [pp]\n'
-                 f'* N∈[{rare_thresholds[0]},{rare_thresholds[1]}), '
-                 f'** N<{rare_thresholds[0]} (statistically uncertain, rare AAs B/O/X/Z)',
-                 fontsize=13, fontweight='bold', y=0.965)
+    # R-24 可读性优化：suptitle 只保留单行总标题，其余说明（轴含义、单位、
+    # 稀有度图例）分别由子图轴标签、子图标题、底部 figure legend 承载。
+    fig.suptitle('Residue-Pair Cleavage Chemistry: Empirical vs Model',
+                 fontsize=15, fontweight='bold', y=0.97)
+
+    # 底部 figure-level legend：用 proxy artist 说明稀有度标记与空格含义
+    legend_handles = [
+        mpatches.Patch(facecolor='#EEEEEE', edgecolor='#BBBBBB',
+                       linewidth=0.5, label='N/A (no observation)'),
+        mlines.Line2D([], [], color='black', marker='$*$', linestyle='None',
+                      markersize=12,
+                      label=f'N ∈ [{rare_thresholds[0]}, {rare_thresholds[1]})'),
+        mlines.Line2D([], [], color='black', marker='$**$', linestyle='None',
+                      markersize=12,
+                      label=f'N < {rare_thresholds[0]} '
+                            f'(rare AAs B/O/X/Z, statistically uncertain)'),
+    ]
+    fig.legend(handles=legend_handles, loc='lower center',
+               bbox_to_anchor=(0.5, 0.01), ncol=3, frameon=False,
+               fontsize=10, handlelength=1.5, columnspacing=2.0)
 
     _save_figure(fig, save_path)
     return fig

@@ -31,6 +31,7 @@ from models.utils import build_model_config, CheckpointManager
 from data import GraphDataset, GraphDataLoader, CachedGraphDataset
 from evaluation import Evaluator
 from evaluation.metrics import metric_rows
+from train_graph_model import apply_ablation_config
 
 
 def setup_logging() -> logging.Logger:
@@ -237,6 +238,9 @@ def main() -> None:
 
     # 推理时没有必要构建完整图缓存，保留边缓存即可。
     config.setdefault("data", {})["cache_full_graphs"] = False
+
+    config = apply_ablation_config(config)
+    logger.info("Resolved ablation tag: %s", config.get("ablation", {}).get("resolved_tag", "baseline"))
 
     input_df = pd.read_csv(args.input_csv)
     selected_df = select_rows(input_df, args)
