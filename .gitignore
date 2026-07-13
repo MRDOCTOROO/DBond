@@ -57,3 +57,6 @@ cache/
 CLAUDE.md
 plans/*
 nul
+AGENTS.md
+.zcode/*
+*.drawio
