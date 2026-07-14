@@ -1,0 +1,199 @@
+# scan_num vs rt 五折对比实验 —— rt 组配置
+# 相比 default.yaml 的改动: data.env_feature_name=rt, data.env_feature_scale=0.01, ablation.tag=rt_env。
+# rt∈[0.7,60.6]×0.01→[0.007,0.6]均值0.30, 与 scan_num(log1p/20均值0.26)量级对齐, 保证对比公平。
+model:
+  hidden_dim: 256
+  num_attention_heads: 4
+  dropout: 0.1
+  leaky_relu_slope: 0.2
+  use_edge_features: true
+  edge_dim: 32
+  concat_heads: true
+  num_gcn_layers: 0
+  num_gat_layers: 5
+  max_seq_len: 32
+  alphabet: '#ABCDEFGHIKLMNOPQRSTVWXYZ'
+  pad_char: '#'
+  aa_embedding_dim: 64
+  position_embedding_dim: 32
+  physicochemical_dim: 32
+  num_physicochemical_features: 4
+  num_state_features: 3
+  num_env_features: 2
+  use_position_embedding: true
+  use_physicochemical_features: true
+  use_state_features: true
+  use_env_features: true
+  edge_types:
+  - sequence
+  - distance
+  - functional
+  - long_range
+  - global
+  edge_embedding_dim: 16
+  distance_embedding_dim: 16
+  max_distance: 10
+  use_edge_type_embedding: true
+  use_distance_embedding: true
+  use_raw_edge_attr: true
+  gat_use_edge_bias: true
+  gat_use_edge_gate: true
+  bond_use_edge_repr: true
+  bond_use_diff_feature: true
+  bond_use_product_feature: true
+  use_long_range_edges: false
+  long_range_stride: 10
+  long_range_hops: 1
+  use_global_node: true
+  num_classes: 1
+training:
+  epochs: 100
+  batch_size: 1024
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  gradient_clip_norm: 1.0
+  scheduler: cosine
+  warmup_epochs: 10
+  min_lr: 1.0e-05
+  early_stopping: true
+  patience: 10
+  min_delta: 0.001
+  validation_split: 0.2
+  validation_interval: 1
+  save_interval: 10
+  save_best_only: false
+  checkpoint_dir: checkpoints/graph_transform
+data:
+  train_csv_path: dataset/dataset_private/1222.train.fbr.shuffle.multi.csv
+  test_csv_path: dataset/dataset_private/1222.test.fbr.multi.csv
+  val_csv_path: null
+  max_seq_len: 32
+  graph_strategy: distance
+  env_feature_name: rt
+  env_feature_scale: 0.01
+  augmentation: false
+  cache_graphs: true
+  cache_full_graphs: false
+  cache_dir: cache/graph_data
+  augmentation_prob: 0.3
+  max_augmentation_trials: 3
+  num_workers: 32
+  pin_memory: true
+  drop_last: true
+  use_class_weights: true
+  focal_loss_alpha: 0.25
+  focal_loss_gamma: 2.0
+loss:
+  main_loss: binary_cross_entropy
+  use_auxiliary_losses: false
+  auxiliary_loss_weights:
+    focal: 0.5
+    dice: 0.3
+    l2_regularization: 0.1
+  handle_imbalance: false
+  imbalance_strategy: weighted
+  pos_weight: null
+optimizer:
+  type: adamw
+  betas:
+  - 0.9
+  - 0.999
+  eps: 1e-8
+  momentum: 0.9
+  nesterov: true
+  step_size: 30
+  gamma: 0.1
+  t_max: 100
+  eta_min: 0.0
+evaluation:
+  metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1
+  - auc
+  - hamming_loss
+  threshold: 0.5
+  threshold_strategy: fixed
+  eval_interval: 1
+  test_time_augmentation: false
+  ensemble_predictions: false
+  num_ensemble_models: 5
+  save_outputs: true
+  output_pred_dir: result/pred/graph_transform
+  output_metric_dir: result/metric/graph_transform
+device:
+  auto_detect: true
+  device_type: cuda
+  gpu_id: 0
+  use_amp: true
+  amp_backend: native
+logging:
+  level: INFO
+  log_dir: logs/graph_transform
+  log_file: training.log
+  use_tensorboard: true
+  tensorboard_log_dir: tensorboard/graph_transform
+  save_training_curves: true
+  save_loss_curves: true
+  plot_dir: null
+  log_interval: 10
+  save_graph_interval: 50
+experiment:
+  name: graph_transform_binary_bond
+  version: v1.0
+  description: scan_num vs rt 五折对比(rt 组, scale=0.01)
+  seed: 42
+  deterministic: false
+  benchmark: true
+ablation:
+  tag: rt_env
+  base_experiment_name: null
+  use_sequence_graph: false
+  use_hybrid_graph: false
+  disable_global_node: false
+  gcn_only: false
+  gat_only: false
+  no_message_passing: false
+  no_edge_attr: false
+  no_state_env: false
+  rebuild_cache: true
+advanced:
+  use_ensemble: false
+  ensemble_methods:
+  - voting
+  - averaging
+  - stacking
+  hyperparameter_search: false
+  search_method: grid
+  distributed: false
+  backend: nccl
+  quantization: false
+  quantization_method: dynamic
+  distillation: false
+  teacher_model_path: null
+  distillation_alpha: 0.5
+  distillation_temperature: 4.0
+performance:
+  gradient_checkpointing: false
+  use_efficient_attention: false
+  max_memory_usage: 8GB
+  compile_model: false
+  use_torch_compile: false
+  prefetch_factor: 2
+  persistent_workers: false
+debug:
+  debug_mode: false
+  check_gradients: false
+  check_nan_inf: true
+  log_grad_norm: true
+  save_nonfinite_batch: true
+  diagnostic_dir: logs/graph_transform/diagnostics
+  force_gc_on_epoch_end: true
+  force_gc_on_eval_end: true
+  empty_cache_on_epoch_end: true
+  save_attention_weights: false
+  save_graph_structures: false
+  visualize_predictions: false
+  profile_memory: false
+  profile_time: false
