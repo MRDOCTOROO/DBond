@@ -86,6 +86,10 @@ ALL_SWITCHES = [
     "use_sequence_graph", "use_hybrid_graph", "disable_global_node",
     "gcn_only", "gat_only",
     "no_message_passing", "no_edge_attr", "no_state_env",
+    # Feature-group progressive addition（建议改用 run_feature_group_ablation.py 调度，
+    # 因为本脚本下方会强制把 GCN/GAT 改成 0/5，与 feature group 实验的 3GCN+2GAT 架构冲突）
+    "baseline_no_state_env", "state_charge_only", "state_mass_intensity_only",
+    "env_nce_only", "env_scan_num_only",
 ]
 
 # 强制重建 ablation 段：所有开关置 false，再开目标

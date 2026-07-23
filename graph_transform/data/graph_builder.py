@@ -53,6 +53,13 @@ class GraphBuilder:
         # 使 state/env 消融在三处使用点（节点级 / 全局节点 / 边级）同时生效。
         self.use_state_features = _get_config_value(config, 'use_state_features', True)
         self.use_env_features = _get_config_value(config, 'use_env_features', True)
+        # Feature-group progressive addition 的 per-feature mask（与 NodeEncoder 同源 config）。
+        # state 顺序 [charge, pep_mass, intensity]，env 顺序 [nce, scan_num]。
+        # 与 use_*_features 配合：整组关闭时 _create_edge_features 已走全 0 分支，mask 不再生效。
+        _state_mask = _get_config_value(config, 'state_feature_mask', [True, True, True])
+        _env_mask = _get_config_value(config, 'env_feature_mask', [True, True])
+        self.state_feature_mask = [bool(m) for m in _state_mask]
+        self.env_feature_mask = [bool(m) for m in _env_mask]
         self._distance_min_scale = 0.8
         self._edge_cache = {}
 
@@ -340,23 +347,27 @@ class GraphBuilder:
         base_features = torch.stack([edge_types_f, edge_distances_f, inv_distance], dim=1)
         # state/env 消融：与 NodeEncoder / global_node_proj 一致，关闭时置零，
         # 使 charge/pep_mass/intensity/nce/scan_num 不再通过 edge_attr 漏入模型。
+        # 在整组开启时，进一步按 state_feature_mask / env_feature_mask 做子组级屏蔽
+        # （feature-group progressive addition：逐组保留，其余位置置 0）。
         if self.use_state_features:
+            sm = self.state_feature_mask
             state_vals = [
-                sample_features.get('charge', 0.0) * 0.1,
-                sample_features.get('pep_mass', 0.0) / 2000.0,
-                math.log1p(max(sample_features.get('intensity', 0.0), 0.0)) / 20.0,
+                (sample_features.get('charge', 0.0) * 0.1) if sm[0] else 0.0,
+                (sample_features.get('pep_mass', 0.0) / 2000.0) if sm[1] else 0.0,
+                (math.log1p(max(sample_features.get('intensity', 0.0), 0.0)) / 20.0) if sm[2] else 0.0,
             ]
         else:
             state_vals = [0.0, 0.0, 0.0]
         if self.use_env_features:
+            em = self.env_feature_mask
             env_vals = [
-                sample_features.get('nce', 0.0) * 0.01,
-                self._normalize_secondary_env_feature(
+                (sample_features.get('nce', 0.0) * 0.01) if em[0] else 0.0,
+                (self._normalize_secondary_env_feature(
                     sample_features.get(
                         self.env_feature_name,
                         sample_features.get('rt', 0.0),
                     )
-                ),
+                )) if em[1] else 0.0,
             ]
         else:
             env_vals = [0.0, 0.0]

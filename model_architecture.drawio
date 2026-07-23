@@ -1,6 +1,6 @@
 <mxfile host="app.diagrams.net" agent="Draw.io">
   <diagram id="model-arch" name="Model Architecture">
-    <mxGraphModel dx="2252" dy="1660" grid="0" gridSize="20" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1800" pageHeight="900" math="0" shadow="0">
+    <mxGraphModel dx="1501" dy="1355" grid="0" gridSize="20" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1800" pageHeight="900" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -205,8 +205,8 @@
         <mxCell id="ENC_box" parent="1" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#7F7F7F;fillColor=#F2F2F2;strokeWidth=1.5;" value="" vertex="1">
           <mxGeometry height="347" width="350" x="880" y="100" as="geometry" />
         </mxCell>
-        <mxCell id="ENC_title" parent="1" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=15;fontFamily=Helvetica;" value="&lt;b&gt;Graph Transformer Encoder&lt;/b&gt;" vertex="1">
-          <mxGeometry height="30" width="230" x="943" y="-25" as="geometry" />
+        <mxCell id="ENC_title" parent="1" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=15;fontFamily=Helvetica;" value="&lt;b&gt;Graph Neural Encoder&lt;/b&gt;" vertex="1">
+          <mxGeometry height="30" width="177" x="970" y="-25" as="geometry" />
         </mxCell>
         <mxCell id="ENC_glob_line" edge="1" parent="1" style="endArrow=classic;startArrow=none;strokeColor=#60497A;strokeWidth=1.5;dashed=1;dashPattern=6 3;startFill=0;endFill=1;" target="ENC_gcn_box" value="">
           <mxGeometry relative="1" width="50" as="geometry">

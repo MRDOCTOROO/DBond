@@ -45,7 +45,28 @@ class NodeEncoder(nn.Module):
         self.use_physicochemical_features = getattr(config, 'use_physicochemical_features', True)
         self.use_state_features = getattr(config, 'use_state_features', True)
         self.use_env_features = getattr(config, 'use_env_features', True)
-        
+        # Feature-group progressive addition 的 per-feature mask。
+        # state 顺序固定 [charge, pep_mass, intensity]，env 顺序固定 [nce, scan_num]。
+        # mask 与 use_state_features/use_env_features 是两套独立机制：
+        #   - use_*_features：整组开关（NodeEncoder.forward 里走 new_zeros 全清零路径）
+        #   - state/env_feature_mask：子组级开关（在 _encode_state/_encode_environmental 归一化后按位置乘）
+        # 当 use_*_features=False 时整组路径已被 new_zeros 覆盖，mask 不再生效（符合预期）。
+        state_mask = getattr(config, 'state_feature_mask', [True, True, True])
+        env_mask = getattr(config, 'env_feature_mask', [True, True])
+        # 长度对齐 num_state_features / num_env_features，缺失按 True 补齐（保保守：默认全开）。
+        state_mask = list(state_mask) + [True] * (config.num_state_features - len(state_mask))
+        env_mask = list(env_mask) + [True] * (config.num_env_features - len(env_mask))
+        self.register_buffer(
+            'state_feature_mask',
+            torch.tensor(state_mask[:config.num_state_features], dtype=torch.float32),
+            persistent=False,
+        )
+        self.register_buffer(
+            'env_feature_mask',
+            torch.tensor(env_mask[:config.num_env_features], dtype=torch.float32),
+            persistent=False,
+        )
+
         # 嵌入层
         self.aa_embedding = nn.Embedding(
             self.vocab_size, 
@@ -230,6 +251,9 @@ class NodeEncoder(nn.Module):
         pep_mass = state_vars[:, 1] / 2000.0
         intensity = torch.log1p(torch.clamp_min(state_vars[:, 2], 0.0)) / 20.0
         normalized = torch.stack([charge, pep_mass, intensity], dim=1)
+        # Feature-group progressive addition：按 state_feature_mask 屏蔽不需要的子组。
+        # 维度 [3] 广播到 [batch,3]，被屏蔽的位置归一化后置 0（等价于该特征不输入模型）。
+        normalized = normalized * self.state_feature_mask.to(normalized.device)
         return torch.nan_to_num(normalized, nan=0.0, posinf=10.0, neginf=-10.0)
 
     def _encode_environmental(self, batch_data: Dict, device: torch.device) -> torch.Tensor:
@@ -246,6 +270,8 @@ class NodeEncoder(nn.Module):
         else:
             secondary_env = env_vars[:, 1] * self.env_feature_scale
         normalized = torch.stack([nce, secondary_env], dim=1)
+        # Feature-group progressive addition：按 env_feature_mask 屏蔽不需要的子组。
+        normalized = normalized * self.env_feature_mask.to(normalized.device)
         return torch.nan_to_num(normalized, nan=0.0, posinf=10.0, neginf=-10.0)
 
     def _get_batch_device(self, batch_data: Dict) -> torch.device:

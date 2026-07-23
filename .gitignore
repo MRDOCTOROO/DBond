@@ -60,3 +60,12 @@ nul
 AGENTS.md
 .zcode/*
 *.drawio
+
+# Feature-group progressive addition 消融实验产物
+# 训练 checkpoint / 5 折产物 / 日志 / 图缓存（权重由 *.pt 覆盖，这里补非 .pt 的派生文件）
+checkpoints/graph_transform/feature_group_ablation/
+logs/graph_transform/feature_group_ablation/
+tensorboard/graph_transform/feature_group_ablation/
+result/pred/graph_transform/feature_group_ablation/
+# 对比分析结果默认放 result/metric/.../feature_group_comparison/，CSV 通常希望保留，故不忽略
+# 但生成的 PDF 图表由 *.pdf 规则决定（当前未忽略 *.pdf，如需忽略可显式加 result/metric/graph_transform/feature_group_comparison/*.pdf）

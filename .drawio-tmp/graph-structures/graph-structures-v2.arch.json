@@ -1,0 +1,700 @@
+{
+  "version": 1,
+  "title": "Graph Structures for Peptide Bond Prediction",
+  "type": "academic-diagram",
+  "source": "replicated",
+  "profile": "academic-paper",
+  "theme": "academic-color",
+  "layout": "horizontal",
+  "counts": {
+    "nodes": 71,
+    "edges": 34,
+    "modules": 5
+  },
+  "nodes": [
+    {
+      "id": "v1_a",
+      "label": "v₁",
+      "type": "user",
+      "module": "panel_a"
+    },
+    {
+      "id": "v2_a",
+      "label": "v₂",
+      "type": "user",
+      "module": "panel_a"
+    },
+    {
+      "id": "v3_a",
+      "label": "v₃",
+      "type": "user",
+      "module": "panel_a"
+    },
+    {
+      "id": "v4_a",
+      "label": "v₄",
+      "type": "user",
+      "module": "panel_a"
+    },
+    {
+      "id": "dots_a",
+      "label": "···",
+      "type": "text",
+      "module": "panel_a"
+    },
+    {
+      "id": "vLm1_a",
+      "label": "v_{L-1}",
+      "type": "user",
+      "module": "panel_a"
+    },
+    {
+      "id": "vL_a",
+      "label": "v_L",
+      "type": "user",
+      "module": "panel_a"
+    },
+    {
+      "id": "text_a_1",
+      "label": "Only adjacent residues connected",
+      "type": "text",
+      "module": "panel_a"
+    },
+    {
+      "id": "text_a_2",
+      "label": "Edges: type 0 (sequence)",
+      "type": "text",
+      "module": "panel_a"
+    },
+    {
+      "id": "v1_b",
+      "label": "v₁",
+      "type": "user",
+      "module": "panel_b"
+    },
+    {
+      "id": "v2_b",
+      "label": "v₂",
+      "type": "user",
+      "module": "panel_b"
+    },
+    {
+      "id": "v3_b",
+      "label": "v₃",
+      "type": "user",
+      "module": "panel_b"
+    },
+    {
+      "id": "v4_b",
+      "label": "v₄",
+      "type": "user",
+      "module": "panel_b"
+    },
+    {
+      "id": "dots_b",
+      "label": "···",
+      "type": "text",
+      "module": "panel_b"
+    },
+    {
+      "id": "vLm1_b",
+      "label": "v_{L-1}",
+      "type": "user",
+      "module": "panel_b"
+    },
+    {
+      "id": "vL_b",
+      "label": "v_L",
+      "type": "user",
+      "module": "panel_b"
+    },
+    {
+      "id": "text_b_1",
+      "label": "Connect residues with folding-adjusted",
+      "type": "text",
+      "module": "panel_b"
+    },
+    {
+      "id": "text_b_2",
+      "label": "distance d_{ij} ≤ d_max",
+      "type": "text",
+      "module": "panel_b"
+    },
+    {
+      "id": "legend_b_1",
+      "label": "— type 1 (short): d_{ij} ≤ 2",
+      "type": "text",
+      "module": "panel_b"
+    },
+    {
+      "id": "legend_b_2",
+      "label": "- - - type 2 (long): d_{ij} > 2",
+      "type": "text",
+      "module": "panel_b"
+    },
+    {
+      "id": "v1_c",
+      "label": "v₁",
+      "type": "user",
+      "module": "panel_c"
+    },
+    {
+      "id": "v2_c",
+      "label": "v₂",
+      "type": "user",
+      "module": "panel_c"
+    },
+    {
+      "id": "v3_c",
+      "label": "v₃",
+      "type": "user",
+      "module": "panel_c"
+    },
+    {
+      "id": "v4_c",
+      "label": "v₄",
+      "type": "user",
+      "module": "panel_c"
+    },
+    {
+      "id": "dots_c",
+      "label": "···",
+      "type": "text",
+      "module": "panel_c"
+    },
+    {
+      "id": "vLm1_c",
+      "label": "v_{L-1}",
+      "type": "user",
+      "module": "panel_c"
+    },
+    {
+      "id": "vL_c",
+      "label": "v_L",
+      "type": "user",
+      "module": "panel_c"
+    },
+    {
+      "id": "text_c_1",
+      "label": "Distance edges + long-range edges",
+      "type": "text",
+      "module": "panel_c"
+    },
+    {
+      "id": "legend_c_1",
+      "label": "— type 1 (short): d_{ij} ≤ 2",
+      "type": "text",
+      "module": "panel_c"
+    },
+    {
+      "id": "legend_c_2",
+      "label": "- - - type 2 (long): d_{ij} > 2",
+      "type": "text",
+      "module": "panel_c"
+    },
+    {
+      "id": "legend_c_3",
+      "label": "- · - type 3 (long-range): |i-j| = kΔ",
+      "type": "text",
+      "module": "panel_c"
+    },
+    {
+      "id": "vg",
+      "label": "v_g",
+      "type": "user",
+      "module": "panel_d"
+    },
+    {
+      "id": "v1_d",
+      "label": "v₁",
+      "type": "user",
+      "module": "panel_d"
+    },
+    {
+      "id": "v2_d",
+      "label": "v₂",
+      "type": "user",
+      "module": "panel_d"
+    },
+    {
+      "id": "v3_d",
+      "label": "v₃",
+      "type": "user",
+      "module": "panel_d"
+    },
+    {
+      "id": "v4_d",
+      "label": "v₄",
+      "type": "user",
+      "module": "panel_d"
+    },
+    {
+      "id": "dots_d",
+      "label": "···",
+      "type": "text",
+      "module": "panel_d"
+    },
+    {
+      "id": "vLm1_d",
+      "label": "v_{L-1}",
+      "type": "user",
+      "module": "panel_d"
+    },
+    {
+      "id": "vL_d",
+      "label": "v_L",
+      "type": "user",
+      "module": "panel_d"
+    },
+    {
+      "id": "text_d_1",
+      "label": "Connected to all residues (type 4: global)",
+      "type": "text",
+      "module": "panel_d"
+    },
+    {
+      "id": "formula_title",
+      "label": "Global node representation:",
+      "type": "text",
+      "module": "panel_d"
+    },
+    {
+      "id": "formula_box",
+      "label": "$$\\mathbf{h}_g^{(0)} = \\mathbf{e}_{\\text{learn}} + \\text{MLP}_g\\left([\\mathbf{h}^{\\text{state}}; \\mathbf{h}^{\\text{env}}]\\right)$$",
+      "type": "formula",
+      "module": "panel_d"
+    },
+    {
+      "id": "where_title",
+      "label": "where",
+      "type": "text",
+      "module": "panel_d"
+    },
+    {
+      "id": "def_elearn",
+      "label": "• e_learn : learnable global embedding",
+      "type": "text",
+      "module": "panel_d"
+    },
+    {
+      "id": "def_hstate",
+      "label": "• h_state : encoded precursor ion state",
+      "type": "text",
+      "module": "panel_d"
+    },
+    {
+      "id": "def_henv",
+      "label": "• h_env : encoded experimental environment",
+      "type": "text",
+      "module": "panel_d"
+    },
+    {
+      "id": "def_mlp",
+      "label": "• MLP_g(·) : MLP with ReLU and Dropout",
+      "type": "text",
+      "module": "panel_d"
+    },
+    {
+      "id": "hdr_type",
+      "label": "Type",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "hdr_name",
+      "label": "Name",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "hdr_visual",
+      "label": "Visual",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "hdr_def",
+      "label": "Definition",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row0_type",
+      "label": "0",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row0_name",
+      "label": "sequence\n(backbone)",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row0_visual",
+      "label": "━━━━━━━━━━━━",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row0_def",
+      "label": "Adjacent residues\n(|i − j| = 1)\n(Sequence Graph only)",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row1_type",
+      "label": "1",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row1_name",
+      "label": "distance\n(short)",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row1_visual",
+      "label": "━━━━━━━━━━━━",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row1_def",
+      "label": "Folding-adjusted distance\nd_{ij} ≤ 2",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row2_type",
+      "label": "2",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row2_name",
+      "label": "distance\n(long)",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row2_visual",
+      "label": "- - - - - - - -",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row2_def",
+      "label": "Folding-adjusted distance\nd_{ij} > 2 and ≤ d_max",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row3_type",
+      "label": "3",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row3_name",
+      "label": "long-range",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row3_visual",
+      "label": "━ ━ ━ ━ ━ ━ ━",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row3_def",
+      "label": "|i − j| = kΔ\n(k = 1, . . . , K)",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row4_type",
+      "label": "4",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row4_name",
+      "label": "global",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row4_visual",
+      "label": "· · · · · · · ·",
+      "type": "text",
+      "module": "panel_e"
+    },
+    {
+      "id": "row4_def",
+      "label": "Connected to global node v_g\n(All graphs)",
+      "type": "text",
+      "module": "panel_e"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1",
+      "from": "v1_a",
+      "to": "v2_a",
+      "type": "primary"
+    },
+    {
+      "id": "edge-2",
+      "from": "v2_a",
+      "to": "v3_a",
+      "type": "primary"
+    },
+    {
+      "id": "edge-3",
+      "from": "v3_a",
+      "to": "v4_a",
+      "type": "primary"
+    },
+    {
+      "id": "edge-4",
+      "from": "vLm1_a",
+      "to": "vL_a",
+      "type": "primary"
+    },
+    {
+      "id": "edge-5",
+      "from": "v1_b",
+      "to": "v2_b",
+      "type": "primary"
+    },
+    {
+      "id": "edge-6",
+      "from": "v2_b",
+      "to": "v3_b",
+      "type": "primary"
+    },
+    {
+      "id": "edge-7",
+      "from": "v3_b",
+      "to": "v4_b",
+      "type": "primary"
+    },
+    {
+      "id": "edge-8",
+      "from": "vLm1_b",
+      "to": "vL_b",
+      "type": "primary"
+    },
+    {
+      "id": "edge-9",
+      "from": "v1_b",
+      "to": "v3_b",
+      "type": "primary"
+    },
+    {
+      "id": "edge-10",
+      "from": "v2_b",
+      "to": "v4_b",
+      "type": "primary"
+    },
+    {
+      "id": "edge-11",
+      "from": "v1_b",
+      "to": "v4_b",
+      "type": "primary"
+    },
+    {
+      "id": "edge-12",
+      "from": "v3_b",
+      "to": "vLm1_b",
+      "type": "primary"
+    },
+    {
+      "id": "edge-13",
+      "from": "v4_b",
+      "to": "vL_b",
+      "type": "primary"
+    },
+    {
+      "id": "edge-14",
+      "from": "v1_c",
+      "to": "v2_c",
+      "type": "primary"
+    },
+    {
+      "id": "edge-15",
+      "from": "v2_c",
+      "to": "v3_c",
+      "type": "primary"
+    },
+    {
+      "id": "edge-16",
+      "from": "v3_c",
+      "to": "v4_c",
+      "type": "primary"
+    },
+    {
+      "id": "edge-17",
+      "from": "vLm1_c",
+      "to": "vL_c",
+      "type": "primary"
+    },
+    {
+      "id": "edge-18",
+      "from": "v1_c",
+      "to": "v3_c",
+      "type": "primary"
+    },
+    {
+      "id": "edge-19",
+      "from": "v2_c",
+      "to": "v4_c",
+      "type": "primary"
+    },
+    {
+      "id": "edge-20",
+      "from": "v1_c",
+      "to": "v4_c",
+      "type": "primary"
+    },
+    {
+      "id": "edge-21",
+      "from": "v3_c",
+      "to": "vLm1_c",
+      "type": "primary"
+    },
+    {
+      "id": "edge-22",
+      "from": "v4_c",
+      "to": "vL_c",
+      "type": "primary"
+    },
+    {
+      "id": "edge-23",
+      "from": "v1_c",
+      "to": "vLm1_c",
+      "type": "primary"
+    },
+    {
+      "id": "edge-24",
+      "from": "v2_c",
+      "to": "vL_c",
+      "type": "primary"
+    },
+    {
+      "id": "edge-25",
+      "from": "vg",
+      "to": "v1_d",
+      "type": "primary"
+    },
+    {
+      "id": "edge-26",
+      "from": "vg",
+      "to": "v2_d",
+      "type": "primary"
+    },
+    {
+      "id": "edge-27",
+      "from": "vg",
+      "to": "v3_d",
+      "type": "primary"
+    },
+    {
+      "id": "edge-28",
+      "from": "vg",
+      "to": "v4_d",
+      "type": "primary"
+    },
+    {
+      "id": "edge-29",
+      "from": "vg",
+      "to": "vLm1_d",
+      "type": "primary"
+    },
+    {
+      "id": "edge-30",
+      "from": "vg",
+      "to": "vL_d",
+      "type": "primary"
+    },
+    {
+      "id": "edge-31",
+      "from": "v1_d",
+      "to": "v2_d",
+      "type": "primary"
+    },
+    {
+      "id": "edge-32",
+      "from": "v2_d",
+      "to": "v3_d",
+      "type": "primary"
+    },
+    {
+      "id": "edge-33",
+      "from": "v3_d",
+      "to": "v4_d",
+      "type": "primary"
+    },
+    {
+      "id": "edge-34",
+      "from": "vLm1_d",
+      "to": "vL_d",
+      "type": "primary"
+    }
+  ],
+  "modules": [
+    {
+      "id": "panel_a",
+      "label": "(a) Sequence Graph\n(d_max = 1)"
+    },
+    {
+      "id": "panel_b",
+      "label": "(b) Distance Graph\n(d_max > 1)"
+    },
+    {
+      "id": "panel_c",
+      "label": "(c) Hybrid Graph\n(Distance + Long-range)"
+    },
+    {
+      "id": "panel_d",
+      "label": "(d) Global Node (for all graphs)"
+    },
+    {
+      "id": "panel_e",
+      "label": "(e) Edge Type Legend"
+    }
+  ],
+  "replication": {
+    "colorMode": "preserve-original",
+    "background": "#FFFFFF",
+    "palette": [
+      {
+        "hex": "#3B82F6",
+        "role": "type 0 edges (sequence backbone)",
+        "appliesTo": "edges",
+        "confidence": "high"
+      },
+      {
+        "hex": "#22C55E",
+        "role": "type 1 edges (short distance)",
+        "appliesTo": "edges",
+        "confidence": "high"
+      },
+      {
+        "hex": "#F97316",
+        "role": "type 2 edges (long distance)",
+        "appliesTo": "edges",
+        "confidence": "high"
+      },
+      {
+        "hex": "#A855F7",
+        "role": "type 3 and 4 edges (long-range and global)",
+        "appliesTo": "edges",
+        "confidence": "high"
+      }
+    ]
+  }
+}

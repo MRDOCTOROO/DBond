@@ -1,0 +1,1339 @@
+meta:
+  profile: academic-paper
+  figureType: architecture
+  source: replicated
+  theme: academic-color
+  title: Graph Structures for Peptide Bond Prediction
+  description: Graph construction strategies for peptide sequence representation
+  canvas: 1800x900
+  replication:
+    colorMode: preserve-original
+    background: '#FFFFFF'
+    palette:
+      - hex: '#3B82F6'
+        role: type 0 edges (sequence backbone)
+        appliesTo: edges
+        confidence: high
+      - hex: '#22C55E'
+        role: type 1 edges (short distance)
+        appliesTo: edges
+        confidence: high
+      - hex: '#F97316'
+        role: type 2 edges (long distance)
+        appliesTo: edges
+        confidence: high
+      - hex: '#A855F7'
+        role: type 3 and 4 edges (long-range and global)
+        appliesTo: edges
+        confidence: high
+modules:
+  - id: panel_a
+    label: |-
+      (a) Sequence Graph
+      (d_max = 1)
+    style:
+      fillColor: '#F0F9FF'
+      strokeColor: '#BAE6FD'
+      rounded: 1
+      arcSize: 6
+      strokeDasharray: 8 4
+  - id: panel_b
+    label: |-
+      (b) Distance Graph
+      (d_max > 1)
+    style:
+      fillColor: '#F0FDF4'
+      strokeColor: '#BBF7D0'
+      rounded: 1
+      arcSize: 6
+      strokeDasharray: 8 4
+  - id: panel_c
+    label: |-
+      (c) Hybrid Graph
+      (Distance + Long-range)
+    style:
+      fillColor: '#F0FDF4'
+      strokeColor: '#BBF7D0'
+      rounded: 1
+      arcSize: 6
+      strokeDasharray: 8 4
+  - id: panel_d
+    label: (d) Global Node (for all graphs)
+    style:
+      fillColor: '#F5F3FF'
+      strokeColor: '#DDD6FE'
+      rounded: 1
+      arcSize: 6
+      strokeDasharray: 8 4
+  - id: panel_e
+    label: (e) Edge Type Legend
+    style:
+      fillColor: '#F5F3FF'
+      strokeColor: '#DDD6FE'
+      rounded: 1
+      arcSize: 6
+      strokeDasharray: 8 4
+nodes:
+  - id: v1_a
+    label: v₁
+    type: user
+    module: panel_a
+    bounds:
+      x: 60
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: v2_a
+    label: v₂
+    type: user
+    module: panel_a
+    bounds:
+      x: 130
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: v3_a
+    label: v₃
+    type: user
+    module: panel_a
+    bounds:
+      x: 200
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: v4_a
+    label: v₄
+    type: user
+    module: panel_a
+    bounds:
+      x: 270
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: dots_a
+    label: ···
+    type: text
+    module: panel_a
+    bounds:
+      x: 340
+      'y': 150
+      width: 40
+      height: 24
+    style:
+      fontSize: 20
+      fontFamily: Times New Roman
+      align: center
+  - id: vLm1_a
+    label: v_{L-1}
+    type: user
+    module: panel_a
+    bounds:
+      x: 410
+      'y': 140
+      width: 56
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: vL_a
+    label: v_L
+    type: user
+    module: panel_a
+    bounds:
+      x: 496
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: text_a_1
+    label: Only adjacent residues connected
+    type: text
+    module: panel_a
+    bounds:
+      x: 60
+      'y': 210
+      width: 280
+      height: 24
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      align: left
+  - id: text_a_2
+    label: 'Edges: type 0 (sequence)'
+    type: text
+    module: panel_a
+    bounds:
+      x: 60
+      'y': 235
+      width: 200
+      height: 24
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      align: left
+  - id: v1_b
+    label: v₁
+    type: user
+    module: panel_b
+    bounds:
+      x: 640
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: v2_b
+    label: v₂
+    type: user
+    module: panel_b
+    bounds:
+      x: 710
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: v3_b
+    label: v₃
+    type: user
+    module: panel_b
+    bounds:
+      x: 780
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: v4_b
+    label: v₄
+    type: user
+    module: panel_b
+    bounds:
+      x: 850
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: dots_b
+    label: ···
+    type: text
+    module: panel_b
+    bounds:
+      x: 920
+      'y': 150
+      width: 40
+      height: 24
+    style:
+      fontSize: 20
+      fontFamily: Times New Roman
+      align: center
+  - id: vLm1_b
+    label: v_{L-1}
+    type: user
+    module: panel_b
+    bounds:
+      x: 990
+      'y': 140
+      width: 56
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: vL_b
+    label: v_L
+    type: user
+    module: panel_b
+    bounds:
+      x: 1076
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: text_b_1
+    label: Connect residues with folding-adjusted
+    type: text
+    module: panel_b
+    bounds:
+      x: 640
+      'y': 210
+      width: 320
+      height: 24
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      align: left
+  - id: text_b_2
+    label: distance d_{ij} ≤ d_max
+    type: text
+    module: panel_b
+    bounds:
+      x: 640
+      'y': 235
+      width: 200
+      height: 24
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      align: left
+  - id: legend_b_1
+    label: '— type 1 (short): d_{ij} ≤ 2'
+    type: text
+    module: panel_b
+    bounds:
+      x: 640
+      'y': 270
+      width: 220
+      height: 20
+    style:
+      fontSize: 12
+      fontFamily: Times New Roman
+      align: left
+      fontColor: '#22C55E'
+  - id: legend_b_2
+    label: '- - - type 2 (long): d_{ij} > 2'
+    type: text
+    module: panel_b
+    bounds:
+      x: 640
+      'y': 290
+      width: 220
+      height: 20
+    style:
+      fontSize: 12
+      fontFamily: Times New Roman
+      align: left
+      fontColor: '#F97316'
+  - id: v1_c
+    label: v₁
+    type: user
+    module: panel_c
+    bounds:
+      x: 1220
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: v2_c
+    label: v₂
+    type: user
+    module: panel_c
+    bounds:
+      x: 1290
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: v3_c
+    label: v₃
+    type: user
+    module: panel_c
+    bounds:
+      x: 1360
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: v4_c
+    label: v₄
+    type: user
+    module: panel_c
+    bounds:
+      x: 1430
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: dots_c
+    label: ···
+    type: text
+    module: panel_c
+    bounds:
+      x: 1500
+      'y': 150
+      width: 40
+      height: 24
+    style:
+      fontSize: 20
+      fontFamily: Times New Roman
+      align: center
+  - id: vLm1_c
+    label: v_{L-1}
+    type: user
+    module: panel_c
+    bounds:
+      x: 1570
+      'y': 140
+      width: 56
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: vL_c
+    label: v_L
+    type: user
+    module: panel_c
+    bounds:
+      x: 1656
+      'y': 140
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: text_c_1
+    label: Distance edges + long-range edges
+    type: text
+    module: panel_c
+    bounds:
+      x: 1220
+      'y': 210
+      width: 280
+      height: 24
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      align: left
+  - id: legend_c_1
+    label: '— type 1 (short): d_{ij} ≤ 2'
+    type: text
+    module: panel_c
+    bounds:
+      x: 1220
+      'y': 245
+      width: 220
+      height: 20
+    style:
+      fontSize: 12
+      fontFamily: Times New Roman
+      align: left
+      fontColor: '#22C55E'
+  - id: legend_c_2
+    label: '- - - type 2 (long): d_{ij} > 2'
+    type: text
+    module: panel_c
+    bounds:
+      x: 1220
+      'y': 265
+      width: 220
+      height: 20
+    style:
+      fontSize: 12
+      fontFamily: Times New Roman
+      align: left
+      fontColor: '#F97316'
+  - id: legend_c_3
+    label: '- · - type 3 (long-range): |i-j| = kΔ'
+    type: text
+    module: panel_c
+    bounds:
+      x: 1220
+      'y': 285
+      width: 280
+      height: 20
+    style:
+      fontSize: 12
+      fontFamily: Times New Roman
+      align: left
+      fontColor: '#A855F7'
+  - id: vg
+    label: v_g
+    type: user
+    module: panel_d
+    bounds:
+      x: 200
+      'y': 400
+      width: 48
+      height: 48
+    style:
+      fillColor: '#E9D5FF'
+      strokeColor: '#A855F7'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: v1_d
+    label: v₁
+    type: user
+    module: panel_d
+    bounds:
+      x: 60
+      'y': 560
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: v2_d
+    label: v₂
+    type: user
+    module: panel_d
+    bounds:
+      x: 130
+      'y': 560
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: v3_d
+    label: v₃
+    type: user
+    module: panel_d
+    bounds:
+      x: 200
+      'y': 560
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: v4_d
+    label: v₄
+    type: user
+    module: panel_d
+    bounds:
+      x: 270
+      'y': 560
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: dots_d
+    label: ···
+    type: text
+    module: panel_d
+    bounds:
+      x: 340
+      'y': 570
+      width: 40
+      height: 24
+    style:
+      fontSize: 20
+      fontFamily: Times New Roman
+      align: center
+  - id: vLm1_d
+    label: v_{L-1}
+    type: user
+    module: panel_d
+    bounds:
+      x: 410
+      'y': 560
+      width: 56
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: vL_d
+    label: v_L
+    type: user
+    module: panel_d
+    bounds:
+      x: 496
+      'y': 560
+      width: 44
+      height: 44
+    style:
+      fillColor: '#FFFFFF'
+      strokeColor: '#1E3A5F'
+      strokeWidth: 2
+      fontSize: 14
+      fontFamily: Times New Roman
+  - id: text_d_1
+    label: 'Connected to all residues (type 4: global)'
+    type: text
+    module: panel_d
+    bounds:
+      x: 60
+      'y': 620
+      width: 320
+      height: 24
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      align: left
+  - id: formula_title
+    label: 'Global node representation:'
+    type: text
+    module: panel_d
+    bounds:
+      x: 580
+      'y': 400
+      width: 220
+      height: 28
+    style:
+      fontSize: 16
+      fontFamily: Times New Roman
+      fontWeight: bold
+      align: left
+  - id: formula_box
+    label: >-
+      $$\mathbf{h}_g^{(0)} = \mathbf{e}_{\text{learn}} + \text{MLP}_g\left([\mathbf{h}^{\text{state}};
+      \mathbf{h}^{\text{env}}]\right)$$
+    type: formula
+    module: panel_d
+    bounds:
+      x: 580
+      'y': 440
+      width: 420
+      height: 70
+    style:
+      fontSize: 18
+      fontFamily: Times New Roman
+      align: left
+      fillColor: '#FAFAFA'
+      strokeColor: '#E5E7EB'
+      rounded: 1
+  - id: where_title
+    label: where
+    type: text
+    module: panel_d
+    bounds:
+      x: 580
+      'y': 520
+      width: 60
+      height: 24
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      align: left
+  - id: def_elearn
+    label: '• e_learn : learnable global embedding'
+    type: text
+    module: panel_d
+    bounds:
+      x: 580
+      'y': 545
+      width: 280
+      height: 20
+    style:
+      fontSize: 13
+      fontFamily: Times New Roman
+      align: left
+  - id: def_hstate
+    label: '• h_state : encoded precursor ion state'
+    type: text
+    module: panel_d
+    bounds:
+      x: 580
+      'y': 565
+      width: 280
+      height: 20
+    style:
+      fontSize: 13
+      fontFamily: Times New Roman
+      align: left
+  - id: def_henv
+    label: '• h_env : encoded experimental environment'
+    type: text
+    module: panel_d
+    bounds:
+      x: 580
+      'y': 585
+      width: 300
+      height: 20
+    style:
+      fontSize: 13
+      fontFamily: Times New Roman
+      align: left
+  - id: def_mlp
+    label: '• MLP_g(·) : MLP with ReLU and Dropout'
+    type: text
+    module: panel_d
+    bounds:
+      x: 580
+      'y': 605
+      width: 280
+      height: 20
+    style:
+      fontSize: 13
+      fontFamily: Times New Roman
+      align: left
+  - id: hdr_type
+    label: Type
+    type: text
+    module: panel_e
+    bounds:
+      x: 1020
+      'y': 380
+      width: 80
+      height: 32
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      fontWeight: bold
+      align: center
+      fillColor: '#E5E7EB'
+      strokeColor: '#9CA3AF'
+  - id: hdr_name
+    label: Name
+    type: text
+    module: panel_e
+    bounds:
+      x: 1100
+      'y': 380
+      width: 120
+      height: 32
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      fontWeight: bold
+      align: center
+      fillColor: '#E5E7EB'
+      strokeColor: '#9CA3AF'
+  - id: hdr_visual
+    label: Visual
+    type: text
+    module: panel_e
+    bounds:
+      x: 1220
+      'y': 380
+      width: 140
+      height: 32
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      fontWeight: bold
+      align: center
+      fillColor: '#E5E7EB'
+      strokeColor: '#9CA3AF'
+  - id: hdr_def
+    label: Definition
+    type: text
+    module: panel_e
+    bounds:
+      x: 1360
+      'y': 380
+      width: 320
+      height: 32
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      fontWeight: bold
+      align: center
+      fillColor: '#E5E7EB'
+      strokeColor: '#9CA3AF'
+  - id: row0_type
+    label: '0'
+    type: text
+    module: panel_e
+    bounds:
+      x: 1020
+      'y': 412
+      width: 80
+      height: 56
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row0_name
+    label: |-
+      sequence
+      (backbone)
+    type: text
+    module: panel_e
+    bounds:
+      x: 1100
+      'y': 412
+      width: 120
+      height: 56
+    style:
+      fontSize: 13
+      fontFamily: Times New Roman
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row0_visual
+    label: ━━━━━━━━━━━━
+    type: text
+    module: panel_e
+    bounds:
+      x: 1220
+      'y': 430
+      width: 140
+      height: 24
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      fontColor: '#3B82F6'
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row0_def
+    label: |-
+      Adjacent residues
+      (|i − j| = 1)
+      (Sequence Graph only)
+    type: text
+    module: panel_e
+    bounds:
+      x: 1360
+      'y': 412
+      width: 320
+      height: 56
+    style:
+      fontSize: 12
+      fontFamily: Times New Roman
+      align: left
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row1_type
+    label: '1'
+    type: text
+    module: panel_e
+    bounds:
+      x: 1020
+      'y': 468
+      width: 80
+      height: 56
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row1_name
+    label: |-
+      distance
+      (short)
+    type: text
+    module: panel_e
+    bounds:
+      x: 1100
+      'y': 468
+      width: 120
+      height: 56
+    style:
+      fontSize: 13
+      fontFamily: Times New Roman
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row1_visual
+    label: ━━━━━━━━━━━━
+    type: text
+    module: panel_e
+    bounds:
+      x: 1220
+      'y': 486
+      width: 140
+      height: 24
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      fontColor: '#22C55E'
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row1_def
+    label: |-
+      Folding-adjusted distance
+      d_{ij} ≤ 2
+    type: text
+    module: panel_e
+    bounds:
+      x: 1360
+      'y': 468
+      width: 320
+      height: 56
+    style:
+      fontSize: 12
+      fontFamily: Times New Roman
+      align: left
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row2_type
+    label: '2'
+    type: text
+    module: panel_e
+    bounds:
+      x: 1020
+      'y': 524
+      width: 80
+      height: 56
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row2_name
+    label: |-
+      distance
+      (long)
+    type: text
+    module: panel_e
+    bounds:
+      x: 1100
+      'y': 524
+      width: 120
+      height: 56
+    style:
+      fontSize: 13
+      fontFamily: Times New Roman
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row2_visual
+    label: '- - - - - - - -'
+    type: text
+    module: panel_e
+    bounds:
+      x: 1220
+      'y': 542
+      width: 140
+      height: 24
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      fontColor: '#F97316'
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row2_def
+    label: |-
+      Folding-adjusted distance
+      d_{ij} > 2 and ≤ d_max
+    type: text
+    module: panel_e
+    bounds:
+      x: 1360
+      'y': 524
+      width: 320
+      height: 56
+    style:
+      fontSize: 12
+      fontFamily: Times New Roman
+      align: left
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row3_type
+    label: '3'
+    type: text
+    module: panel_e
+    bounds:
+      x: 1020
+      'y': 580
+      width: 80
+      height: 56
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row3_name
+    label: long-range
+    type: text
+    module: panel_e
+    bounds:
+      x: 1100
+      'y': 580
+      width: 120
+      height: 56
+    style:
+      fontSize: 13
+      fontFamily: Times New Roman
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row3_visual
+    label: ━ ━ ━ ━ ━ ━ ━
+    type: text
+    module: panel_e
+    bounds:
+      x: 1220
+      'y': 598
+      width: 140
+      height: 24
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      fontColor: '#A855F7'
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row3_def
+    label: |-
+      |i − j| = kΔ
+      (k = 1, . . . , K)
+    type: text
+    module: panel_e
+    bounds:
+      x: 1360
+      'y': 580
+      width: 320
+      height: 56
+    style:
+      fontSize: 12
+      fontFamily: Times New Roman
+      align: left
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row4_type
+    label: '4'
+    type: text
+    module: panel_e
+    bounds:
+      x: 1020
+      'y': 636
+      width: 80
+      height: 56
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row4_name
+    label: global
+    type: text
+    module: panel_e
+    bounds:
+      x: 1100
+      'y': 636
+      width: 120
+      height: 56
+    style:
+      fontSize: 13
+      fontFamily: Times New Roman
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row4_visual
+    label: · · · · · · · ·
+    type: text
+    module: panel_e
+    bounds:
+      x: 1220
+      'y': 654
+      width: 140
+      height: 24
+    style:
+      fontSize: 14
+      fontFamily: Times New Roman
+      fontColor: '#A855F7'
+      align: center
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+  - id: row4_def
+    label: |-
+      Connected to global node v_g
+      (All graphs)
+    type: text
+    module: panel_e
+    bounds:
+      x: 1360
+      'y': 636
+      width: 320
+      height: 56
+    style:
+      fontSize: 12
+      fontFamily: Times New Roman
+      align: left
+      fillColor: '#FFFFFF'
+      strokeColor: '#D1D5DB'
+edges:
+  - from: v1_a
+    to: v2_a
+    style:
+      strokeColor: '#3B82F6'
+      strokeWidth: 2
+  - from: v2_a
+    to: v3_a
+    style:
+      strokeColor: '#3B82F6'
+      strokeWidth: 2
+  - from: v3_a
+    to: v4_a
+    style:
+      strokeColor: '#3B82F6'
+      strokeWidth: 2
+  - from: vLm1_a
+    to: vL_a
+    style:
+      strokeColor: '#3B82F6'
+      strokeWidth: 2
+  - from: v1_b
+    to: v2_b
+    style:
+      strokeColor: '#22C55E'
+      strokeWidth: 2
+  - from: v2_b
+    to: v3_b
+    style:
+      strokeColor: '#22C55E'
+      strokeWidth: 2
+  - from: v3_b
+    to: v4_b
+    style:
+      strokeColor: '#22C55E'
+      strokeWidth: 2
+  - from: vLm1_b
+    to: vL_b
+    style:
+      strokeColor: '#22C55E'
+      strokeWidth: 2
+  - from: v1_b
+    to: v3_b
+    style:
+      strokeColor: '#22C55E'
+      strokeWidth: 2
+      curved: 1
+  - from: v2_b
+    to: v4_b
+    style:
+      strokeColor: '#22C55E'
+      strokeWidth: 2
+      curved: 1
+  - from: v1_b
+    to: v4_b
+    style:
+      strokeColor: '#F97316'
+      strokeWidth: 2
+      dashed: true
+      dashPattern: 8 4
+      curved: 1
+  - from: v3_b
+    to: vLm1_b
+    style:
+      strokeColor: '#F97316'
+      strokeWidth: 2
+      dashed: true
+      dashPattern: 8 4
+      curved: 1
+  - from: v4_b
+    to: vL_b
+    style:
+      strokeColor: '#F97316'
+      strokeWidth: 2
+      dashed: true
+      dashPattern: 8 4
+      curved: 1
+  - from: v1_c
+    to: v2_c
+    style:
+      strokeColor: '#22C55E'
+      strokeWidth: 2
+  - from: v2_c
+    to: v3_c
+    style:
+      strokeColor: '#22C55E'
+      strokeWidth: 2
+  - from: v3_c
+    to: v4_c
+    style:
+      strokeColor: '#22C55E'
+      strokeWidth: 2
+  - from: vLm1_c
+    to: vL_c
+    style:
+      strokeColor: '#22C55E'
+      strokeWidth: 2
+  - from: v1_c
+    to: v3_c
+    style:
+      strokeColor: '#22C55E'
+      strokeWidth: 2
+      curved: 1
+  - from: v2_c
+    to: v4_c
+    style:
+      strokeColor: '#22C55E'
+      strokeWidth: 2
+      curved: 1
+  - from: v1_c
+    to: v4_c
+    style:
+      strokeColor: '#F97316'
+      strokeWidth: 2
+      dashed: true
+      dashPattern: 8 4
+      curved: 1
+  - from: v3_c
+    to: vLm1_c
+    style:
+      strokeColor: '#F97316'
+      strokeWidth: 2
+      dashed: true
+      dashPattern: 8 4
+      curved: 1
+  - from: v4_c
+    to: vL_c
+    style:
+      strokeColor: '#F97316'
+      strokeWidth: 2
+      dashed: true
+      dashPattern: 8 4
+      curved: 1
+  - from: v1_c
+    to: vLm1_c
+    style:
+      strokeColor: '#A855F7'
+      strokeWidth: 2
+      dashed: true
+      dashPattern: 12 4 4 4
+      curved: 1
+  - from: v2_c
+    to: vL_c
+    style:
+      strokeColor: '#A855F7'
+      strokeWidth: 2
+      dashed: true
+      dashPattern: 12 4 4 4
+      curved: 1
+  - from: vg
+    to: v1_d
+    style:
+      strokeColor: '#A855F7'
+      strokeWidth: 1.5
+      dotted: true
+  - from: vg
+    to: v2_d
+    style:
+      strokeColor: '#A855F7'
+      strokeWidth: 1.5
+      dotted: true
+  - from: vg
+    to: v3_d
+    style:
+      strokeColor: '#A855F7'
+      strokeWidth: 1.5
+      dotted: true
+  - from: vg
+    to: v4_d
+    style:
+      strokeColor: '#A855F7'
+      strokeWidth: 1.5
+      dotted: true
+  - from: vg
+    to: vLm1_d
+    style:
+      strokeColor: '#A855F7'
+      strokeWidth: 1.5
+      dotted: true
+  - from: vg
+    to: vL_d
+    style:
+      strokeColor: '#A855F7'
+      strokeWidth: 1.5
+      dotted: true
+  - from: v1_d
+    to: v2_d
+    style:
+      strokeColor: '#3B82F6'
+      strokeWidth: 2
+  - from: v2_d
+    to: v3_d
+    style:
+      strokeColor: '#3B82F6'
+      strokeWidth: 2
+  - from: v3_d
+    to: v4_d
+    style:
+      strokeColor: '#3B82F6'
+      strokeWidth: 2
+  - from: vLm1_d
+    to: vL_d
+    style:
+      strokeColor: '#3B82F6'
+      strokeWidth: 2

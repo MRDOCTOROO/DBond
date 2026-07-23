@@ -159,6 +159,19 @@ def build_ablation_tag(config: Dict[str, Any]) -> str:
     if ablation_config.get('no_state_env', False):
         tags.append('no_state_env')
 
+    # Feature-group progressive addition：从裸模型（无 state 无 env）出发，每次只保留一组特征。
+    # 与 no_state_env（整组消融）互补：no_state_env 关掉整组，这里是"只留一组"。
+    if ablation_config.get('baseline_no_state_env', False):
+        tags.append('baseline_no_state_env')
+    if ablation_config.get('state_charge_only', False):
+        tags.append('state_charge_only')
+    if ablation_config.get('state_mass_intensity_only', False):
+        tags.append('state_mass_intensity_only')
+    if ablation_config.get('env_nce_only', False):
+        tags.append('env_nce_only')
+    if ablation_config.get('env_scan_num_only', False):
+        tags.append('env_scan_num_only')
+
     return "_".join(tags) if tags else "baseline"
 
 
@@ -176,6 +189,9 @@ def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
     exclusive_flags = [
         'use_sequence_graph', 'use_hybrid_graph', 'disable_global_node',
         'gcn_only', 'gat_only', 'no_message_passing', 'no_edge_attr', 'no_state_env',
+        # Feature-group progressive addition（与上面 8 个开关互斥）
+        'baseline_no_state_env', 'state_charge_only', 'state_mass_intensity_only',
+        'env_nce_only', 'env_scan_num_only',
     ]
     active_flags = [f for f in exclusive_flags if ablation_config.get(f, False)]
     if len(active_flags) > 1:
@@ -227,6 +243,27 @@ def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
     if ablation_config.get('no_state_env', False):
         model_config['use_state_features'] = False
         model_config['use_env_features'] = False
+
+    # (4) Feature-group progressive addition：从裸模型出发，每次只保留一组特征。
+    # 通过 state_feature_mask / env_feature_mask 控制子组级保留（True=保留，False=屏蔽）。
+    # mask 顺序固定：state=[charge, pep_mass, intensity]，env=[nce, scan_num]。
+    # use_state_features/use_env_features 必须保持 True，否则整组会被 new_zeros 覆盖，mask 失效。
+    if ablation_config.get('baseline_no_state_env', False):
+        # 裸模型起点：state/env 全屏蔽（等价于 no_state_env，但走 mask 路径以便与其他 +X 组严格同机制）
+        model_config['state_feature_mask'] = [False, False, False]
+        model_config['env_feature_mask'] = [False, False]
+    elif ablation_config.get('state_charge_only', False):
+        model_config['state_feature_mask'] = [True, False, False]
+        model_config['env_feature_mask'] = [False, False]
+    elif ablation_config.get('state_mass_intensity_only', False):
+        model_config['state_feature_mask'] = [False, True, True]
+        model_config['env_feature_mask'] = [False, False]
+    elif ablation_config.get('env_nce_only', False):
+        model_config['state_feature_mask'] = [False, False, False]
+        model_config['env_feature_mask'] = [True, False]
+    elif ablation_config.get('env_scan_num_only', False):
+        model_config['state_feature_mask'] = [False, False, False]
+        model_config['env_feature_mask'] = [False, True]
 
     if ablation_config.get('rebuild_cache', False):
         data_config['rebuild_cache'] = True

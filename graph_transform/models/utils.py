@@ -51,7 +51,14 @@ class ModelConfig:
         self.use_physicochemical_features = True
         self.use_state_features = True
         self.use_env_features = True
-        
+        # Feature-group progressive addition 的 per-feature mask（True=保留，False=屏蔽）。
+        # 维度固定对齐 state=[charge, pep_mass, intensity]、env=[nce, scan_num]。
+        # 在 NodeEncoder._encode_state/_encode_environmental 与 GraphBuilder._create_edge_features
+        # 三处使用点同步生效（global virtual node 复用 _encode_state 输出，自动同步）。
+        # mask 不改变张量维度，故 state_encoder/env_encoder 输入维度与 checkpoint 完全兼容。
+        self.state_feature_mask = [True, True, True]
+        self.env_feature_mask = [True, True]
+
         # 边配置
         self.edge_types = ['sequence', 'distance', 'functional', 'long_range', 'global']
         self.edge_embedding_dim = 16
