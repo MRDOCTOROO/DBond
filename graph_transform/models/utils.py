@@ -401,7 +401,7 @@ class CheckpointManager:
         if device is None:
             device = next(model.parameters()).device
         
-        checkpoint = torch.load(filepath, map_location=device)
+        checkpoint = torch.load(filepath, map_location=device, weights_only=False)
 
         # strict=False：容忍结构差异（例如已移除未使用的 layer_norms 字段），打印缺失/多余键以便排查。
         missing, unexpected = model.load_state_dict(checkpoint['model_state_dict'], strict=False)

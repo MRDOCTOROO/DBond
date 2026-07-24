@@ -70,7 +70,7 @@ class PreprocessedGraphDataset(Dataset):
         """加载预处理数据"""
         try:
             # 加载二进制数据
-            saved_data = torch.load(self.data_path, map_location='cpu')
+            saved_data = torch.load(self.data_path, map_location='cpu', weights_only=False)
 
             # 提取元数据
             self.metadata = saved_data.get('metadata', {})

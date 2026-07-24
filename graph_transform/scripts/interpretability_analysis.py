@@ -94,7 +94,7 @@ def infer_model_config_from_checkpoint(checkpoint_path: str, base_config: Dict[s
     """从检查点推断模型配置"""
     logger = logging.getLogger("interpretability")
     
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     state_dict = checkpoint.get('model_state_dict', checkpoint)
     
     inferred_config = base_config.copy()

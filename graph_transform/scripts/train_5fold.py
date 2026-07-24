@@ -61,7 +61,7 @@ def should_aggregate_metric(metric_name: str) -> bool:
 
 
 def load_best_metrics(checkpoint_path: str):
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     metrics = checkpoint.get("metrics", {}) or {}
     return checkpoint.get("epoch", -1) + 1, metrics
 

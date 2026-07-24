@@ -546,7 +546,7 @@ class CachedGraphDataset(GraphDataset):
         meta = self._edge_cache_meta()
         if os.path.exists(self.edge_cache_file) and not self.rebuild_cache:
             try:
-                payload = torch.load(self.edge_cache_file, map_location="cpu")
+                payload = torch.load(self.edge_cache_file, map_location="cpu", weights_only=False)
                 cached_meta = payload.get("meta", {})
                 cached_edges = payload.get("edges", None)
                 if cached_edges is not None and cached_meta == meta:
@@ -592,7 +592,7 @@ class CachedGraphDataset(GraphDataset):
         }
         if os.path.exists(self.cache_file) and not self.rebuild_cache:
             try:
-                payload = torch.load(self.cache_file, map_location="cpu")
+                payload = torch.load(self.cache_file, map_location="cpu", weights_only=False)
                 cached_meta = payload.get("meta", {})
                 cached_data = payload.get("data", None)
                 if cached_data is not None and cached_meta == meta:

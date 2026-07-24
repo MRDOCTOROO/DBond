@@ -116,7 +116,7 @@ def setup_device(config: Dict[str, Any]) -> torch.device:
 def infer_model_config_from_checkpoint(
     checkpoint_path: str, base_config: Dict[str, Any]
 ) -> Dict[str, Any]:
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     state_dict = checkpoint.get("model_state_dict", checkpoint)
     inferred = base_config.copy()
     model_cfg = inferred.setdefault("model", {})

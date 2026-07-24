@@ -104,7 +104,9 @@ data:
   cache_dir: cache/graph_data
   augmentation_prob: 0.3
   max_augmentation_trials: 3
-  num_workers: 32
+  # num_workers：HPC 节点通常 16 核，设 16 避免超过 CPU 核心数导致 DataLoader 卡顿
+  # （PyTorch 警告 "suggested max number of worker is 16"）。单卡训练 16 已足够喂饱 GPU。
+  num_workers: 16
   pin_memory: true
   drop_last: true
   use_class_weights: true

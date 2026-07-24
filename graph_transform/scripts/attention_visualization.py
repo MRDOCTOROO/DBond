@@ -115,7 +115,7 @@ def infer_model_config_from_checkpoint(checkpoint_path: str, base_config: Dict[s
     logger = logging.getLogger("attention_visualization")
     
     # 加载检查点
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     state_dict = checkpoint.get('model_state_dict', checkpoint)
     
     # 推断配置
