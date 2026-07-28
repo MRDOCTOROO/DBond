@@ -69,3 +69,16 @@ tensorboard/graph_transform/feature_group_ablation/
 result/pred/graph_transform/feature_group_ablation/
 # 对比分析结果默认放 result/metric/.../feature_group_comparison/，CSV 通常希望保留，故不忽略
 # 但生成的 PDF 图表由 *.pdf 规则决定（当前未忽略 *.pdf，如需忽略可显式加 result/metric/graph_transform/feature_group_comparison/*.pdf）
+
+# ===== ludbond 对比模型（拍平自原 LoserLus/DBond 仓库）排除规则 =====
+# 对比模型自带的训练/数据产物，用 DBond 自己的数据划分重跑，不进 git
+ludbond/tensorboard/
+ludbond/dataset/*
+!ludbond/dataset/.gitkeep
+ludbond/result/
+ludbond/PBCLA/mgf_dataset/
+# 兜底：对比模型可能产出的非 .pt 权重/缓存扩展名（*.pt 已由上方规则覆盖）
+*.ckpt
+*.pth
+*.safetensors
+*.h5
