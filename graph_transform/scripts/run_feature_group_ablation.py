@@ -118,7 +118,20 @@ def main():
         choices=[s[0] for s in SETTINGS],
         help="Optional subset of settings to run (default: all 6)",
     )
-    parser.add_argument("--skip_existing", action="store_true", help="Skip settings that already have 5fold_summary.csv")
+    parser.add_argument(
+        "--skip_existing", action="store_true",
+        help="跳过已完成的 setting（5 折全部跑完、有 5fold_summary.csv）",
+    )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="断点续跑：已完成的 setting（有 5fold_summary.csv）自动跳过，"
+             "未完成的 setting 续跑（复用 cv_root，跳过已完成 fold）。"
+             "中断后重跑加此参数即可继续，已跑完的不会被重跑。",
+    )
+    parser.add_argument(
+        "--force_new", action="store_true",
+        help="强制所有 setting 新建 cv_root（忽略 resume 检测）。与 --resume 互斥。",
+    )
     parser.add_argument("--fold_data_dir", default="dataset/5fold", help="5-fold csv directory")
     parser.add_argument("--epochs", type=int, help="Override epochs per fold")
     parser.add_argument("--batch_size", type=int, help="Override batch_size per fold")
@@ -126,6 +139,9 @@ def main():
     parser.add_argument("--device", choices=["cpu", "cuda", "mps"], help="Override device")
     parser.add_argument("--seed", type=int, help="Override base seed (each fold uses base_seed + fold_index)")
     args = parser.parse_args()
+
+    if args.resume and args.force_new:
+        parser.error("--resume 与 --force_new 互斥")
 
     with open(args.config, "r", encoding="utf-8") as f:
         base_config = yaml.safe_load(f)
@@ -159,10 +175,12 @@ def main():
         print(f"  输出根目录: {setting_root}")
         print("-" * 60)
 
-        if args.skip_existing:
+        # --resume 自动包含 --skip_existing 语义：已完成的 setting 直接跳过，
+        # 未完成的才续跑。这样用户中断后只需加 --resume，已跑完的不会被重跑。
+        if args.skip_existing or args.resume:
             existing = find_latest_summary(setting_root)
             if existing:
-                print(f"  [skip] 已有结果: {existing}")
+                print(f"  [skip] 已完成（有 5fold_summary.csv）: {existing}")
                 skipped.append((setting_key, existing))
                 completed.append((setting_key, existing))
                 continue
@@ -177,6 +195,12 @@ def main():
 
         # 跑 5 折
         cmd = [sys.executable, TRAIN_5FOLD, "--config", setting_config_path, "--fold_data_dir", args.fold_data_dir]
+        # 断点续跑透传：--resume 让 train_5fold 自动找未完成 cv_root 续跑；
+        # --force_new 让它强制新建 cv_root（与 --resume 互斥，已在 argparse 校验）。
+        if args.resume:
+            cmd.extend(["--resume_from", "auto"])
+        elif args.force_new:
+            cmd.extend(["--force_new"])
         if args.epochs is not None:
             cmd.extend(["--epochs", str(args.epochs)])
         if args.batch_size is not None:

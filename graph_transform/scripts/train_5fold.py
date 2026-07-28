@@ -8,6 +8,7 @@ import sys
 import time
 from copy import deepcopy
 from datetime import datetime
+from typing import Optional
 
 import pandas as pd
 import torch
@@ -99,6 +100,50 @@ def resolve_fold_runtime_paths(fold_config, checkpoint_root: str, run_root: str)
     return checkpoint_search_root, metric_csv_path, pred_csv_path
 
 
+def is_fold_complete(checkpoint_search_root: str, metric_csv_path: str) -> bool:
+    """判断某 fold 是否已完成（best_model.pt + latest_test_metric.csv 同时存在）。
+
+    用于断点续跑：已完成的 fold 跳过训练，直接读取已有指标。
+    任何异常情况（目录缺失、结构不完整）都返回 False，触发重训，保证安全。
+    """
+    if not os.path.isdir(checkpoint_search_root):
+        return False
+    if not os.path.isfile(metric_csv_path):
+        return False
+    # checkpoint_search_root 下应有含 best_model.pt 的 run 子目录
+    try:
+        run_dir = latest_subdir(checkpoint_search_root)
+    except FileNotFoundError:
+        return False
+    return os.path.isfile(os.path.join(run_dir, "best_model.pt"))
+
+
+def find_resumable_cv_root(ckpt_base: str) -> Optional[str]:
+    """在 ckpt_base/5fold/ 下找最新的、可续跑的 cv_root（含已完成的 fold 但未生成 5fold_summary.csv）。
+
+    续跑判定：cv_root 存在且未完成（无 5fold_summary.csv），且有至少一个 fold 目录。
+    若最新 cv_root 已完成（有 5fold_summary.csv）则返回 None（应新建）。
+    """
+    fivefold_base = os.path.join(ckpt_base, "5fold")
+    if not os.path.isdir(fivefold_base):
+        return None
+    subdirs = [os.path.join(fivefold_base, name) for name in os.listdir(fivefold_base)
+               if os.path.isdir(os.path.join(fivefold_base, name))]
+    if not subdirs:
+        return None
+    # 按修改时间倒序找第一个"未完成"的 cv_root
+    for cv_root in sorted(subdirs, key=os.path.getmtime, reverse=True):
+        summary = os.path.join(cv_root, "5fold_summary.csv")
+        if os.path.isfile(summary):
+            continue  # 已完成，跳过找更老的
+        # 检查是否有 fold 目录（说明跑过但未完成）
+        fold_dirs = [d for d in os.listdir(cv_root) if d.startswith("fold_")]
+        if fold_dirs:
+            return cv_root
+    return None
+
+
+
 def build_command(train_script: str, fold_config_path: str, args, fold_seed: int):
     cmd = [sys.executable, train_script, "--config", fold_config_path, "--seed", str(fold_seed)]
     if args.epochs is not None:
@@ -122,6 +167,15 @@ def main():
     parser.add_argument("--learning_rate", type=float)
     parser.add_argument("--device", choices=["cpu", "cuda", "mps"])
     parser.add_argument("--seed", type=int)
+    parser.add_argument(
+        "--resume_from", default=None,
+        help="断点续跑：指定已有 cv_root（含 5fold/<timestamp>/ 结构）复用，跳过已完成 fold。"
+             "设为 'auto' 自动在 ckpt_base/5fold/ 下找最新未完成的 cv_root。",
+    )
+    parser.add_argument(
+        "--force_new", action="store_true",
+        help="强制新建 cv_root（忽略 --resume_from 和自动续跑检测）。",
+    )
     args = parser.parse_args()
 
     with open(args.config, "r", encoding="utf-8") as f:
@@ -134,9 +188,27 @@ def main():
     if missing:
         raise ValueError(f"Requested folds not found: {missing}; available folds: {available_folds}")
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     ckpt_base = base_config.get("training", {}).get("checkpoint_dir", "checkpoints/graph_transform")
-    cv_root = os.path.join(ckpt_base, "5fold", timestamp)
+
+    # 确定 cv_root：resume 优先，否则新建
+    if args.force_new:
+        cv_root = os.path.join(ckpt_base, "5fold", datetime.now().strftime("%Y%m%d_%H%M%S"))
+        print(f"[5fold] force_new: 新建 cv_root = {cv_root}")
+    elif args.resume_from == "auto":
+        cv_root = find_resumable_cv_root(ckpt_base)
+        if cv_root:
+            print(f"[5fold] auto resume: 复用 cv_root = {cv_root}")
+        else:
+            cv_root = os.path.join(ckpt_base, "5fold", datetime.now().strftime("%Y%m%d_%H%M%S"))
+            print(f"[5fold] auto resume: 无可续跑 cv_root，新建 = {cv_root}")
+    elif args.resume_from:
+        cv_root = args.resume_from
+        if not os.path.isdir(cv_root):
+            raise FileNotFoundError(f"--resume_from 指定的 cv_root 不存在: {cv_root}")
+        print(f"[5fold] resume from: {cv_root}")
+    else:
+        cv_root = os.path.join(ckpt_base, "5fold", datetime.now().strftime("%Y%m%d_%H%M%S"))
+        print(f"[5fold] 新建 cv_root = {cv_root}")
     os.makedirs(cv_root, exist_ok=True)
 
     train_script = os.path.join(os.path.dirname(__file__), "train_graph_model.py")
@@ -158,9 +230,14 @@ def main():
             yaml.safe_dump(fold_config, f, sort_keys=False, allow_unicode=True)
 
         print(f"[5fold] start fold={fold_id} seed={fold_seed}")
-        subprocess.run(build_command(train_script, fold_config_path, args, fold_seed), check=True)
+        # 断点续跑：该 fold 已完成（best_model.pt + latest_test_metric.csv 都在）则跳过训练，直接读指标
+        if is_fold_complete(checkpoint_search_root, metric_csv_path):
+            run_dir = latest_subdir(checkpoint_search_root)
+            print(f"[5fold] skip fold={fold_id} (已完成，复用 {run_dir})")
+        else:
+            subprocess.run(build_command(train_script, fold_config_path, args, fold_seed), check=True)
+            run_dir = latest_subdir(checkpoint_search_root)
 
-        run_dir = latest_subdir(checkpoint_search_root)
         best_epoch, best_metrics = load_best_metrics(os.path.join(run_dir, "best_model.pt"))
         test_metrics = load_metric_csv(metric_csv_path)
         fold_result = {
