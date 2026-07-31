@@ -1,9 +1,21 @@
-tag: 'default'
+# =============================================================================
+# DBond-m 配置(对齐 DBond-GT 协议版)
+# -----------------------------------------------------------------------------
+# 本配置用于在 DBond-GT 相同的数据划分与评价协议下复现 DBond-m 基线,
+# 解决审稿 R-05/R-06 的公平性硬伤。协议对齐点:
+#   - 数据划分: 5 个 sequence-level split(fold 1222/2252/3514/6072/9075),
+#     由 train_dbond_m_5fold.py 逐 fold 注入 train/test 路径
+#   - val 切分: 从 train 内 random_split 20%(validation_split 字段), 不再读外部 val CSV
+#   - 模型选择: 按 val_f1 选 best model(见 train.dbond_m.py), 不再用 val_loss
+#   - seed: 5fold 时由脚本注入 = 42 + fold_index(与 DBond-GT 一致)
+# 训练超参(bs/ep/optimizer/loss 等)保留 DBond-m 原始设置, 不与 DBond-GT 强行对齐。
+# =============================================================================
+tag: 'dbond_m_5fold'
 train_args:
  batch_size: 4096
  epoch: 50
  save_per_epoch: 10
- seed: 2024
+ seed: 2024            # 单次训练默认值; 5fold 时由脚本覆盖为 42 + fold_index
  loss_type: 'ce'
  loss_args:
   label_smoothing: 0.1
@@ -15,17 +27,23 @@ train_args:
   patience: 5
   delta: 1.0e-4
  dataloader_workers: 4
-csv: 
+ # 对齐 DBond-GT: val 从 train 内 random_split 切出的比例
+ validation_split: 0.2
+csv:
+ # 单次训练时的默认数据路径(占位); 5fold 实验时由 train_dbond_m_5fold.py
+ # 注入 dataset/5fold/{fold_id}.(train|test).fbr.multi.csv 的真实路径。
  train_dataset_path: '/workspace/dataset/dbond_m.train.shuffle.csv'
+ # validation_dataset_path 已弃用: val 改由 random_split 从 train 切出,
+ # 此处保留仅作历史参考, 训练时不再读取。
  validation_dataset_path: '/workspace/dataset/dbond_m.validation.csv'
  test_dataset_path: '/workspace/dataset/dbond_m.test.csv'
  label_col_name: 'true_multi'
  seq_col_name: 'seq'
- state_var_col_name: 
+ state_var_col_name:
   - 'charge'
   - 'pep_mass'
   - 'intensity'
- env_var_col_name: 
+ env_var_col_name:
   - 'nce'
   - 'scan_num'
 seq:
@@ -36,5 +54,5 @@ model:
   hidden_dim: 256
   num_heads: 4
   dropout: 0.1
-  forward_expansion: 2 
+  forward_expansion: 2
   attention_layer_num: 1
