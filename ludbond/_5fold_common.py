@@ -122,7 +122,8 @@ def aggregate_5fold(per_fold_metrics:list, output_dir:str, model_name:str)->tupl
 
 def run_5fold(base_config_path:str, fold_data_dir:str, train_module_name:str,
               train_suffix:str, test_suffix:str, model_name:str, base_seed:int,
-              folds:list=None, force_new:bool=False, train_module_dir:str='.')->tuple:
+              folds:list=None, force_new:bool=False, train_module_dir:str='.',
+              resume_from:str=None)->tuple:
     """5fold 主流程。
 
     base_config_path: 基础 config yaml 路径(如 ludbond/dbond_s_config/default.yaml)
@@ -132,15 +133,23 @@ def run_5fold(base_config_path:str, fold_data_dir:str, train_module_name:str,
     model_name: 'dbond_s' / 'dbond_m'
     folds: 可选, 子集 fold id 列表(调试用); None=全部 5 折
     train_module_dir: 训练模块所在目录(如 'ludbond' / 'ludbondaf'), 用于 importlib 绝对定位, 不依赖 CWD
+    resume_from: 可选, 续跑模式 — 指定旧的 cv_root 目录(如 result/cv/dbond_m/20260802_234055),
+                 已完成(test_metric.csv 存在)的 fold 跳过, 未完成的从头训练。结果继续写入该目录。
+                 None=全新跑, 生成带时间戳的新 cv_root。
     """
     with open(base_config_path, 'r') as f:
         base_config = yaml.safe_load(f)
 
-    # cv_root: 5fold 结果根目录(带时间戳)
-    timestamp = beijing_now().strftime('%Y%m%d_%H%M%S')
-    cv_root = os.path.join(f'./result/cv/{model_name}', timestamp)
+    # cv_root: 续跑模式用指定目录, 否则生成带时间戳的新目录
+    if resume_from:
+        cv_root = resume_from
+        if not os.path.isdir(cv_root):
+            raise FileNotFoundError(f'resume_from 目录不存在: {cv_root}')
+    else:
+        timestamp = beijing_now().strftime('%Y%m%d_%H%M%S')
+        cv_root = os.path.join(f'./result/cv/{model_name}', timestamp)
     os.makedirs(cv_root, exist_ok=True)
-    logging.info(f'5fold cv_root: {cv_root}')
+    logging.info(f'5fold cv_root: {cv_root}{" (resume)" if resume_from else " (new)"}')
 
     # 动态 import 训练模块(注意 .py 文件名带点, 用 importlib)
     # 用 train_module_dir 解析绝对路径, 不依赖 CWD
@@ -196,5 +205,8 @@ def build_argparser(model_name:str, default_config:str)->argparse.ArgumentParser
     p.add_argument('--fold_data_dir', type=str, default=DEFAULT_FOLD_DIR, help='5fold 数据目录')
     p.add_argument('--base_seed', type=int, default=DEFAULT_BASE_SEED, help='基础 seed(实际 seed = base_seed + fold_index)')
     p.add_argument('--folds', type=str, nargs='*', default=None, help='子集 fold id(调试用, 默认全部 5 折)')
-    p.add_argument('--force_new', action='store_true', help='忽略已有结果强制重跑')
+    p.add_argument('--force_new', action='store_true', help='忽略已有结果强制重跑(仍写入 resume_from 指定的目录, 或新目录)')
+    p.add_argument('--resume_from', type=str, default=None,
+                   help='续跑: 指定旧 cv_root 目录(如 result/cv/dbond_m/20260802_234055)。'
+                        '已完成(test_metric.csv 存在)的 fold 跳过, 未完成的从头训练。')
     return p

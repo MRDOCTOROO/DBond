@@ -51,6 +51,7 @@ def main():
         folds=args.folds,
         force_new=args.force_new,
         train_module_dir=_THIS_DIR,   # 训练模块所在目录(绝对路径), importlib 据此定位, 不依赖 CWD
+        resume_from=args.resume_from,
     )
 
 

@@ -42,6 +42,7 @@ def main():
         folds=args.folds,
         force_new=args.force_new,
         train_module_dir=_THIS_DIR,
+        resume_from=args.resume_from,
     )
 
 

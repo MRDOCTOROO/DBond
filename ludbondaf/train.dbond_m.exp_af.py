@@ -117,8 +117,7 @@ def save_checkpoint(save_path, metric, status, model, optimizer, config, epoch):
     checkpoint_dict["train_args"]["save_epoch"] = epoch
     checkpoint_dict["metric"] = metric
     checkpoint_dict["status"] = status
-    if not os.path.exists(os.path.dirname(save_path)):
-        os.makedirs(os.path.dirname(save_path))
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     torch.save(checkpoint_dict, save_path)
     return
 

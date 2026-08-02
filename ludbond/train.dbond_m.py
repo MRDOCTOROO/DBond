@@ -93,6 +93,7 @@ def save_checkpoint(save_path, metric, status, model, optimizer, config, epoch):
     checkpoint_dict['train_args']['save_epoch'] = epoch
     checkpoint_dict['metric'] = metric
     checkpoint_dict['status'] = status
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     torch.save(checkpoint_dict,save_path)
     return
 
@@ -116,7 +117,7 @@ def main(config:dict, run_id:str=None)->Dict:
     # ===== run id / 输出目录 =====
     if run_id is None:
         run_id = get_beijing_time().strftime("%Y_%m_%d_%H_%M")
-    model_weight_dir = config.get('output', {}).get(
+    model_weight_dir_cfg = config.get('output', {}).get(
         'best_model_dir', model_weight_dir_pattern.format(model=MODEL))
     checkpoint_dir = config.get('output', {}).get(
         'checkpoint_dir', f'./checkpoint/{MODEL}/{run_id}')
@@ -127,7 +128,7 @@ def main(config:dict, run_id:str=None)->Dict:
     tensorboard_dir = config.get('output', {}).get(
         'tensorboard_dir', tensorboard_log_pattern.format(
             model=MODEL, time=run_id, status='run', tag=config['tag']))
-    for d in [model_weight_dir, checkpoint_dir, result_metric_dir, result_pred_dir, tensorboard_dir]:
+    for d in [model_weight_dir_cfg, checkpoint_dir, result_metric_dir, result_pred_dir, tensorboard_dir]:
         os.makedirs(d, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -273,7 +274,7 @@ def main(config:dict, run_id:str=None)->Dict:
         validation_metrics_dict = _process_with_step(epoch, 'validation', validation_writer, validation_dataloader, len(validation_dataset))
         logging.info(f"{'#'*10} validation val_f1 {validation_metrics_dict['val_f1']:.4} {'#'*10}")
         if epoch % epoch_cnt_to_save == 0:
-            save_path = checkpoint_path_pattern.format(model=MODEL, time=run_id, tag=config['tag'], epoch=epoch).replace('./checkpoint', checkpoint_dir)
+            save_path = os.path.join(checkpoint_dir, f'{MODEL}_{run_id}_{config["tag"]}_epoch{epoch}.pt')
             save_checkpoint(save_path, validation_metrics_dict, 'validation', model, optimizer, config, epoch)
             logging.info(f'save checkpoint: {save_path}')
 
@@ -286,7 +287,7 @@ def main(config:dict, run_id:str=None)->Dict:
         # best model: val_f1 越大越好(对齐 DBond-GT)
         if validation_metrics_dict['val_f1'] > best_validation_f1:
             best_validation_f1 = validation_metrics_dict['val_f1']
-            save_path = os.path.join(model_weight_dir, f'best_model_{config["tag"]}_epoch{epoch}.pt')
+            save_path = os.path.join(model_weight_dir_cfg, f'best_model_{config["tag"]}_epoch{epoch}.pt')
             save_checkpoint(save_path, validation_metrics_dict, 'validation', model, optimizer, config, epoch)
             logging.info(f'save model weight: {save_path}')
             if best_validation_model_path != '' and best_validation_model_path != save_path:

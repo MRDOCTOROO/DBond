@@ -95,3 +95,7 @@ ludbondaf/best_model/*
 ludbondaf/checkpoint/*
 !ludbondaf/checkpoint/.gitkeep
 
+# ===== 批量复现脚本的运行时状态(续跑用, 不进 git) =====
+# scripts/run_baselines_5fold.sh 用 state/{model}.cvroot 记录每个模型的 cv_root 以支持断点续跑
+state/
+
