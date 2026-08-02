@@ -38,21 +38,28 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-# 6 个 setting 的固定顺序与显示标签（与 run_feature_group_ablation.py 对齐）
+# setting 的固定顺序与显示标签（与 run_feature_group_ablation.py 对齐）
+# 核心组在前，细粒度拆分和 rt 对照在后
 SETTING_ORDER = [
     "baseline_none",
     "charge_only",
     "mass_intensity_only",
+    "mass_only",
+    "intensity_only",
     "nce_only",
     "scan_num_only",
+    "rt_only",
     "full",
 ]
 SETTING_LABELS = {
     "baseline_none": "Baseline\n(no state/env)",
     "charge_only": "+Charge",
     "mass_intensity_only": "+Mass+Intensity",
+    "mass_only": "+Mass",
+    "intensity_only": "+Intensity",
     "nce_only": "+NCE",
     "scan_num_only": "+Scan_num",
+    "rt_only": "+RT",
     "full": "Full\n(all features)",
 }
 # 默认对比的指标及绘图顺序（按重要性）
@@ -63,7 +70,11 @@ META_COLUMNS = {
     "checkpoint_dir", "metric_csv_path", "pred_csv_path",
 }
 # 默认的 +X setting（与 baseline_none 配对做 Wilcoxon 的实验组）
-DELTA_SETTINGS = ["charge_only", "mass_intensity_only", "nce_only", "scan_num_only"]
+# 含细粒度拆分和 rt 对照；可通过 --delta_settings 覆盖
+DELTA_SETTINGS = [
+    "charge_only", "mass_intensity_only", "mass_only", "intensity_only",
+    "nce_only", "scan_num_only", "rt_only",
+]
 BASELINE_KEY = "baseline_none"
 ALPHA = 0.05
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))

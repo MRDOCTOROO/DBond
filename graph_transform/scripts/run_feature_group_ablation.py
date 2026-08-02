@@ -35,15 +35,19 @@ from datetime import datetime
 
 import yaml
 
-# 6 个 setting 的定义：(setting_key, ablation_switch_or_None, 描述)
+# setting 的定义：(setting_key, ablation_switch_or_None, 描述)
 # setting_key 用于命名输出子目录；ablation_switch 是 apply_ablation_config 里的开关名，
 # None 表示全特征（full，ablation 段全 false）。
+# 顺序：核心 4 组（charge/mass+intensity/nce/scan_num）+ 细粒度拆分（mass/intensity）+ rt 对照 + full
 SETTINGS = [
     ("baseline_none", "baseline_no_state_env", "裸模型：无 state 无 env（起点）"),
     ("charge_only", "state_charge_only", "+charge"),
     ("mass_intensity_only", "state_mass_intensity_only", "+mass+intensity"),
+    ("mass_only", "state_mass_only", "+mass（细粒度，拆自 mass+intensity）"),
+    ("intensity_only", "state_intensity_only", "+intensity（细粒度，拆自 mass+intensity）"),
     ("nce_only", "env_nce_only", "+NCE"),
     ("scan_num_only", "env_scan_num_only", "+scan_num"),
+    ("rt_only", "env_rt_only", "+rt（env 第二维用 rt，对照 scan_num）"),
     ("full", None, "全特征（终点参照）"),
 ]
 
@@ -53,6 +57,7 @@ ALL_ABLATION_SWITCHES = [
     "gcn_only", "gat_only", "no_message_passing", "no_edge_attr", "no_state_env",
     "baseline_no_state_env", "state_charge_only", "state_mass_intensity_only",
     "env_nce_only", "env_scan_num_only",
+    "state_mass_only", "state_intensity_only", "env_rt_only",
 ]
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))

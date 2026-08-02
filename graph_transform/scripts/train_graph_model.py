@@ -171,6 +171,14 @@ def build_ablation_tag(config: Dict[str, Any]) -> str:
         tags.append('env_nce_only')
     if ablation_config.get('env_scan_num_only', False):
         tags.append('env_scan_num_only')
+    # 细粒度拆分：mass / intensity 各自单独（与 state_mass_intensity_only 并存，供论文对比）
+    if ablation_config.get('state_mass_only', False):
+        tags.append('state_mass_only')
+    if ablation_config.get('state_intensity_only', False):
+        tags.append('state_intensity_only')
+    # env 第二维用 rt（需同时切 env_feature_name=rt + 量级对齐的 env_feature_scale=0.01）
+    if ablation_config.get('env_rt_only', False):
+        tags.append('env_rt_only')
 
     return "_".join(tags) if tags else "baseline"
 
@@ -192,6 +200,8 @@ def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
         # Feature-group progressive addition（与上面 8 个开关互斥）
         'baseline_no_state_env', 'state_charge_only', 'state_mass_intensity_only',
         'env_nce_only', 'env_scan_num_only',
+        # 细粒度拆分（mass / intensity 各自单独）+ rt 替代 scan_num
+        'state_mass_only', 'state_intensity_only', 'env_rt_only',
     ]
     active_flags = [f for f in exclusive_flags if ablation_config.get(f, False)]
     if len(active_flags) > 1:
@@ -264,6 +274,20 @@ def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
     elif ablation_config.get('env_scan_num_only', False):
         model_config['state_feature_mask'] = [False, False, False]
         model_config['env_feature_mask'] = [False, True]
+    # 细粒度拆分：mass / intensity 各自单独（state 顺序 [charge, pep_mass, intensity]）
+    elif ablation_config.get('state_mass_only', False):
+        model_config['state_feature_mask'] = [False, True, False]
+        model_config['env_feature_mask'] = [False, False]
+    elif ablation_config.get('state_intensity_only', False):
+        model_config['state_feature_mask'] = [False, False, True]
+        model_config['env_feature_mask'] = [False, False]
+    # env 第二维用 rt（替代 scan_num）：同时切 env_feature_name + 量级对齐的 scale
+    # rt∈[0.7,60.6]×0.01→[0.007,0.6] 均值0.30，与 scan_num(log1p/20 均值0.26) 量级对齐，保证对比公平。
+    elif ablation_config.get('env_rt_only', False):
+        model_config['state_feature_mask'] = [False, False, False]
+        model_config['env_feature_mask'] = [False, True]
+        data_config['env_feature_name'] = 'rt'
+        data_config['env_feature_scale'] = 0.01
 
     if ablation_config.get('rebuild_cache', False):
         data_config['rebuild_cache'] = True
