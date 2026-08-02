@@ -122,7 +122,7 @@ def aggregate_5fold(per_fold_metrics:list, output_dir:str, model_name:str)->tupl
 
 def run_5fold(base_config_path:str, fold_data_dir:str, train_module_name:str,
               train_suffix:str, test_suffix:str, model_name:str, base_seed:int,
-              folds:list=None, force_new:bool=False)->tuple:
+              folds:list=None, force_new:bool=False, train_module_dir:str='.')->tuple:
     """5fold 主流程。
 
     base_config_path: 基础 config yaml 路径(如 ludbond/dbond_s_config/default.yaml)
@@ -131,6 +131,7 @@ def run_5fold(base_config_path:str, fold_data_dir:str, train_module_name:str,
     train_suffix / test_suffix: fold 文件后缀
     model_name: 'dbond_s' / 'dbond_m'
     folds: 可选, 子集 fold id 列表(调试用); None=全部 5 折
+    train_module_dir: 训练模块所在目录(如 'ludbond' / 'ludbondaf'), 用于 importlib 绝对定位, 不依赖 CWD
     """
     with open(base_config_path, 'r') as f:
         base_config = yaml.safe_load(f)
@@ -142,8 +143,11 @@ def run_5fold(base_config_path:str, fold_data_dir:str, train_module_name:str,
     logging.info(f'5fold cv_root: {cv_root}')
 
     # 动态 import 训练模块(注意 .py 文件名带点, 用 importlib)
+    # 用 train_module_dir 解析绝对路径, 不依赖 CWD
     import importlib.util
-    module_file = f'{train_module_name}.py'
+    module_file = os.path.join(train_module_dir, f'{train_module_name}.py')
+    if not os.path.exists(module_file):
+        raise FileNotFoundError(f'训练模块不存在: {module_file} (train_module_dir={train_module_dir})')
     spec = importlib.util.spec_from_file_location(train_module_name, module_file)
     train_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(train_module)

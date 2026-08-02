@@ -10,14 +10,13 @@
   {fold_id}.test.fbr.multi.csv            (多标签 test)
   fold_id ∈ {1222,2252,3514,6072,9075}
 
-结果输出:
-  ./ludbondaf/result/cv/dbond_af/{timestamp}/fold_{id}/{best_model,metric,pred,...}/
-  ./ludbondaf/result/cv/dbond_af/{timestamp}/5fold_metrics.csv  (每 fold 一行)
-  ./ludbondaf/result/cv/dbond_af/{timestamp}/5fold_summary.csv  (mean ± std)
+结果输出(相对 CWD, 即仓库根):
+  ./result/cv/dbond_af/{timestamp}/fold_{id}/{best_model,metric,pred,...}/
+  ./result/cv/dbond_af/{timestamp}/5fold_metrics.csv  (每 fold 一行)
+  ./result/cv/dbond_af/{timestamp}/5fold_summary.csv  (mean ± std)
 
 注意: 本脚本复用 ludbond/_5fold_common.py 的通用 5fold 逻辑。
-      训练模块 train.dbond_m.exp_af.py 用 importlib 按 CWD 加载, 故本脚本会 chdir
-      到 ludbondaf/ 目录, 并把 config 路径转成绝对路径以兼容。
+      训练模块用 importlib 按本脚本所在目录(绝对路径)定位, 不依赖 CWD, 无需 chdir。
 """
 import os
 import sys
@@ -41,16 +40,9 @@ def main():
     parser = build_argparser(MODEL_NAME, DEFAULT_CONFIG)
     args = parser.parse_args()
 
-    # config 路径转绝对(因为接下来要 chdir 到 ludbondaf, 让 importlib 能找到训练模块)
-    config_abs = args.config if os.path.isabs(args.config) else os.path.abspath(args.config)
-    fold_dir_abs = args.fold_data_dir if os.path.isabs(args.fold_data_dir) else os.path.abspath(args.fold_data_dir)
-
-    # chdir 到 ludbondaf: _5fold_common 的 importlib 用相对路径加载 train.dbond_m.exp_af.py
-    os.chdir(_THIS_DIR)
-
     run_5fold(
-        base_config_path=config_abs,
-        fold_data_dir=fold_dir_abs,
+        base_config_path=args.config,
+        fold_data_dir=args.fold_data_dir,
         train_module_name=TRAIN_MODULE_NAME,
         train_suffix=TRAIN_SUFFIX,
         test_suffix=TEST_SUFFIX,
@@ -58,6 +50,7 @@ def main():
         base_seed=args.base_seed,
         folds=args.folds,
         force_new=args.force_new,
+        train_module_dir=_THIS_DIR,   # 训练模块所在目录(绝对路径), importlib 据此定位, 不依赖 CWD
     )
 
 

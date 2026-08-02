@@ -17,6 +17,10 @@
 """
 from _5fold_common import run_5fold, build_argparser
 
+# 训练模块所在目录(本脚本自身目录, 即 ludbond/), 用绝对路径供 importlib 定位, 不依赖 CWD
+import os
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # DBond-m 多标签 fold 文件后缀(与 DBond-GT 同名)
 TRAIN_SUFFIX = '.train.fbr.shuffle.multi.csv'
 TEST_SUFFIX  = '.test.fbr.multi.csv'
@@ -37,6 +41,7 @@ def main():
         base_seed=args.base_seed,
         folds=args.folds,
         force_new=args.force_new,
+        train_module_dir=_THIS_DIR,
     )
 
 

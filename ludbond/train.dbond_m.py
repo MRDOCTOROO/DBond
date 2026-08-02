@@ -138,7 +138,7 @@ def main(config:dict, run_id:str=None)->Dict:
     validation_split = config['train_args'].get('validation_split', 0.2)
     train_size = int((1 - validation_split) * len(full_train_dataset))
     val_size = len(full_train_dataset) - train_size
-    generator = torch.utils.data.Generator().manual_seed(seed)
+    generator = torch.Generator().manual_seed(seed)
     train_dataset, validation_dataset = torch.utils.data.random_split(
         full_train_dataset, [train_size, val_size], generator=generator)
     logging.info(f"train_size={train_size}, val_size={val_size} (random_split from train, seed={seed})")
