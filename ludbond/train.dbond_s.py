@@ -62,7 +62,8 @@ def build_loss_func(config)->Callable:
 
 
 def early_stopping(patience=5, delta=1e-4)->Callable[[float],bool]:
-    """对'越大越好'的指标(如 val_f1): 未达 best-delta 才计数。方向正确。"""
+    """对'越大越好'的指标(如 val_f1): 严格提升(> best+delta)才更新 best 并重置计数,
+    否则计数。与 DBond-GT 早停语义一致(修复 best drift bug)。"""
     best_metric = None
     counter = 0
     early_stop = False
@@ -70,15 +71,15 @@ def early_stopping(patience=5, delta=1e-4)->Callable[[float],bool]:
     def check_stop(metric:float)->bool:
         nonlocal best_metric, counter, early_stop
 
-        if best_metric is None:
+        # 与 DBond-GT 早停语义一致: 严格提升(metric > best + delta)才更新 best 并重置计数,
+        # 否则计数。修复原 bug(原 else 分支会把 best 重置为当前 metric, 缓慢下降曲线下永不触发早停)。
+        if best_metric is None or metric > best_metric + delta:
             best_metric = metric
-        elif metric < best_metric - delta:
+            counter = 0
+        else:
             counter += 1
             if counter >= patience:
                 early_stop = True
-        else:
-            best_metric = metric
-            counter = 0
 
         return early_stop
 

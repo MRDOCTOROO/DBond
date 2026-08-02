@@ -61,8 +61,8 @@ def build_loss_func(config)->Callable:
 
 
 def early_stopping(patience=5, delta=1e-4)->Callable[[float],bool]:
-    """对'越大越好'的指标(如 val_f1): 未达 best-delta 才计数。
-    方向已修正(原代码用 loss 时方向是反的, 现用于 val_f1 方向正确)。"""
+    """对'越大越好'的指标(如 val_f1): 严格提升(> best+delta)才更新 best 并重置计数,
+    否则计数。与 DBond-GT 早停语义一致(原代码用 loss 时方向是反的且有 best drift bug)。"""
     best_metric = None
     counter = 0
     early_stop = False
@@ -70,15 +70,15 @@ def early_stopping(patience=5, delta=1e-4)->Callable[[float],bool]:
     def check_stop(metric:float)->bool:
         nonlocal best_metric, counter, early_stop
 
-        if best_metric is None:
+        # 与 DBond-GT 早停语义一致: 严格提升(metric > best + delta)才更新 best 并重置计数,
+        # 否则计数。修复原 bug(原 else 分支会把 best 重置为当前 metric, 缓慢下降曲线下永不触发早停)。
+        if best_metric is None or metric > best_metric + delta:
             best_metric = metric
-        elif metric < best_metric - delta:
+            counter = 0
+        else:
             counter += 1
             if counter >= patience:
                 early_stop = True
-        else:
-            best_metric = metric
-            counter = 0
 
         return early_stop
 
@@ -200,6 +200,7 @@ def main(config:dict, run_id:str=None)->Dict:
         predict = []
         predict_probs = []
         gt = []
+        masks = []  # bond 级有效位 mask, 用于 val_f1 屏蔽 padding(对齐 DBond-GT label_mask)
         with tqdm.tqdm(dataloader, total=len(dataloader), unit='batch') as loop:
             for seq_index_batch,seq_padding_mask_batch,state_vec_batch,env_vec_batch,label_real_batch in loop:
                 loop.set_description(f"{status.capitalize()} Epoch [{epoch}/{config['train_args']['epoch']}]")
@@ -221,11 +222,15 @@ def main(config:dict, run_id:str=None)->Dict:
                 predict.extend(label_predict_batch.detach().cpu().numpy())
                 predict_probs.extend(label_prob_batch.detach().cpu().numpy())
                 gt.extend(label_real_batch.detach().cpu().numpy())
+                # bond i 连残基 i 与 i+1; 残基 i 非 padding 则该键有效。label pad 到 max_len-1 列,
+                # mask 取 seq_padding_mask 前 max_len-1 位的补码, 与 label 列数对齐。
+                masks.append((~seq_padding_mask_batch[:, :-1]).cpu().numpy())
                 loop.set_postfix({'loss':loss.item()})
         mean_loss = numpy.sum(loss_sum)/dataset_len
         import multi_label_metrics
         gt = numpy.vstack(gt)
         predict = numpy.vstack(predict)
+        mask = numpy.vstack(masks)
         subset_acc = multi_label_metrics.example_subset_accuracy(gt, predict)
         ex_acc = multi_label_metrics.example_accuracy(gt, predict)
         ex_precision = multi_label_metrics.example_precision(gt, predict)
@@ -239,7 +244,8 @@ def main(config:dict, run_id:str=None)->Dict:
         lab_recall_mi = multi_label_metrics.label_recall_micro(gt, predict)
         lab_f1_ma = multi_label_metrics.label_f1_macro(gt, predict)
         lab_f1_mi = multi_label_metrics.label_f1_micro(gt, predict)
-        val_f1 = f1_score(gt.ravel(), predict.ravel(), zero_division=0)
+        # val_f1 只算有效键(屏蔽 padding), 与 DBond-GT valid-key 展平 F1 同口径
+        val_f1 = f1_score(gt[mask], predict[mask], zero_division=0)
         metrics_dict = {
             'Loss':mean_loss,
             "subset_acc":subset_acc,
@@ -317,6 +323,7 @@ def _evaluate_on_test(model, best_model_path, test_dataloader, loss_func, device
     predict = []
     predict_probs = []
     gt = []
+    masks = []  # bond 级有效位 mask, 用于 val_f1 屏蔽 padding(对齐 DBond-GT label_mask)
     with tqdm.tqdm(test_dataloader, total=len(test_dataloader), unit='batch') as loop:
         for seq_index_batch,seq_padding_mask_batch,state_vec_batch,env_vec_batch,label_real_batch in loop:
             loop.set_description(f"Test [{run_id}]")
@@ -337,11 +344,13 @@ def _evaluate_on_test(model, best_model_path, test_dataloader, loss_func, device
             predict.extend(label_predict_batch.detach().cpu().numpy())
             predict_probs.extend(label_prob_batch.detach().cpu().numpy())
             gt.extend(label_real_batch.detach().cpu().numpy())
+            masks.append((~seq_padding_mask_batch[:, :-1]).cpu().numpy())
 
     import multi_label_metrics
     gt = numpy.vstack(gt)
     predict = numpy.vstack(predict)
     predict_probs = numpy.vstack(predict_probs)
+    mask = numpy.vstack(masks)
     mean_loss = numpy.sum(loss_sum)/dataset_len
 
     metrics_dict = {
@@ -359,7 +368,7 @@ def _evaluate_on_test(model, best_model_path, test_dataloader, loss_func, device
         "lab_recall_mi": multi_label_metrics.label_recall_micro(gt, predict),
         "lab_f1_ma": multi_label_metrics.label_f1_macro(gt, predict),
         "lab_f1_mi": multi_label_metrics.label_f1_micro(gt, predict),
-        "val_f1": f1_score(gt.ravel(), predict.ravel(), zero_division=0),
+        "val_f1": f1_score(gt[mask], predict[mask], zero_division=0),
     }
 
     # 输出 metric csv
