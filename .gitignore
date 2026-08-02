@@ -82,3 +82,16 @@ ludbond/PBCLA/mgf_dataset/
 *.pth
 *.safetensors
 *.h5
+
+# ===== ludbondaf (DBond-AF, attention-based feature fusion) 排除规则 =====
+# 对比模型自带的训练/数据产物, 用 DBond-GT 的 5fold 数据重跑, 不进 git
+ludbondaf/tensorboard/
+ludbondaf/dataset/*
+!ludbondaf/dataset/.gitkeep
+ludbondaf/result/
+ludbondaf/best_model/*
+!ludbondaf/best_model/.gitkeep
+!ludbondaf/best_model/dbond_m_exp_af/.gitkeep
+ludbondaf/checkpoint/*
+!ludbondaf/checkpoint/.gitkeep
+
