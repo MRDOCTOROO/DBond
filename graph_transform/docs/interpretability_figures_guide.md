@@ -118,7 +118,8 @@ A B D E F G H I K L N O P Q R S T X Y
 
 ## 二、Occlusion vs Attention（单样本归因对比）
 
-**文件**：`results/occlusion_attribution/occlusion_<sample_id>.svg` × 15
+**文件**：`results/occlusion_attribution/occlusion_<sample_id>.svg`，默认输出
+15个代表案例；150个比例分层样本全部参与聚合统计。
 **研究问题**：每个残基位置 j **因果上**对键 i 的预测有多大贡献？与 attention 是否一致？
 
 ### 2.1 坐标轴约定（两子图共用）
@@ -191,7 +192,8 @@ A B D E F G H I K L N O P Q R S T X Y
 
 ### 3.2 右图 (b) Per-sample consistency distribution
 
-**箱线图**：15 个样本各自的 Pearson r 分布
+**箱线图**：150 个比例分层样本各自的 Pearson r 分布，并报告均值的
+95% bootstrap CI。
 
 | 元素 | 含义 |
 |------|------|
@@ -238,16 +240,22 @@ A B D E F G H I K L N O P Q R S T X Y
 
 **文件**：`results/interpretability_v3/interpretability_case_study_new.svg`
 
+> 当前版本同时输出 `panel_a_case_study.svg`、
+> `panel_b_layer_evolution.svg`、`panel_c_bond_violin.svg` 和
+> `panel_d_aggregate.svg` 四个独立矢量面板，推荐在 LaTeX 中按版面需要组合。
+> 合并图保留用于快速预览。
+
 **改造说明**（v3）：原 panel (d) 的"5 样本均值 + 行归一化热力图"已被替换为
-"15 样本中位数 + 绝对值色阶 + entropy/top-3 量化指标"的聚合图层注意力图。
+"500 个比例分层样本的中位数 + 绝对值/逐层色阶 + entropy/top-3
+量化指标"的聚合图层注意力图。
 **单样本图**已移入 `single_samples/` 子目录作为 supplementary。
 
 | Panel | 数据来源 | 用途 | 可信度 |
 |-------|---------|------|--------|
 | (a) 单样本 final-layer bars | 1 个代表性案例样本 | 故事性展示 | ⚠️ 示例性 |
-| (b) Layer-wise \|r\| evolution | 15 案例样本聚合 | 定量层间演化 | ✅ 中等 |
-| (c) Broken vs intact boxplot | 15 案例样本聚合 | 功能分离 | ✅ 中等 |
-| **(d) Aggregate median + focus** | **15 案例样本中位数** | **群体平均模式 + 量化聚焦度** | ✅ **强（抗异常）** |
+| (b) Layer-wise \|r\| evolution | 500 比例分层样本 + 95% CI | 定量层间演化 | ✅ 强 |
+| (c) Broken vs intact violin | 500 比例分层样本 + Cohen's d CI | 功能分离 | ✅ 强 |
+| **(d) Aggregate median + focus** | **500 比例分层样本中位数** | **群体平均模式 + 量化聚焦度** | ✅ **强（抗异常）** |
 
 #### Panel (d) 解读（重点）
 
@@ -284,8 +292,8 @@ A B D E F G H I K L N O P Q R S T X Y
 - 标题：normalized entropy + top-1 + top-3 + verdict
 
 **用途**：
-- 给作者自己验证 panel (d) 的 15 样本结论是否稳定
-- 论文 supplementary 中作为"15 → 500 样本推广"的证据
+- 给作者验证 panel (d) 的 500 个比例分层样本结论是否稳定
+- 论文 supplementary 中作为500样本分层稳健性的独立证据
 
 ### 4.3 单样本图（supplementary）
 

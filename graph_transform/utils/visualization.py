@@ -1096,10 +1096,12 @@ def compute_separation_metrics(bond_attn: np.ndarray, bond_labels_np: np.ndarray
     bond_labels_np = bond_labels_np[:n]
 
     out = {"pearson_r": 0.0, "abs_r": 0.0, "spearman_r": 0.0,
-           "auc": 0.5, "separation_auc": 0.5, "n": int(n)}
+           "auc": 0.5, "separation_auc": 0.5, "n": int(n), "valid": False}
 
     if n < 3 or np.std(bond_attn) == 0 or np.std(bond_labels_np) == 0:
         return out
+
+    out["valid"] = True
 
     r = float(np.corrcoef(bond_attn, bond_labels_np)[0, 1])
     if np.isnan(r):
@@ -1275,21 +1277,71 @@ def plot_single_sample_layer_attention(
     return fig
 
 
+def bootstrap_ci(
+    values: np.ndarray,
+    n_iters: int = 1000,
+    ci: float = 0.95,
+    seed: int = 42,
+    statistic: str = "mean",
+) -> Tuple[float, float, float]:
+    """Bootstrap confidence interval.
+
+    Args:
+        values: 1D array of sample statistics (e.g. per-sample |r|).
+        n_iters: number of bootstrap resamples.
+        ci: confidence level (0.95 -> 95% CI).
+        seed: random seed for reproducibility.
+        statistic: 'mean' (default) or 'median'.
+
+    Returns:
+        (point_estimate, ci_low, ci_high). If insufficient data, returns
+        (point, point, point) — a degenerate CI.
+    """
+    values = np.asarray(values, dtype=float)
+    values = values[~np.isnan(values)]
+    n = len(values)
+    if statistic == "median":
+        point = float(np.median(values)) if n else float("nan")
+    else:
+        point = float(np.mean(values)) if n else float("nan")
+    if n < 2:
+        return point, point, point
+
+    rng = np.random.default_rng(seed)
+    boot_stats = np.empty(n_iters, dtype=float)
+    for i in range(n_iters):
+        sample = values[rng.integers(0, n, size=n)]
+        if statistic == "median":
+            boot_stats[i] = np.median(sample)
+        else:
+            boot_stats[i] = np.mean(sample)
+    alpha = (1.0 - ci) / 2.0
+    ci_low = float(np.percentile(boot_stats, 100.0 * alpha))
+    ci_high = float(np.percentile(boot_stats, 100.0 * (1.0 - alpha)))
+    return point, ci_low, ci_high
+
+
 def compute_layer_separation_metrics(
     attention_weights_list: List,
     bond_labels_list: List[torch.Tensor],
     edge_indices: List[Optional[torch.Tensor]],
     sequences: List[str],
     max_seq_len: int = 30,
-) -> List[Dict[str, float]]:
+    return_per_sample: bool = False,
+):
     """Per-layer separation metrics, averaged across samples.
 
     Returns a list (one dict per layer) of {pearson_r, abs_r, spearman_r,
     auc, separation_auc}. Use abs_r / separation_auc as the primary,
     direction-agnostic strength metric for the evolution trend.
+
+    When ``return_per_sample=True``, ALSO returns a parallel list
+    ``per_sample[layer_idx]`` = list of per-sample dicts, so callers can
+    compute bootstrap confidence intervals. Return type then becomes
+    ``(summary, per_sample)``.
     """
     if not attention_weights_list or not attention_weights_list[0]:
-        return []
+        return ([], []) if return_per_sample else []
     num_layers = len(attention_weights_list[0])
     per_layer: List[List[Dict[str, float]]] = [[] for _ in range(num_layers)]
 
@@ -1300,7 +1352,7 @@ def compute_layer_separation_metrics(
         for layer_idx in range(min(num_layers, len(attn_weights))):
             bond_attn, _ = extract_bond_level_attention(attn_weights[layer_idx], edge_idx, seq, max_seq_len)
             m = compute_separation_metrics(bond_attn, labels_np)
-            if m["n"] >= 3:
+            if m["valid"]:
                 per_layer[layer_idx].append(m)
 
     summary = []
@@ -1312,6 +1364,8 @@ def compute_layer_separation_metrics(
         agg = {k: float(np.mean([s[k] for s in samples])) for k in keys}
         agg["n_samples"] = len(samples)
         summary.append(agg)
+    if return_per_sample:
+        return summary, per_layer
     return summary
 
 
@@ -1338,6 +1392,10 @@ def plot_layer_evolution_trend(
     figsize: Tuple[int, int] = (8, 5),
     attention_mode: str = DEFAULT_ATTENTION_MODE,
     primary_metric: str = "abs_r",
+    per_sample_metrics: Optional[List[List[Dict[str, float]]]] = None,
+    show_ci: bool = False,
+    n_bootstrap: int = 1000,
+    ci_level: float = 0.95,
 ) -> plt.Figure:
     """Layer-wise evolution of the attention–label alignment.
 
@@ -1350,6 +1408,12 @@ def plot_layer_evolution_trend(
     ``layer_metrics`` may be either:
       * a list of floats (treated as the primary metric directly), or
       * a list of dicts as produced by compute_layer_separation_metrics().
+
+    When ``show_ci=True`` and ``per_sample_metrics`` is provided (the per-sample
+    list-of-lists returned by ``compute_layer_separation_metrics(...,
+    return_per_sample=True)``), a bootstrap confidence band is drawn around
+    the primary metric. This directly addresses reviewer concerns about the
+    absence of uncertainty quantification.
     """
     fig, ax = plt.subplots(figsize=figsize)
 
@@ -1365,6 +1429,20 @@ def plot_layer_evolution_trend(
     x = np.arange(num_layers)
     if layer_names is None:
         layer_names = [f'Layer {i}' for i in range(num_layers)]
+
+    # ---- Bootstrap CI band on primary metric (|r|) ----
+    ci_lo = ci_hi = None
+    if show_ci and per_sample_metrics is not None:
+        ci_lo = np.full(num_layers, np.nan)
+        ci_hi = np.full(num_layers, np.nan)
+        for li, samples in enumerate(per_sample_metrics):
+            if li < num_layers and samples:
+                vals = np.array([s[primary_metric] for s in samples], dtype=float)
+                _, lo, hi = bootstrap_ci(vals, n_iters=n_bootstrap, ci=ci_level)
+                ci_lo[li] = lo
+                ci_hi[li] = hi
+        ax.fill_between(x, ci_lo, ci_hi, alpha=0.18, color=INTERP_COLORS['fill'],
+                        label=f'{int(ci_level*100)}% bootstrap CI', zorder=1)
 
     # Secondary: signed raw r (gray dashed) — alignment strength (direction)
     if raw_r_vals is not primary_vals:
@@ -1395,13 +1473,18 @@ def plot_layer_evolution_trend(
     ax.axhline(0, color='gray', linewidth=0.5, alpha=0.5)
     ax.set_xlabel('Network Layer', fontsize=12, fontweight='bold')
     ax.set_ylabel(f'{primary_metric}  (alignment strength, ≥ 0)', fontsize=12, fontweight='bold')
-    ax.set_title('Layer-wise Attention–Label Alignment\n'
-                 f'{_mode_caption(attention_mode)}',
-                 fontsize=12, fontweight='bold')
+    title = 'Layer-wise Attention–Label Alignment\n' f'{_mode_caption(attention_mode)}'
+    if show_ci and ci_lo is not None:
+        title += f'  (n_bootstrap={n_bootstrap})'
+    ax.set_title(title, fontsize=12, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(layer_names, fontsize=10)
     lo = min(min(primary_vals), min(raw_r_vals) if raw_r_vals else 0)
     hi = max(max(primary_vals), max(raw_r_vals) if raw_r_vals else 0)
+    if ci_lo is not None and not np.all(np.isnan(ci_lo)):
+        lo = min(lo, float(np.nanmin(ci_lo)))
+    if ci_hi is not None and not np.all(np.isnan(ci_hi)):
+        hi = max(hi, float(np.nanmax(ci_hi)))
     ax.set_ylim(lo - 0.12, hi + 0.18)
     ax.grid(True, alpha=0.3)
     ax.legend(loc='lower right', fontsize=9, framealpha=0.9)
@@ -1486,6 +1569,451 @@ def plot_bond_type_comparison(
     return fig, effect
 
 
+def select_representative_case(
+    attention_weights_list: List,
+    bond_labels_list: List[torch.Tensor],
+    edge_indices: List[Optional[torch.Tensor]],
+    sequences: List[str],
+    max_seq_len: int = 30,
+    layer_index: int = -1,
+) -> Tuple[int, Dict[str, float]]:
+    """Pick the statistically representative case study sample.
+
+    Selection rule (anti-cherry-picking): compute the final-layer alignment
+    strength |r| for every candidate sample, then choose the sample whose |r|
+    is closest to the MEDIAN of the distribution. This is neither the best
+    nor the worst case — it is the central tendency, which is what a single
+    illustrative panel should display.
+
+    Returns (selected_index, info_dict) where info_dict contains the
+    selection diagnostics (median_r, selected_r, n_candidates, rule) so they
+    can be serialized into the JSON summary and cited in the paper.
+    """
+    abs_rs = []
+    valid_idx = []
+    for i, (attn, labels, edge_idx, seq) in enumerate(
+        zip(attention_weights_list, bond_labels_list, edge_indices, sequences)
+    ):
+        if isinstance(attn, list):
+            layer_w = attn[layer_index]
+        else:
+            layer_w = attn
+        bond_attn, _ = extract_bond_level_attention(layer_w, edge_idx, seq, max_seq_len)
+        labels_np = labels.cpu().numpy() if isinstance(labels, torch.Tensor) else np.asarray(labels)
+        m = compute_separation_metrics(bond_attn, labels_np)
+        if m["valid"]:
+            abs_rs.append(m["abs_r"])
+            valid_idx.append(i)
+
+    if not valid_idx:
+        return 0, {"rule": "median_abs_r", "n_candidates": 0,
+                   "median_abs_r": float("nan"), "selected_abs_r": float("nan")}
+
+    abs_rs_arr = np.asarray(abs_rs, dtype=float)
+    median_r = float(np.median(abs_rs_arr))
+    # Sample closest to the median.
+    offset = np.abs(abs_rs_arr - median_r)
+    pos = int(np.argmin(offset))
+    selected = valid_idx[pos]
+    return selected, {
+        "rule": "median_abs_r (representative, anti-cherry-pick)",
+        "n_candidates": len(valid_idx),
+        "median_abs_r": median_r,
+        "selected_abs_r": float(abs_rs_arr[pos]),
+        "selected_index": selected,
+    }
+
+
+def plot_panel_a_case_study(
+    attention_weights,
+    bond_labels: torch.Tensor,
+    sequence: str,
+    edge_index: Optional[torch.Tensor],
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (8, 5),
+    max_seq_len: int = 25,
+    attention_mode: str = DEFAULT_ATTENTION_MODE,
+    selection_info: Optional[Dict[str, float]] = None,
+) -> Tuple[plt.Figure, Dict[str, float]]:
+    """Panel (a): representative single-sample attention distribution.
+
+    Shows the final-layer functional-saliency profile across peptide bond
+    positions, with broken/intact bonds colored differently and the top-3
+    positions annotated. The title reports |r| and signed r for this sample.
+
+    ``selection_info`` (from ``select_representative_case``) is rendered as a
+    footnote to make the anti-cherry-picking selection rule explicit on the
+    figure itself.
+    """
+    # Final layer if a list of per-layer tensors is supplied.
+    last_layer = attention_weights[-1] if isinstance(attention_weights, list) else attention_weights
+    seq_len = min(len(sequence), max_seq_len)
+    num_bonds = seq_len - 1
+
+    last_attn, bond_labels_str = extract_bond_level_attention(
+        last_layer, edge_index, sequence, max_seq_len
+    )
+    bond_labels_np = (bond_labels[:num_bonds].cpu().numpy()
+                      if isinstance(bond_labels, torch.Tensor)
+                      else np.asarray(bond_labels[:num_bonds]))
+    last_attn = last_attn[:num_bonds]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    x = np.arange(num_bonds)
+    for i in range(num_bonds):
+        if i < len(bond_labels_np) and bond_labels_np[i] == 1:
+            ax.axvspan(i - 0.4, i + 0.4, alpha=0.15, color=INTERP_COLORS['broken'])
+    bar_colors = [INTERP_COLORS['broken'] if (i < len(bond_labels_np) and bond_labels_np[i] == 1)
+                  else INTERP_COLORS['intact'] for i in range(num_bonds)]
+    ax.bar(x, last_attn, color=bar_colors, alpha=0.7, edgecolor='white')
+
+    for idx in np.argsort(last_attn)[-min(3, num_bonds):]:
+        ax.annotate(bond_labels_str[idx], xy=(idx, last_attn[idx]),
+                    xytext=(0, 8), textcoords='offset points',
+                    ha='center', fontsize=7, fontweight='bold',
+                    color=INTERP_COLORS['highlight'])
+
+    m = compute_separation_metrics(last_attn, bond_labels_np)
+    ax.set_xlabel('Bond Position (Residue Pair)', fontsize=11, fontweight='bold')
+    ax.set_ylabel('Functional Saliency (Attention)', fontsize=11, fontweight='bold')
+    title = (f'Representative Single-Sample Attention Profile\n'
+             f"alignment |r|={m['abs_r']:.2f}, signed r={m['pearson_r']:+.2f}")
+    ax.set_title(title, fontsize=11, fontweight='bold')
+    if num_bonds <= 20:
+        ax.set_xticks(x)
+        ax.set_xticklabels(bond_labels_str, fontsize=7, rotation=45)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # Footnote the anti-cherry-pick rule.
+    if selection_info:
+        footnote = (f"Selection: {selection_info.get('rule', 'median_abs_r')} | "
+                    f"n_candidates={selection_info.get('n_candidates', '?')} | "
+                    f"selected |r|={selection_info.get('selected_abs_r', float('nan')):.3f} "
+                    f"(median={selection_info.get('median_abs_r', float('nan')):.3f})")
+        fig.text(0.02, 0.01, footnote, fontsize=8, style='italic', color='#555555',
+                 wrap=True)
+
+    plt.tight_layout(rect=(0, 0.04, 1, 1))
+    _save_figure(fig, save_path)
+    return fig, m
+
+
+def plot_panel_c_violin(
+    attention_weights_list: List,
+    bond_labels_list: List[torch.Tensor],
+    edge_indices: List[Optional[torch.Tensor]],
+    sequences: List[str],
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (7, 6),
+    attention_mode: str = "auto",
+    max_seq_len: int = 30,
+    n_bootstrap: int = 1000,
+    ci_level: float = 0.95,
+    layer_index: int = -1,
+) -> Tuple[plt.Figure, Dict[str, float]]:
+    """Panel (c): violin plot of attention on broken vs intact bonds.
+
+    Replaces the boxplot+strip layout used in small-N case studies with a
+    violin (kernel-density) layout suitable for large N (e.g. 500 samples),
+    where strip scatter becomes visually saturated. Annotates the unified
+    effect size AND a bootstrap CI on Cohen's d to address reviewer concerns
+    about missing uncertainty quantification.
+    """
+    broken_weights, intact_weights = [], []
+    for attn_weights, labels, edge_idx, seq in zip(
+        attention_weights_list, bond_labels_list, edge_indices, sequences
+    ):
+        layer_w = attn_weights[layer_index] if isinstance(attn_weights, list) else attn_weights
+        bond_attn, _ = extract_bond_level_attention(layer_w, edge_idx, seq, max_seq_len)
+        labels_np = labels.cpu().numpy() if isinstance(labels, torch.Tensor) else np.asarray(labels)
+        for i in range(min(len(bond_attn), len(labels_np))):
+            (broken_weights if labels_np[i] == 1 else intact_weights).append(bond_attn[i])
+
+    if not broken_weights or not intact_weights:
+        raise ValueError(
+            "Panel (c) requires both broken and intact bonds; "
+            f"got n_broken={len(broken_weights)}, n_intact={len(intact_weights)}"
+        )
+
+    effect = compute_effect_size(broken_weights, intact_weights, mode=attention_mode)
+    mode = effect["mode"]
+
+    # Bootstrap CI on Cohen's d (resample broken/intact jointly).
+    d_point = effect["cohen_d_signed"]
+    d_low = d_high = d_point
+    if len(broken_weights) > 1 and len(intact_weights) > 1:
+        b = np.asarray(broken_weights, dtype=float)
+        i_arr = np.asarray(intact_weights, dtype=float)
+        rng = np.random.default_rng(42)
+        boot_d = np.empty(n_bootstrap, dtype=float)
+        for k in range(n_bootstrap):
+            bs = b[rng.integers(0, len(b), size=len(b))]
+            is_ = i_arr[rng.integers(0, len(i_arr), size=len(i_arr))]
+            md = float(np.mean(bs) - np.mean(is_))
+            ps = float(np.sqrt((np.var(bs) + np.var(is_)) / 2))
+            boot_d[k] = md / ps if ps > 0 else 0.0
+        alpha = (1.0 - ci_level) / 2.0
+        d_low = float(np.percentile(boot_d, 100.0 * alpha))
+        d_high = float(np.percentile(boot_d, 100.0 * (1.0 - alpha)))
+
+    fig, ax = plt.subplots(figsize=figsize)
+    data = [broken_weights, intact_weights]
+    positions = [1, 2]
+
+    parts = ax.violinplot(data, positions=positions, showmeans=False,
+                          showmedians=False, showextrema=False, widths=0.7)
+    for idx, body in enumerate(parts['bodies']):
+        color = INTERP_COLORS['broken'] if idx == 0 else INTERP_COLORS['intact']
+        body.set_facecolor(color)
+        body.set_edgecolor('black')
+        body.set_linewidth(1.0)
+        body.set_alpha(0.55)
+
+    # Overlay median + IQR whiskers (compact summary without strip saturation).
+    for idx, vals in enumerate(data):
+        vals = np.asarray(vals, dtype=float)
+        if vals.size == 0:
+            continue
+        med = float(np.median(vals))
+        q1, q3 = np.percentile(vals, [25, 75])
+        ax.scatter([positions[idx]], [med], color='white', edgecolor='black',
+                   s=90, zorder=5, marker='o', linewidth=1.5)
+        ax.vlines(positions[idx], q1, q3, color='black', linewidth=2.5, zorder=4)
+
+    ax.set_xticks(positions)
+    ax.set_xticklabels(['Broken Bonds', 'Intact Bonds'], fontsize=11)
+    ax.set_ylabel('Functional Saliency (Attention)', fontsize=11, fontweight='bold')
+    title = ('Broken vs Intact Bonds: Violin Distribution\n'
+             f'{_mode_caption(mode)}')
+    ax.set_title(title, fontsize=11, fontweight='bold')
+    ax.grid(True, alpha=0.3, axis='y')
+
+    ci_pct = int(ci_level * 100)
+    stats_text = (
+        f"Cohen's d = {d_point:+.3f}  [{ci_pct}% CI: {d_low:+.3f}, {d_high:+.3f}]\n"
+        f"AUC = {effect['auc']:.3f}  (p = {effect['p_value']:.2e})\n"
+        f"n_broken = {effect['n_broken']}, n_intact = {effect['n_intact']}\n"
+        f"bootstrap iters = {n_bootstrap}"
+    )
+    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=9,
+            verticalalignment='top', horizontalalignment='left',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.85))
+
+    plt.tight_layout()
+    _save_figure(fig, save_path)
+    effect_with_ci = dict(effect)
+    effect_with_ci["cohen_d_ci_low"] = d_low
+    effect_with_ci["cohen_d_ci_high"] = d_high
+    effect_with_ci["bootstrap_iters"] = n_bootstrap
+    effect_with_ci["ci_level"] = ci_level
+    return fig, effect_with_ci
+
+
+def plot_grouped_alignment(
+    attention_weights_list: List,
+    bond_labels_list: List[torch.Tensor],
+    edge_indices: List[Optional[torch.Tensor]],
+    sequences: List[str],
+    group_values: List[str],
+    group_order: Optional[List[str]] = None,
+    group_title: str = "Group",
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (9, 6),
+    max_seq_len: int = 30,
+    layer_index: int = -1,
+    n_bootstrap: int = 1000,
+) -> Tuple[plt.Figure, Dict[str, object]]:
+    """Plot final-layer attention-label alignment stratified by one covariate.
+
+    Each violin contains per-sample |Pearson r| values. White points denote
+    group means and error bars denote bootstrap 95% CIs of those means. This
+    distribution-based view remains readable for hundreds of samples and is
+    therefore suitable for the requested per-length, per-charge and per-FBR
+    robustness checks.
+    """
+    grouped: Dict[str, List[float]] = {}
+    grouped_signed: Dict[str, List[float]] = {}
+    for attn_weights, labels, edge_idx, seq, group in zip(
+        attention_weights_list, bond_labels_list, edge_indices, sequences, group_values
+    ):
+        layer_weights = (
+            attn_weights[layer_index] if isinstance(attn_weights, list) else attn_weights
+        )
+        bond_attn, _ = extract_bond_level_attention(
+            layer_weights, edge_idx, seq, max_seq_len
+        )
+        labels_np = (
+            labels.cpu().numpy() if isinstance(labels, torch.Tensor) else np.asarray(labels)
+        )
+        metrics = compute_separation_metrics(bond_attn, labels_np)
+        if not metrics["valid"]:
+            continue
+        group_name = str(group)
+        grouped.setdefault(group_name, []).append(metrics["abs_r"])
+        grouped_signed.setdefault(group_name, []).append(metrics["pearson_r"])
+
+    if group_order is None:
+        groups = sorted(grouped)
+    else:
+        groups = [group for group in group_order if group in grouped]
+        groups.extend(group for group in sorted(grouped) if group not in groups)
+    groups = [group for group in groups if len(grouped[group]) >= 2]
+    if not groups:
+        raise ValueError(
+            f"No groups with at least two valid samples: {group_title}"
+        )
+
+    distributions = [np.asarray(grouped[group], dtype=float) for group in groups]
+    positions = np.arange(1, len(groups) + 1)
+    fig, ax = plt.subplots(figsize=figsize)
+    violin = ax.violinplot(
+        distributions, positions=positions, widths=0.75,
+        showmeans=False, showmedians=False, showextrema=False,
+    )
+    palette = plt.cm.Blues(np.linspace(0.45, 0.85, len(groups)))
+    for body, color in zip(violin["bodies"], palette):
+        body.set_facecolor(color)
+        body.set_edgecolor(INTERP_COLORS["line"])
+        body.set_alpha(0.65)
+
+    summary: Dict[str, object] = {
+        "group_title": group_title,
+        "metric": "final-layer per-sample abs(Pearson r)",
+        "bootstrap_iters": n_bootstrap,
+        "groups": {},
+    }
+    means, lower_errors, upper_errors = [], [], []
+    for group, values in zip(groups, distributions):
+        point, ci_low, ci_high = bootstrap_ci(values, n_iters=n_bootstrap, ci=0.95)
+        means.append(point)
+        lower_errors.append(point - ci_low)
+        upper_errors.append(ci_high - point)
+        summary["groups"][group] = {
+            "n": int(len(values)),
+            "mean_abs_r": point,
+            "median_abs_r": float(np.median(values)),
+            "ci_low": ci_low,
+            "ci_high": ci_high,
+            "mean_signed_r": float(np.mean(grouped_signed[group])),
+        }
+
+    ax.errorbar(
+        positions, means, yerr=np.vstack([lower_errors, upper_errors]),
+        fmt="o", color="black", markerfacecolor="white", markeredgecolor="black",
+        markersize=7, capsize=5, linewidth=1.5, zorder=5,
+        label="Mean |r| and 95% bootstrap CI",
+    )
+    ax.set_xticks(positions)
+    ax.set_xticklabels(
+        [f"{group}\n(n={len(values)})" for group, values in zip(groups, distributions)],
+        fontsize=9,
+    )
+    ax.set_xlabel(group_title, fontsize=11, fontweight="bold")
+    ax.set_ylabel("Final-layer attention-label alignment |r|", fontsize=11,
+                  fontweight="bold")
+    ax.set_title(
+        f"Alignment Robustness by {group_title}\n"
+        "Per-sample distribution with bootstrap uncertainty",
+        fontsize=12, fontweight="bold",
+    )
+    ax.set_ylim(bottom=0)
+    ax.grid(True, axis="y", alpha=0.3)
+    ax.legend(loc="upper right", fontsize=9)
+    plt.tight_layout()
+    _save_figure(fig, save_path)
+    return fig, summary
+
+
+def plot_grouped_metric_distribution(
+    metric_values: List[float],
+    group_values: List[str],
+    group_order: Optional[List[str]] = None,
+    group_title: str = "Group",
+    metric_label: str = "Metric",
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (9, 6),
+    n_bootstrap: int = 1000,
+) -> Tuple[plt.Figure, Dict[str, object]]:
+    """Violin distributions of an arbitrary per-sample metric by group.
+
+    Used by occlusion analysis to report per-length, per-charge and per-FBR
+    attention-occlusion correlation without plotting one bar per sample.
+    """
+    grouped: Dict[str, List[float]] = {}
+    for value, group in zip(metric_values, group_values):
+        value = float(value)
+        if np.isnan(value):
+            continue
+        grouped.setdefault(str(group), []).append(value)
+
+    if group_order is None:
+        groups = sorted(grouped)
+    else:
+        groups = [group for group in group_order if group in grouped]
+        groups.extend(group for group in sorted(grouped) if group not in groups)
+    groups = [group for group in groups if len(grouped[group]) >= 2]
+    if not groups:
+        raise ValueError(f"No groups with at least two valid samples: {group_title}")
+
+    distributions = [np.asarray(grouped[group], dtype=float) for group in groups]
+    positions = np.arange(1, len(groups) + 1)
+    fig, ax = plt.subplots(figsize=figsize)
+    violin = ax.violinplot(
+        distributions, positions=positions, widths=0.75,
+        showmeans=False, showmedians=False, showextrema=False,
+    )
+    palette = plt.cm.Purples(np.linspace(0.45, 0.85, len(groups)))
+    for body, color in zip(violin["bodies"], palette):
+        body.set_facecolor(color)
+        body.set_edgecolor(INTERP_COLORS["line"])
+        body.set_alpha(0.65)
+
+    means, lower_errors, upper_errors = [], [], []
+    summary: Dict[str, object] = {
+        "group_title": group_title,
+        "metric": metric_label,
+        "bootstrap_iters": n_bootstrap,
+        "groups": {},
+    }
+    for group, values in zip(groups, distributions):
+        point, ci_low, ci_high = bootstrap_ci(values, n_iters=n_bootstrap, ci=0.95)
+        means.append(point)
+        lower_errors.append(point - ci_low)
+        upper_errors.append(ci_high - point)
+        summary["groups"][group] = {
+            "n": int(len(values)),
+            "mean": point,
+            "median": float(np.median(values)),
+            "ci_low": ci_low,
+            "ci_high": ci_high,
+        }
+
+    ax.errorbar(
+        positions, means, yerr=np.vstack([lower_errors, upper_errors]),
+        fmt="o", color="black", markerfacecolor="white", markeredgecolor="black",
+        markersize=7, capsize=5, linewidth=1.5, zorder=5,
+        label="Mean and 95% bootstrap CI",
+    )
+    ax.axhline(0, color="gray", linewidth=0.8, alpha=0.7)
+    ax.set_xticks(positions)
+    ax.set_xticklabels(
+        [f"{group}\n(n={len(values)})" for group, values in zip(groups, distributions)],
+        fontsize=9,
+    )
+    ax.set_xlabel(group_title, fontsize=11, fontweight="bold")
+    ax.set_ylabel(metric_label, fontsize=11, fontweight="bold")
+    ax.set_title(
+        f"{metric_label} by {group_title}\n"
+        "Per-sample distribution with bootstrap uncertainty",
+        fontsize=12, fontweight="bold",
+    )
+    ax.grid(True, axis="y", alpha=0.3)
+    ax.legend(loc="best", fontsize=9)
+    plt.tight_layout()
+    _save_figure(fig, save_path)
+    return fig, summary
+
+
 def plot_new_interpretability_case_study(
     attention_weights_list: List,
     bond_labels_list: List[torch.Tensor],
@@ -1496,6 +2024,11 @@ def plot_new_interpretability_case_study(
     max_seq_len: int = 25,
     attention_mode: str = "auto",
     heatmap_normalize: str = "row",
+    stat_attention_weights: Optional[List] = None,
+    stat_bond_labels: Optional[List[torch.Tensor]] = None,
+    stat_sequences: Optional[List[str]] = None,
+    stat_edge_indices: Optional[List[Optional[torch.Tensor]]] = None,
+    n_bootstrap: int = 1000,
 ) -> Tuple[plt.Figure, Dict[str, object]]:
     """Paper-grade 2x2 interpretability figure.
 
@@ -1508,18 +2041,31 @@ def plot_new_interpretability_case_study(
     (extract_bond_level_attention), and shared metrics
     (compute_separation_metrics / compute_effect_size) guarantee consistency.
 
+    Panel (a) uses the sample closest to the median final-layer |r|. Panels
+    (b)(c)(d) prefer the optional large-N stratified sample and fall back to
+    the case list otherwise. This directly addresses reviewer concerns that
+    population claims were drawn from a handful of case-study samples.
+
     Returns (fig, summary_dict) for JSON serialization.
     """
     # Create 2x2 layout
     fig, axes = plt.subplots(2, 2, figsize=figsize)
     plt.subplots_adjust(hspace=0.40, wspace=0.30, left=0.08, right=0.95, top=0.90, bottom=0.08)
 
-    # ---------- (a) Single-sample final-layer attention ----------
+    pop_attn = stat_attention_weights if stat_attention_weights else attention_weights_list
+    pop_labels = stat_bond_labels if stat_bond_labels else bond_labels_list
+    pop_edges = stat_edge_indices if stat_edge_indices else edge_indices
+    pop_sequences = stat_sequences if stat_sequences else sequences
+
+    # ---------- (a) Representative single-sample final-layer attention ----------
     ax1 = axes[0, 0]
-    sample_attn = attention_weights_list[0]
-    sample_labels = bond_labels_list[0]
-    sample_seq = sequences[0]
-    sample_edge_idx = edge_indices[0]
+    representative_idx, representative_info = select_representative_case(
+        pop_attn, pop_labels, pop_edges, pop_sequences, max_seq_len=max_seq_len,
+    )
+    sample_attn = pop_attn[representative_idx]
+    sample_labels = pop_labels[representative_idx]
+    sample_seq = pop_sequences[representative_idx]
+    sample_edge_idx = pop_edges[representative_idx]
 
     num_layers = len(sample_attn)
     seq_len = min(len(sample_seq), max_seq_len)
@@ -1551,7 +2097,7 @@ def plot_new_interpretability_case_study(
     m_a = compute_separation_metrics(last_attn, bond_labels_np)
     ax1.set_xlabel('Bond Position (Residue Pair)', fontsize=10)
     ax1.set_ylabel('Functional Saliency (Attention)', fontsize=10)
-    ax1.set_title('(a) Cleavage-Relevance Attention Distribution\n'
+    ax1.set_title('(a) Representative Attention Distribution\n'
                   f"alignment |r|={m_a['abs_r']:.2f}, signed r={m_a['pearson_r']:+.2f}",
                   fontsize=11, fontweight='bold')
     if num_bonds <= 15:
@@ -1559,16 +2105,26 @@ def plot_new_interpretability_case_study(
         ax1.set_xticklabels(bond_labels_str, fontsize=7, rotation=45)
     ax1.grid(True, alpha=0.3, axis='y')
 
-    # ---------- (b) Layer-wise evolution ----------
+    # ---------- (b) Population layer-wise evolution + bootstrap CI ----------
     ax2 = axes[0, 1]
-    layer_metrics = compute_layer_separation_metrics(
-        attention_weights_list, bond_labels_list, edge_indices, sequences, max_seq_len
+    layer_metrics, layer_per_sample = compute_layer_separation_metrics(
+        pop_attn, pop_labels, pop_edges, pop_sequences, max_seq_len,
+        return_per_sample=True,
     )
 
     if layer_metrics:
         layer_x = np.arange(len(layer_metrics))
         abs_r = [m["abs_r"] for m in layer_metrics]
         raw_r = [m["pearson_r"] for m in layer_metrics]
+
+        ci_low, ci_high = [], []
+        for samples in layer_per_sample:
+            values = np.asarray([m["abs_r"] for m in samples], dtype=float)
+            _, low, high = bootstrap_ci(values, n_iters=n_bootstrap, ci=0.95)
+            ci_low.append(low)
+            ci_high.append(high)
+        ax2.fill_between(layer_x, ci_low, ci_high, color=INTERP_COLORS['fill'],
+                         alpha=0.18, label='95% bootstrap CI', zorder=1)
 
         # Secondary signed r (gray dashed)
         ax2.plot(layer_x, raw_r, 'o--', color=INTERP_COLORS['raw_r'], linewidth=1.5,
@@ -1589,16 +2145,22 @@ def plot_new_interpretability_case_study(
         ax2.legend(loc='lower right', fontsize=9, framealpha=0.9)
 
     ax2.set_xlabel('Network Layer', fontsize=10, fontweight='bold')
-    ax2.set_ylabel('Alignment strength (≥ 0)', fontsize=10, fontweight='bold')
+    ax2.set_ylabel('Correlation / alignment strength', fontsize=10, fontweight='bold')
     ax2.set_title('(b) Layer-wise Attention–Label Alignment',
                   fontsize=11, fontweight='bold')
     ax2.grid(True, alpha=0.3)
 
     # ---------- (c) Broken vs intact (unified effect size) ----------
+    # Panel (c) is a population statistic. A violin plot avoids overplotting
+    # thousands of bond-level points when the large-N sample is used.
     ax3 = axes[1, 0]
+    c_attn_list = pop_attn
+    c_labels_list = pop_labels
+    c_edge_list = pop_edges
+    c_seq_list = pop_sequences
     broken_weights, intact_weights = [], []
     for attn_weights, labels, edge_idx, seq in zip(
-        attention_weights_list, bond_labels_list, edge_indices, sequences
+        c_attn_list, c_labels_list, c_edge_list, c_seq_list
     ):
         ll = attn_weights[-1] if isinstance(attn_weights, list) else attn_weights
         bond_attn, _ = extract_bond_level_attention(ll, edge_idx, seq, max_seq_len)
@@ -1606,29 +2168,53 @@ def plot_new_interpretability_case_study(
         for i in range(min(len(bond_attn), len(labels_np))):
             (broken_weights if labels_np[i] == 1 else intact_weights).append(bond_attn[i])
 
+    if not broken_weights or not intact_weights:
+        raise ValueError(
+            "Combined panel (c) requires both broken and intact bonds; "
+            f"got n_broken={len(broken_weights)}, n_intact={len(intact_weights)}"
+        )
+
     effect = compute_effect_size(broken_weights, intact_weights, mode=attention_mode)
     mode = effect["mode"]
 
-    bp = ax3.boxplot([broken_weights, intact_weights], patch_artist=True, widths=0.5,
-                     showmeans=True,
-                     meanprops=dict(marker='D', markerfacecolor='white', markersize=8))
+    violin_data = [broken_weights, intact_weights]
+    violin = ax3.violinplot(violin_data, positions=[1, 2], widths=0.7,
+                            showmeans=False, showmedians=False, showextrema=False)
+    for idx, body in enumerate(violin['bodies']):
+        body.set_facecolor(INTERP_COLORS['broken'] if idx == 0 else INTERP_COLORS['intact'])
+        body.set_edgecolor('black')
+        body.set_alpha(0.55)
+    for position, values in zip([1, 2], violin_data):
+        values_np = np.asarray(values, dtype=float)
+        if values_np.size:
+            q1, median, q3 = np.percentile(values_np, [25, 50, 75])
+            ax3.vlines(position, q1, q3, color='black', linewidth=2.5, zorder=4)
+            ax3.scatter(position, median, color='white', edgecolor='black',
+                        s=70, linewidth=1.2, zorder=5)
     ax3.set_xticks([1, 2])
     ax3.set_xticklabels(['Broken Bonds', 'Intact Bonds'])
-    bp['boxes'][0].set_facecolor(INTERP_COLORS['broken']); bp['boxes'][0].set_alpha(0.7)
-    bp['boxes'][1].set_facecolor(INTERP_COLORS['intact']); bp['boxes'][1].set_alpha(0.7)
-    for median in bp['medians']:
-        median.set_color('black'); median.set_linewidth(2)
 
-    rng = np.random.default_rng(42)
-    ax3.scatter(rng.normal(1, 0.06, len(broken_weights)), broken_weights,
-                alpha=0.4, color=INTERP_COLORS['broken'], s=20, zorder=2)
-    ax3.scatter(rng.normal(2, 0.06, len(intact_weights)), intact_weights,
-                alpha=0.4, color=INTERP_COLORS['intact'], s=20, zorder=2)
+    d_low = d_high = effect['cohen_d_signed']
+    if len(broken_weights) > 1 and len(intact_weights) > 1:
+        broken_np = np.asarray(broken_weights, dtype=float)
+        intact_np = np.asarray(intact_weights, dtype=float)
+        rng = np.random.default_rng(42)
+        bootstrap_d = np.empty(n_bootstrap, dtype=float)
+        for iteration in range(n_bootstrap):
+            broken_sample = broken_np[rng.integers(0, len(broken_np), len(broken_np))]
+            intact_sample = intact_np[rng.integers(0, len(intact_np), len(intact_np))]
+            pooled_std = np.sqrt((np.var(broken_sample) + np.var(intact_sample)) / 2)
+            bootstrap_d[iteration] = (
+                (np.mean(broken_sample) - np.mean(intact_sample)) / pooled_std
+                if pooled_std > 0 else 0.0
+            )
+        d_low, d_high = np.percentile(bootstrap_d, [2.5, 97.5])
 
     # 精简 stats_text：保留关键数值，去掉冗长的自然语言 interpretation
     # （interpretation 由用户在 figure caption 中自行补充）
     stats_text = (
-        f"d = {effect['cohen_d_signed']:+.2f}  "
+        f"d = {effect['cohen_d_signed']:+.2f} "
+        f"[95% CI {d_low:+.2f}, {d_high:+.2f}]\n"
         f"(n_broken={effect['n_broken']}, n_intact={effect['n_intact']})\n"
         f"AUC = {effect['auc']:.3f}\n"
         f"p = {effect['p_value']:.2e}"
@@ -1637,7 +2223,9 @@ def plot_new_interpretability_case_study(
              verticalalignment='top', horizontalalignment='right',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.85))
     ax3.set_ylabel('Functional Saliency (Attention)', fontsize=10, fontweight='bold')
-    ax3.set_title('(c) Broken vs Intact Bonds: Attention-based Functional Separation',
+    panel_c_n = len(c_attn_list)
+    ax3.set_title(f'(c) [n={panel_c_n}] Broken vs Intact Bonds: '
+                  f'Attention-based Functional Separation',
                   fontsize=10, fontweight='bold')
     ax3.grid(True, alpha=0.3, axis='y')
 
@@ -1656,8 +2244,13 @@ def plot_new_interpretability_case_study(
     #   'absolute'       → 'absolute'（保留大小，但视觉可能与指标矛盾）
     panel_d_color_scale = 'absolute' if heatmap_normalize == 'absolute' else 'row'
 
+    # Panel (d) is a POPULATION aggregate: prefer the large-N stratified
+    # sample when supplied; otherwise fall back to the case-study list.
+    d_attn_list = pop_attn
+    d_edge_list = pop_edges
+    d_seq_list = pop_sequences
     _, panel_d_summary = plot_aggregate_layer_attention_compact(
-        attention_weights_list, edge_indices, sequences,
+        d_attn_list, d_edge_list, d_seq_list,
         ax=ax4,
         max_seq_len=max_seq_len,
         max_bonds_show=min(15, max_seq_len - 1),
@@ -1666,11 +2259,13 @@ def plot_new_interpretability_case_study(
         color_scale=panel_d_color_scale,
     )
     panel_d_focus_metrics = panel_d_summary['layer_focus_metrics']
+    panel_d_n_population = panel_d_summary.get('n_samples', len(d_attn_list))
     # 在 panel (d) 标题前加 "(d)" 标识
-    ax4.set_title('(d) ' + ax4.get_title(), fontsize=10, fontweight='bold', pad=8)
+    ax4.set_title(f'(d) [n={panel_d_n_population}] ' + ax4.get_title(),
+                  fontsize=10, fontweight='bold', pad=8)
 
     # 精简 suptitle：只保留主标题，详细 interpretation 留给 figure caption
-    fig.suptitle('DBond-GT Interpretability Case Study',
+    fig.suptitle('DBond-GT Interpretability Analysis',
                  fontsize=13, fontweight='bold', y=0.97)
 
     _save_figure(fig, save_path)
@@ -1679,12 +2274,19 @@ def plot_new_interpretability_case_study(
         "attention_mode": mode,
         "mode_caption": _mode_caption(mode),
         "panel_a_metrics": m_a,
+        "panel_a_representative_selection": representative_info,
         "panel_b_layer_metrics": layer_metrics,
+        "panel_b_bootstrap_iters": n_bootstrap,
         "panel_c_effect_size": effect,
+        "panel_c_cohen_d_ci_low": float(d_low),
+        "panel_c_cohen_d_ci_high": float(d_high),
+        "panel_c_n_samples": panel_c_n,
+        "panel_c_source": "stat" if stat_attention_weights else "case",
         "panel_d_layer_focus_metrics": panel_d_focus_metrics,
         "panel_d_interpretation": panel_d_summary['interpretation'],
         "panel_d_n_samples": panel_d_summary['n_samples'],
-        "panel_d_color_scale": "absolute",
+        "panel_d_source": "stat" if stat_attention_weights else "case",
+        "panel_d_color_scale": panel_d_color_scale,
     }
     return fig, summary
 
@@ -2071,6 +2673,9 @@ def plot_occlusion_attention_consistency(
     plt.subplots_adjust(wspace=0.3, left=0.07, right=0.97, top=0.86, bottom=0.15)
 
     valid_r = [r for r in per_sample_r if not np.isnan(r)]
+    mean_r, mean_r_ci_low, mean_r_ci_high = bootstrap_ci(
+        np.asarray(valid_r, dtype=float), n_iters=1000, ci=0.95,
+    )
     global_r = (float(np.corrcoef(all_attention_flat, all_occlusion_flat)[0, 1])
                 if len(all_attention_flat) > 1 else float('nan'))
     try:
@@ -2118,11 +2723,11 @@ def plot_occlusion_attention_consistency(
             if not np.isnan(r_val):
                 # annotate top-3 and bottom-3 only to avoid clutter
                 pass
-        mean_r = float(np.mean(valid_r))
         median_r = float(np.median(valid_r))
         ax2.axhline(mean_r, color=INTERP_COLORS['line'], linestyle='--',
                     linewidth=1.2, alpha=0.7,
-                    label=f'mean = {mean_r:+.3f}')
+                    label=(f'mean = {mean_r:+.3f} '
+                           f'[95% CI {mean_r_ci_low:+.3f}, {mean_r_ci_high:+.3f}]'))
         ax2.axhline(0, color='gray', linewidth=0.5, alpha=0.5)
         ax2.axhline(0.5, color=INTERP_COLORS['highlight'], linestyle=':',
                     linewidth=1.0, alpha=0.6, label='r = 0.5 (strong)')
@@ -2159,6 +2764,9 @@ def plot_occlusion_attention_consistency(
         'global_pearson_r': global_r,
         'global_spearman_rho': global_rho,
         'mean_per_sample_r': float(np.mean(valid_r)) if valid_r else float('nan'),
+        'mean_per_sample_r_ci_low': mean_r_ci_low,
+        'mean_per_sample_r_ci_high': mean_r_ci_high,
+        'bootstrap_iters': 1000,
         'median_per_sample_r': float(np.median(valid_r)) if valid_r else float('nan'),
         'n_strong_consistency': n_strong,
         'n_valid': len(valid_r),

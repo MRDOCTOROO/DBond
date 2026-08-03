@@ -9,12 +9,12 @@ Occlusion 因果归因分析（Paper-grade attribution）
      记录 Δp[j, i] = |p_mut[i] - p_orig[i]|，构建敏感度矩阵 M[j, i]。
      与 attention 矩阵对比，计算 Pearson r 评估一致性。
 
-样本选择：自动分层抽样（3 维 × 3 桶 = 27 格，每格 1 个样本至 15 个）。
+样本选择：自动比例分层抽样（长度 × 电荷态 × FBR），默认 150 个样本。
         - 序列长度：24 / 25-29 / ≥30
-        - NCE：<22 / 22-27 / >27
+        - 电荷态：按实际 precursor charge 分组
         - FBR：<0.3 / 0.3-0.7 / >0.7
 
-计算成本（15 样本）：~10,800 次推理 ≈ GPU 2 分钟
+计算成本：脚本记录实际 wall time；逐样本图默认仅输出 15 个代表案例。
 
 输出：
   - occlusion_<sample_id>.svg   每样本 2 子图：occlusion vs attention
@@ -28,7 +28,7 @@ Occlusion 因果归因分析（Paper-grade attribution）
       --checkpoint <ckpt.pt> \
       --input_csv dataset/5fold/6072.test.fbr.multi.csv \
       --output_dir results/occlusion_attribution \
-      --num_samples 15 \
+      --num_samples 150 \
       --infer_config
 """
 
@@ -39,12 +39,14 @@ import json
 import logging
 import os
 import sys
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
 import yaml
+import matplotlib.pyplot as plt
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -57,6 +59,8 @@ from utils.visualization import (
     collapse_to_residue_bond_attention,
     plot_occlusion_vs_attention,
     plot_occlusion_attention_consistency,
+    bootstrap_ci,
+    plot_grouped_metric_distribution,
 )
 
 DEFAULT_ALPHABET = "#ABCDEFGHIKLMNOPQRSTVWXYZ"  # 25 chars (含 #)
@@ -127,7 +131,7 @@ def stratified_sample(
     random_seed: int,
     logger: logging.Logger,
 ) -> List[int]:
-    """按 (长度桶 × NCE 桶 × FBR 桶) 分层抽样。
+    """按 (长度桶 × 电荷态 × FBR 桶) 分层抽样。
 
     返回 dataset 索引列表（长度 ≤ num_samples）。
     """
@@ -136,7 +140,7 @@ def stratified_sample(
 
     df["seq_len"] = df["seq"].astype(str).str.len()
     df["fbr"] = pd.to_numeric(df["fbr"], errors="coerce")
-    df["nce"] = pd.to_numeric(df["nce"], errors="coerce")
+    df["charge"] = pd.to_numeric(df["charge"], errors="coerce")
 
     def _len_bin(L):
         if L <= 24:
@@ -146,64 +150,58 @@ def stratified_sample(
         else:
             return "L_long"
 
-    def _nce_bin(n):
-        if pd.isna(n):
-            return "N_missing"
-        if n < 22:
-            return "N_low"
-        elif n <= 27:
-            return "N_mid"
-        else:
-            return "N_high"
+    def _charge_bin(charge):
+        if pd.isna(charge):
+            return "C_missing"
+        return f"C_{charge:g}"
 
     def _fbr_bin(f):
         if pd.isna(f):
             return "F_missing"
         if f < 0.3:
             return "F_low"
-        elif f <= 0.7:
+        elif f < 0.7:
             return "F_mid"
         else:
             return "F_high"
 
     df["len_bin"] = df["seq_len"].apply(_len_bin)
-    df["nce_bin"] = df["nce"].apply(_nce_bin)
+    df["charge_bin"] = df["charge"].apply(_charge_bin)
     df["fbr_bin"] = df["fbr"].apply(_fbr_bin)
 
-    df["stratum"] = df["len_bin"] + "|" + df["nce_bin"] + "|" + df["fbr_bin"]
+    df["stratum"] = df["len_bin"] + "|" + df["charge_bin"] + "|" + df["fbr_bin"]
 
     grouped = df.groupby("stratum")
     strata = list(grouped.groups.keys())
     logger.info(f"Found {len(strata)} non-empty strata")
 
-    # Round-robin sample one from each stratum (shuffled order) until target reached
-    strata_shuffled = list(strata)
-    rng.shuffle(strata_shuffled)
+    target = min(num_samples, len(df))
+    sizes = np.asarray([len(grouped.groups[s]) for s in strata], dtype=float)
+    exact = sizes / sizes.sum() * target
+    allocation = np.floor(exact).astype(int)
+    if target >= len(strata):
+        allocation = np.maximum(allocation, 1)
+    while allocation.sum() > target:
+        candidates = np.where(allocation > (1 if target >= len(strata) else 0))[0]
+        if not len(candidates):
+            break
+        pos = min(candidates, key=lambda i: exact[i] - allocation[i])
+        allocation[pos] -= 1
+    while allocation.sum() < target:
+        candidates = [i for i in range(len(strata)) if allocation[i] < sizes[i]]
+        if not candidates:
+            break
+        pos = max(candidates, key=lambda i: exact[i] - allocation[i])
+        allocation[pos] += 1
 
     selected_idx: List[int] = []
-    # Pass 1: one per stratum
-    for s in strata_shuffled:
-        if len(selected_idx) >= num_samples:
-            break
-        candidates = grouped.groups[s].tolist()
-        if candidates:
-            pick = candidates[rng.randint(0, len(candidates))]
-            selected_idx.append(int(pick))
-
-    # Pass 2: fill up by re-sampling from largest strata
-    if len(selected_idx) < num_samples:
-        sizes = {s: len(grouped.groups[s]) for s in strata}
-        sorted_strata = sorted(sizes, key=lambda x: -sizes[x])
-        for s in sorted_strata:
-            while len(selected_idx) < num_samples:
-                candidates = grouped.groups[s].tolist()
-                if not candidates:
-                    break
-                pick = candidates[rng.randint(0, len(candidates))]
-                if pick not in selected_idx:
-                    selected_idx.append(int(pick))
-                else:
-                    break
+    for stratum, requested in zip(strata, allocation):
+        candidates = np.asarray(grouped.groups[stratum].tolist(), dtype=int)
+        if requested:
+            sampled = rng.choice(candidates, size=min(int(requested), len(candidates)),
+                                 replace=False)
+            selected_idx.extend(int(index) for index in sampled)
+            logger.info(f"  {stratum}: total={len(candidates)}, sampled={len(sampled)}")
 
     logger.info(f"Selected {len(selected_idx)} samples across "
                 f"{len(set(df.loc[selected_idx, 'stratum']))} strata")
@@ -417,7 +415,10 @@ def main():
     parser.add_argument("--output_dir", type=str,
                         default="results/occlusion_attribution")
     parser.add_argument("--infer_config", action="store_true")
-    parser.add_argument("--num_samples", type=int, default=15)
+    parser.add_argument("--num_samples", type=int, default=150)
+    parser.add_argument("--num_case_figures", type=int, default=15,
+                        help="保存逐样本热图的数量；全部样本仍参与统计")
+    parser.add_argument("--bootstrap_iters", type=int, default=1000)
     parser.add_argument("--max_seq_len", type=int, default=32)
     parser.add_argument("--random_seed", type=int, default=42)
     parser.add_argument("--figure_format", type=str, default="svg",
@@ -433,6 +434,7 @@ def main():
     logger.info("=" * 60)
     logger.info("Occlusion Causal Attribution Analysis")
     logger.info("=" * 60)
+    analysis_start_time = time.time()
 
     # 检查文件
     for p, label in [(args.config, "Config"),
@@ -487,6 +489,9 @@ def main():
     all_occlusion_flat: List[np.ndarray] = []
     per_sample_r: List[float] = []
     sample_ids: List[str] = []
+    length_groups: List[str] = []
+    charge_groups: List[str] = []
+    fbr_groups: List[str] = []
 
     # ---- 2. 逐样本 occlusion + attention ----
     for k, idx in enumerate(selected):
@@ -526,19 +531,47 @@ def main():
         all_attention_flat.append(att_mat.flatten())
         all_occlusion_flat.append(occ_mat.flatten())
 
-        # 每样本图
-        fig_path = os.path.join(
-            args.output_dir, f"occlusion_{sample_id}{img_ext}",
+        # 每样本图仅输出前 num_case_figures 个，避免 150 张补充图占用空间。
+        if k < args.num_case_figures:
+            fig_path = os.path.join(
+                args.output_dir, f"occlusion_{sample_id}{img_ext}",
+            )
+            _, info = plot_occlusion_vs_attention(
+                occlusion_matrix=occ_mat,
+                attention_matrix=att_mat,
+                sequence=seq,
+                sample_id=sample_id,
+                layer_idx=args.attention_layer,
+                save_path=fig_path,
+            )
+            plt.close('all')
+            logger.info(f"  saved figure: {fig_path}  r={r:+.3f}")
+        else:
+            info = {
+                "consistency": (
+                    "strongly consistent" if not np.isnan(r) and r >= 0.5
+                    else "moderately consistent" if not np.isnan(r) and r >= 0.3
+                    else "weakly consistent" if not np.isnan(r)
+                    else "undefined"
+                )
+            }
+
+        fbr_raw = pd.to_numeric(
+            test_dataset.data.iloc[idx].get("fbr", np.nan), errors="coerce",
         )
-        fig, info = plot_occlusion_vs_attention(
-            occlusion_matrix=occ_mat,
-            attention_matrix=att_mat,
-            sequence=seq,
-            sample_id=sample_id,
-            layer_idx=args.attention_layer,
-            save_path=fig_path,
+        fbr = float(fbr_raw) if not pd.isna(fbr_raw) else float("nan")
+        length_groups.append(
+            "Short (<=24)" if seq_len <= 24
+            else "Medium (25-29)" if seq_len <= 29
+            else "Long (>=30)"
         )
-        logger.info(f"  saved figure: {fig_path}  r={r:+.3f}")
+        charge_groups.append(f"Charge {float(sample['charge']):g}")
+        fbr_groups.append(
+            "FBR missing" if np.isnan(fbr)
+            else "Low FBR (<0.3)" if fbr < 0.3
+            else "Medium FBR (0.3-0.7)" if fbr <= 0.7
+            else "High FBR (>0.7)"
+        )
 
         per_sample_results.append({
             "sample_id": sample_id,
@@ -547,6 +580,7 @@ def main():
             "seq_len": int(seq_len),
             "nce": float(sample["nce"]),
             "charge": float(sample["charge"]),
+            "fbr": fbr,
             "p_orig": p_orig.tolist(),
             "pearson_r": r,
             "consistency": info["consistency"],
@@ -573,9 +607,37 @@ def main():
             all_occlusion_flat=occ_concat,
             save_path=agg_path,
         )
+        plt.close('all')
         logger.info(f"Saved aggregate figure: {agg_path}")
     else:
         agg_info = {"error": "no valid samples"}
+
+    valid_r = np.asarray([value for value in per_sample_r if not np.isnan(value)], dtype=float)
+    r_point, r_ci_low, r_ci_high = bootstrap_ci(
+        valid_r, n_iters=args.bootstrap_iters, ci=0.95,
+    )
+    grouped_summaries: Dict[str, object] = {}
+    grouped_specs = [
+        ("length", length_groups,
+         ["Short (<=24)", "Medium (25-29)", "Long (>=30)"], "Sequence Length"),
+        ("charge", charge_groups, None, "Precursor Charge"),
+        ("fbr", fbr_groups,
+         ["Low FBR (<0.3)", "Medium FBR (0.3-0.7)", "High FBR (>0.7)"],
+         "Cleavage Ratio (FBR)"),
+    ]
+    for key, groups, order, title in grouped_specs:
+        grouped_path = os.path.join(args.output_dir, f"occlusion_grouped_{key}{img_ext}")
+        try:
+            _, grouped_summary = plot_grouped_metric_distribution(
+                per_sample_r, groups, group_order=order, group_title=title,
+                metric_label="Pearson r (attention vs occlusion)",
+                save_path=grouped_path, n_bootstrap=args.bootstrap_iters,
+            )
+            plt.close('all')
+            grouped_summaries[key] = grouped_summary
+            logger.info(f"Saved grouped occlusion analysis: {grouped_path}")
+        except ValueError as exc:
+            logger.warning(str(exc))
 
     # ---- 4. 落盘 JSON ----
     per_sample_path = os.path.join(args.output_dir, "occlusion_per_sample.json")
@@ -587,7 +649,15 @@ def main():
         "num_samples_requested": args.num_samples,
         "num_samples_completed": len(per_sample_results),
         "attention_layer": args.attention_layer,
+        "sampling_rule": "length x charge x FBR proportional stratified sampling",
+        "num_case_figures": min(args.num_case_figures, len(per_sample_results)),
+        "bootstrap_iters": args.bootstrap_iters,
+        "mean_per_sample_pearson_r": r_point,
+        "mean_per_sample_pearson_r_ci_low": r_ci_low,
+        "mean_per_sample_pearson_r_ci_high": r_ci_high,
         "aggregate": agg_info,
+        "grouped_robustness": grouped_summaries,
+        "computation_cost_sec": round(time.time() - analysis_start_time, 2),
         "per_sample_pearson_r": dict(zip(sample_ids, per_sample_r)),
     }
     summary_path = os.path.join(args.output_dir, "occlusion_summary.json")

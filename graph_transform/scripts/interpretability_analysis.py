@@ -22,6 +22,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -29,6 +30,7 @@ import pandas as pd
 import torch
 import yaml
 import json
+import matplotlib.pyplot as plt
 
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -48,6 +50,11 @@ from utils.visualization import (
     compute_effect_size,
     detect_attention_mode,
     extract_bond_level_attention,
+    bootstrap_ci,
+    select_representative_case,
+    plot_panel_a_case_study,
+    plot_panel_c_violin,
+    plot_grouped_alignment,
     VALID_ATTENTION_MODES,
     DEFAULT_ATTENTION_MODE,
 )
@@ -205,6 +212,84 @@ def select_diverse_samples(dataset, num_samples: int, logger) -> List[int]:
     return sorted(selected)
 
 
+def select_statistical_samples(dataset, num_samples: int, random_seed: int,
+                               logger) -> List[int]:
+    """Proportionally sample length x charge x FBR strata.
+
+    The allocation follows the test-set distribution while assigning at least
+    one sample to every non-empty stratum when the requested sample count
+    permits. This preserves population representativeness and guarantees that
+    the reviewer-requested subgroup analyses are not silently missing strata.
+    """
+    import random
+
+    rng = random.Random(random_seed)
+    total = len(dataset)
+    target = min(num_samples, total)
+    if not hasattr(dataset, "data"):
+        return sorted(rng.sample(range(total), target))
+
+    df = dataset.data.reset_index(drop=True).copy()
+    required = {"seq", "charge", "fbr"}
+    if not required.issubset(df.columns):
+        logger.warning(
+            "Missing one of seq/charge/fbr; falling back to global random sampling"
+        )
+        return sorted(rng.sample(range(total), target))
+
+    lengths = df["seq"].astype(str).str.len()
+    df["length_group"] = pd.cut(
+        lengths, bins=[-np.inf, 24, 29, np.inf],
+        labels=["Short (<=24)", "Medium (25-29)", "Long (>=30)"],
+    ).astype(str)
+    charge_numeric = pd.to_numeric(df["charge"], errors="coerce")
+    df["charge_group"] = charge_numeric.map(
+        lambda value: "Charge missing" if pd.isna(value) else f"Charge {value:g}"
+    )
+    fbr_numeric = pd.to_numeric(df["fbr"], errors="coerce")
+    df["fbr_group"] = pd.cut(
+        fbr_numeric, bins=[-np.inf, 0.3, 0.7, np.inf], right=False,
+        labels=["Low FBR (<0.3)", "Medium FBR (0.3-0.7)", "High FBR (>=0.7)"],
+    ).astype(str)
+    df["stratum"] = (
+        df["length_group"] + " | " + df["charge_group"] + " | " + df["fbr_group"]
+    )
+
+    groups = {name: indices.tolist() for name, indices in df.groupby("stratum").groups.items()}
+    strata = sorted(groups)
+    logger.info(f"Statistical sampling found {len(strata)} non-empty "
+                "length x charge x FBR strata")
+
+    counts = np.asarray([len(groups[name]) for name in strata], dtype=float)
+    exact = counts / counts.sum() * target
+    allocation = np.floor(exact).astype(int)
+    if target >= len(strata):
+        allocation = np.maximum(allocation, 1)
+
+    # Reconcile the integer allocation with the exact requested total.
+    while allocation.sum() > target:
+        candidates = np.where(allocation > (1 if target >= len(strata) else 0))[0]
+        if not len(candidates):
+            break
+        idx = min(candidates, key=lambda i: exact[i] - allocation[i])
+        allocation[idx] -= 1
+    while allocation.sum() < target:
+        candidates = [i for i in range(len(strata)) if allocation[i] < counts[i]]
+        if not candidates:
+            break
+        idx = max(candidates, key=lambda i: exact[i] - allocation[i])
+        allocation[idx] += 1
+
+    selected: List[int] = []
+    for name, requested in zip(strata, allocation):
+        candidates = groups[name]
+        sampled = rng.sample(candidates, min(int(requested), len(candidates)))
+        selected.extend(int(index) for index in sampled)
+        if requested:
+            logger.info(f"  {name}: total={len(candidates)}, sampled={len(sampled)}")
+    return sorted(selected)
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
@@ -227,6 +312,8 @@ def main():
     parser.add_argument("--output_dir", type=str, default="results/interpretability", help="输出目录")
     parser.add_argument("--num_samples", type=int, default=5, help="用于案例分析的样本数量")
     parser.add_argument("--num_stat_samples", type=int, default=500, help="用于统计分析的样本数量")
+    parser.add_argument("--bootstrap_iters", type=int, default=1000,
+                        help="bootstrap置信区间重抽样次数")
     parser.add_argument("--max_seq_len", type=int, default=25, help="最大序列长度")
     parser.add_argument("--device", type=str, choices=["cpu", "cuda", "mps"], default=None, help="计算设备")
     parser.add_argument("--infer_config", action="store_true", help="从检查点自动推断模型配置")
@@ -250,6 +337,7 @@ def main():
     # 设置日志
     logger = setup_logging()
     logger.info("Starting interpretability analysis")
+    analysis_start_time = time.time()
     
     # 检查文件
     for path_value, label in [
@@ -385,6 +473,7 @@ def main():
             save_path=save_path, max_seq_len=args.max_seq_len,
             attention_mode=args.attention_mode,
         )
+        plt.close('all')
     logger.info(f"  saved {len(case_indices)} single-sample figures to: {single_sample_dir}")
     
     # 生成层间演化趋势图
@@ -400,21 +489,16 @@ def main():
             layer_metrics, save_path=trend_path,
             attention_mode=args.attention_mode,
         )
+        plt.close('all')
         # 保存完整的分层指标 (abs_r, signed r, spearman, auc)
         corr_df = pd.DataFrame([
             {"layer": f"Layer_{i}", **m} for i, m in enumerate(layer_metrics)
         ])
         corr_df.to_csv(os.path.join(args.output_dir, "layer_correlations.csv"), index=False)
     
-    # 生成新版4子图
-    logger.info("Generating new interpretability case study figure...")
-    case_study_path = os.path.join(args.output_dir, f"interpretability_case_study_new{img_ext}")
-    fig_case, case_summary = plot_new_interpretability_case_study(
-        all_attention_weights, all_bond_labels, all_sequences, all_edge_indices,
-        save_path=case_study_path, max_seq_len=args.max_seq_len,
-        attention_mode=args.attention_mode,
-        heatmap_normalize=args.heatmap_normalize,
-    )
+    # NOTE: 合并图 interpretability_case_study_new 改在 Part 3 生成（(c)(d) 用统计样本）。
+    # case_summary 在此处先置空，Part 3 会填充。
+    case_summary = None
     
     # 生成断裂对比图
     logger.info("Generating bond type comparison plot...")
@@ -424,10 +508,23 @@ def main():
         save_path=comparison_path, attention_mode=args.attention_mode,
         max_seq_len=args.max_seq_len,
     )
+    plt.close('all')
     
     # 统计分析容器（用于JSON）
     stat_layer_metrics = []
+    stat_layer_per_sample: List[List[Dict[str, float]]] = []
     stat_effect = {}
+    # 统计样本容器（Part 3 的独立面板会用这些；若 Part 2 未运行则保持空）
+    stat_attention_weights: List = []
+    stat_bond_labels: List = []
+    stat_sequences: List[str] = []
+    stat_edge_indices: List = []
+    stat_length_groups: List[str] = []
+    stat_charge_groups: List[str] = []
+    stat_fbr_groups: List[str] = []
+    stat_sample_ids: List[int] = []
+    grouped_summaries: Dict[str, object] = {}
+    has_stat = False
     
     # ========== 第二部分：统计分析 ==========
     if args.num_stat_samples > args.num_samples:
@@ -435,48 +532,12 @@ def main():
         logger.info(f"Part 2: Statistical Analysis ({args.num_stat_samples} samples)")
         logger.info("=" * 60)
         
-        total_samples = len(test_dataset)
-        stat_sample_count = min(args.num_stat_samples, total_samples)
-        
-        # 分层抽样
-        import random
-        if args.random_seed is not None:
-            random.seed(args.random_seed + 1)
-        
-        if hasattr(test_dataset, 'data') and 'seq' in test_dataset.data.columns:
-            seq_lengths = test_dataset.data['seq'].astype(str).apply(len).values
-            
-            # 按长度分组
-            length_bins = np.percentile(seq_lengths, np.linspace(0, 100, 6))
-            length_bins = np.unique(length_bins)
-            
-            bin_counts = np.histogram(seq_lengths, bins=length_bins)[0]
-            bin_proportions = bin_counts / bin_counts.sum()
-            bin_sample_counts = np.round(bin_proportions * stat_sample_count).astype(int)
-            
-            # 调整样本数
-            diff = stat_sample_count - bin_sample_counts.sum()
-            if diff > 0:
-                bin_sample_counts[:int(diff)] += 1
-            elif diff < 0:
-                bin_sample_counts[:int(-diff)] -= 1
-            
-            stat_indices = []
-            for i in range(len(length_bins) - 1):
-                bin_mask = (seq_lengths >= length_bins[i]) & (seq_lengths < length_bins[i + 1])
-                if i == len(length_bins) - 2:
-                    bin_mask = (seq_lengths >= length_bins[i]) & (seq_lengths <= length_bins[i + 1])
-                
-                bin_indices = np.where(bin_mask)[0].tolist()
-                n_samples = min(bin_sample_counts[i], len(bin_indices))
-                if n_samples > 0:
-                    sampled = random.sample(bin_indices, n_samples)
-                    stat_indices.extend(sampled)
-            
-            stat_indices = sorted(stat_indices)
-            logger.info(f"Stratified sampling: selected {len(stat_indices)} samples")
-        else:
-            stat_indices = sorted(random.sample(range(total_samples), stat_sample_count))
+        stat_indices = select_statistical_samples(
+            test_dataset, args.num_stat_samples,
+            (args.random_seed + 1) if args.random_seed is not None else int(time.time()),
+            logger,
+        )
+        logger.info(f"Stratified sampling: selected {len(stat_indices)} samples")
         
         # 提取统计样本的注意力权重
         stat_attention_weights = []
@@ -505,23 +566,49 @@ def main():
                 stat_bond_labels.append(bond_labels)
                 stat_sequences.append(sequence)
                 stat_edge_indices.append(sample_data.get('edge_index'))
+                stat_sample_ids.append(int(sample_idx))
+
+                row = test_dataset.data.iloc[sample_idx] if hasattr(test_dataset, 'data') else {}
+                seq_length = len(sequence)
+                stat_length_groups.append(
+                    "Short (<=24)" if seq_length <= 24
+                    else "Medium (25-29)" if seq_length <= 29
+                    else "Long (>=30)"
+                )
+                charge = pd.to_numeric(row.get('charge', np.nan), errors='coerce')
+                stat_charge_groups.append(
+                    "Charge missing" if pd.isna(charge) else f"Charge {charge:g}"
+                )
+                fbr = pd.to_numeric(row.get('fbr', np.nan), errors='coerce')
+                stat_fbr_groups.append(
+                    "FBR missing" if pd.isna(fbr)
+                    else "Low FBR (<0.3)" if fbr < 0.3
+                    else "Medium FBR (0.3-0.7)" if fbr < 0.7
+                    else "High FBR (>=0.7)"
+                )
             except Exception as e:
                 logger.warning(f"Error processing sample {sample_idx}: {e}")
                 continue
         
         # 统计分析的层间演化
         logger.info("Computing layer correlations for statistical analysis...")
-        stat_layer_metrics = compute_layer_separation_metrics(
-            stat_attention_weights, stat_bond_labels, stat_edge_indices, stat_sequences
+        stat_layer_metrics, stat_layer_per_sample = compute_layer_separation_metrics(
+            stat_attention_weights, stat_bond_labels, stat_edge_indices, stat_sequences,
+            return_per_sample=True,
         )
         stat_layer_corrs = [m["abs_r"] for m in stat_layer_metrics]
+        has_stat = len(stat_attention_weights) > 0
         
         if stat_layer_metrics:
             stat_trend_path = os.path.join(args.output_dir, f"layer_evolution_trend_statistical{img_ext}")
             plot_layer_evolution_trend(
                 stat_layer_metrics, save_path=stat_trend_path,
                 attention_mode=args.attention_mode,
+                per_sample_metrics=stat_layer_per_sample,
+                show_ci=True,
+                n_bootstrap=args.bootstrap_iters,
             )
+            plt.close('all')
             # 保存统计结果
             stat_corr_df = pd.DataFrame([
                 {"layer": f"Layer_{i}", **m} for i, m in enumerate(stat_layer_metrics)
@@ -536,6 +623,7 @@ def main():
             save_path=stat_comparison_path, attention_mode=args.attention_mode,
             max_seq_len=args.max_seq_len,
         )
+        plt.close('all')
 
         # ===== 聚合图层注意力图（基于多样本的群体平均模式）=====
         # 这是「真实平均」的可信视图，不受单样本选择偏置影响。
@@ -556,31 +644,184 @@ def main():
             max_seq_len=args.max_seq_len,
             max_bonds_show=min(20, args.max_seq_len - 1),
         )
+        plt.close('all')
         logger.info(f"Saved aggregate layer attention: {agg_path}")
         logger.info(f"  Layer focus progression: {agg_summary['interpretation']}")
     
+    # ========== 第三部分：4 个独立 SVG 面板 + 修复版合并图 ==========
+    # 生成 4 个独立 SVG（panel_a/b/c/d）便于 LaTeX 自由排版，避免单张超大图。
+    # 面板 (a) 单样本；面板 (b)(c)(d) 优先使用大样本统计集（满足审稿人 R-22）。
+    # 同时修复 interpretability_case_study_new：其 (c)(d) 改用统计样本。
+    logger.info("=" * 60)
+    logger.info("Part 3: 4 separate SVG panels + fixed combined figure")
+    logger.info("=" * 60)
+
+    # 确定面板 (b)(c)(d) 的群体数据源：优先统计样本，回退到案例样本
+    pop_attn = stat_attention_weights if has_stat else all_attention_weights
+    pop_labels = stat_bond_labels if has_stat else all_bond_labels
+    pop_edge = stat_edge_indices if has_stat else all_edge_indices
+    pop_seq = stat_sequences if has_stat else all_sequences
+    pop_source_label = "statistical" if has_stat else "case (fallback)"
+    logger.info(f"Panels (b)(c)(d) data source: {pop_source_label} "
+                f"(n={len(pop_attn)})")
+
+    # ---- 面板 (a): 代表性单样本（按 median |r| 选择，反 cherry-pick）----
+    rep_idx, rep_info = select_representative_case(
+        pop_attn, pop_labels, pop_edge, pop_seq,
+        max_seq_len=args.max_seq_len,
+    )
+    if has_stat and rep_idx < len(stat_sample_ids):
+        rep_info["dataset_idx"] = stat_sample_ids[rep_idx]
+    logger.info(f"Panel (a) representative sample index={rep_idx} ({rep_info})")
+    panel_a_path = os.path.join(args.output_dir, f"panel_a_case_study{img_ext}")
+    plot_panel_a_case_study(
+        pop_attn[rep_idx], pop_labels[rep_idx],
+        pop_seq[rep_idx], pop_edge[rep_idx],
+        save_path=panel_a_path, max_seq_len=args.max_seq_len,
+        attention_mode=args.attention_mode,
+        selection_info=rep_info,
+    )
+    plt.close('all')
+
+    # ---- 面板 (b): 层演化 + bootstrap CI（基于群体样本）----
+    panel_b_metrics, panel_b_per_sample = compute_layer_separation_metrics(
+        pop_attn, pop_labels, pop_edge, pop_seq,
+        max_seq_len=args.max_seq_len, return_per_sample=True,
+    )
+    panel_b_path = os.path.join(args.output_dir, f"panel_b_layer_evolution{img_ext}")
+    plot_layer_evolution_trend(
+        panel_b_metrics, save_path=panel_b_path,
+        attention_mode=args.attention_mode,
+        per_sample_metrics=panel_b_per_sample,
+        show_ci=True, n_bootstrap=args.bootstrap_iters,
+    )
+    plt.close('all')
+
+    # ---- 面板 (c): violin 图 + bootstrap CI on Cohen's d（基于群体样本）----
+    panel_c_path = os.path.join(args.output_dir, f"panel_c_bond_violin{img_ext}")
+    _, panel_c_effect = plot_panel_c_violin(
+        pop_attn, pop_labels, pop_edge, pop_seq,
+        save_path=panel_c_path, attention_mode=args.attention_mode,
+        max_seq_len=args.max_seq_len, n_bootstrap=args.bootstrap_iters,
+    )
+    plt.close('all')
+
+    # ---- 面板 (d): 聚合图层注意力（基于群体样本）----
+    panel_d_path = os.path.join(args.output_dir, f"panel_d_aggregate{img_ext}")
+    _, panel_d_summary = plot_aggregate_layer_attention(
+        pop_attn, pop_labels, pop_edge, pop_seq,
+        save_path=panel_d_path, max_seq_len=args.max_seq_len,
+        max_bonds_show=min(20, args.max_seq_len - 1),
+    )
+    plt.close('all')
+
+    # ---- 审稿人 R-22：按长度 / 电荷 / 断裂率的独立补充图 ----
+    if has_stat and len(stat_length_groups) == len(stat_attention_weights):
+        grouped_specs = [
+            (
+                "length", stat_length_groups,
+                ["Short (<=24)", "Medium (25-29)", "Long (>=30)"],
+                "Sequence Length",
+            ),
+            (
+                "charge", stat_charge_groups, None, "Precursor Charge",
+            ),
+            (
+                "fbr", stat_fbr_groups,
+                ["Low FBR (<0.3)", "Medium FBR (0.3-0.7)", "High FBR (>=0.7)"],
+                "Cleavage Ratio (FBR)",
+            ),
+        ]
+        for key, values, order, title in grouped_specs:
+            grouped_path = os.path.join(
+                args.output_dir, f"grouped_alignment_{key}{img_ext}",
+            )
+            _, grouped_summary = plot_grouped_alignment(
+                stat_attention_weights, stat_bond_labels,
+                stat_edge_indices, stat_sequences,
+                group_values=values, group_order=order,
+                group_title=title, save_path=grouped_path,
+                max_seq_len=args.max_seq_len, n_bootstrap=args.bootstrap_iters,
+            )
+            plt.close('all')
+            grouped_summaries[key] = grouped_summary
+            logger.info(f"Saved grouped {key} analysis: {grouped_path}")
+    else:
+        logger.warning("Grouped analyses skipped because statistical metadata "
+                       "are unavailable or misaligned")
+
+    # ---- 修复版合并图（(c)(d) 用统计样本）----
+    logger.info("Regenerating combined figure with stat data for (c)(d)...")
+    case_study_path = os.path.join(args.output_dir, f"interpretability_case_study_new{img_ext}")
+    fig_case, case_summary = plot_new_interpretability_case_study(
+        all_attention_weights, all_bond_labels, all_sequences, all_edge_indices,
+        save_path=case_study_path, max_seq_len=args.max_seq_len,
+        attention_mode=args.attention_mode,
+        heatmap_normalize=args.heatmap_normalize,
+        stat_attention_weights=pop_attn if has_stat else None,
+        stat_bond_labels=pop_labels if has_stat else None,
+        stat_sequences=pop_seq if has_stat else None,
+        stat_edge_indices=pop_edge if has_stat else None,
+        n_bootstrap=args.bootstrap_iters,
+    )
+    plt.close('all')
+    logger.info(f"Saved FIXED combined figure (c)(d) source={pop_source_label}")
+
+    computation_cost_sec = round(time.time() - analysis_start_time, 2)
+    logger.info(f"Total analysis wall time: {computation_cost_sec}s")
+
     # ========== 论文级 JSON 摘要 ==========
     logger.info("Writing paper-grade JSON summary...")
     json_summary = {
         "attention_mode": case_summary.get("attention_mode") if case_summary else args.attention_mode,
         "mode_caption": case_summary.get("mode_caption", ""),
+        "sample_selection": {
+            "case_study_rule": "length-stratified (select_diverse_samples), seed=42",
+            "statistical_rule": ("length (<=24 / 25-29 / >=30) x charge x FBR "
+                                 "(<0.3 / 0.3-0.7 / >=0.7) proportional stratified "
+                                 "sampling, seed=random_seed+1"),
+            "panel_a_representative_rule": rep_info,
+            "panel_population_source": pop_source_label,
+            "n_case_samples": len(all_attention_weights),
+            "n_stat_samples": len(pop_attn),
+        },
+        "uncertainty": {
+            "bootstrap_iters": args.bootstrap_iters,
+            "ci_level": 0.95,
+            "panel_b_ci": "per-layer bootstrap 95% CI on |r|",
+            "panel_c_ci": ("cohen_d_ci_low / cohen_d_ci_high "
+                           "(bootstrap 95% CI on signed Cohen's d)"),
+        },
         "layer_trend": {
-            "case_study": case_summary.get("panel_b_layer_metrics", []),
+            "case_study": case_summary.get("panel_b_layer_metrics", []) if case_summary else [],
             "statistical": stat_layer_metrics,
+            "panel_b_metrics": panel_b_metrics,
             "primary_metric": "abs_r",
             "note": "abs_r is the direction-agnostic strength; "
                     "pearson_r keeps the sign for direction.",
         },
         "effect_size": {
-            "case_study": case_summary.get("panel_c_effect_size", {}),
+            "case_study": case_summary.get("panel_c_effect_size", {}) if case_summary else {},
             "statistical": stat_effect,
+            "panel_c_violin": panel_c_effect,
             "convention": "cohen_d_signed > 0 always means cleavage bonds carry "
                           "the stronger attention signal, regardless of mode.",
         },
+        "panels": {
+            "panel_a_case_study": f"panel_a_case_study{img_ext}",
+            "panel_b_layer_evolution": f"panel_b_layer_evolution{img_ext}",
+            "panel_c_bond_violin": f"panel_c_bond_violin{img_ext}",
+            "panel_d_aggregate": f"panel_d_aggregate{img_ext}",
+            "combined_fixed": f"interpretability_case_study_new{img_ext}",
+            "panel_c_source": case_summary.get("panel_c_source", pop_source_label) if case_summary else pop_source_label,
+            "panel_d_source": case_summary.get("panel_d_source", pop_source_label) if case_summary else pop_source_label,
+        },
+        "grouped_robustness": grouped_summaries,
         "physicochemical_stats": {},
         "rule_agreement": {},
         "heatmap_normalize": args.heatmap_normalize,
         "figure_format": args.figure_format,
+        "computation_cost_sec": computation_cost_sec,
     }
     json_path = os.path.join(args.output_dir, "interpretability_summary.json")
     with open(json_path, "w", encoding="utf-8") as f:
@@ -611,7 +852,7 @@ def main():
     print("=" * 60)
     print(f"Case study samples: {len(case_indices)}")
     if args.num_stat_samples > args.num_samples:
-        print(f"Statistical analysis samples: {len(stat_indices)}")
+        print(f"Statistical analysis samples: {len(stat_attention_weights)}")
     print(f"Output directory: {args.output_dir}")
     print("=" * 60)
     

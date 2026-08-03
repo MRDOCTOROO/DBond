@@ -161,7 +161,7 @@ results/attention_viz_paper/
 ├── statistical_analysis_results.csv              # 统计结果原始数据
 │
 ├── interpretability/                             # [新增] 可解释性分析目录
-│   ├── interpretability_case_study.png           # 4子图可解释性案例分析图
+│   ├── interpretability_case_study.png           # 旧版4子图可解释性案例分析图
 │   └── interpretability_summary.txt              # 统计摘要
 │
 ├── sample_0/                                     # 案例样本1
@@ -191,6 +191,19 @@ results/attention_viz_paper/
 **可解释性分析（新增）**：
 - `interpretability_case_study.png`：4子图案例分析，用于验证模型可解释性
 - `interpretability_summary.txt`：统计检验结果（t检验p值、相关系数等）
+
+**论文排版用独立 SVG（`interpretability_analysis.py`）**：
+- `panel_a_case_study.svg`：按统计样本中位数 `|r|` 自动选择的代表性案例
+- `panel_b_layer_evolution.svg`：500个分层样本的逐层对齐强度与95% bootstrap CI
+- `panel_c_bond_violin.svg`：断裂键/完整键注意力分布及 Cohen's d 95% CI
+- `panel_d_aggregate.svg`：500个分层样本的聚合层注意力模式
+- `grouped_alignment_length.svg`：按序列长度分组的稳健性分析
+- `grouped_alignment_charge.svg`：按电荷态分组的稳健性分析
+- `grouped_alignment_fbr.svg`：按断裂率分组的稳健性分析
+
+统计样本按“序列长度 × 电荷态 × FBR”进行比例分层抽样。默认输出格式为
+SVG；`interpretability_case_study_new.svg` 仍保留，但其中四个面板已经使用与独立
+SVG一致的数据口径。
 
 ### 3.2 各文件用途
 
