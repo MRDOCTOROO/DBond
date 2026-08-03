@@ -316,7 +316,7 @@ def _evaluate_on_test(model, best_model_path, test_dataloader, loss_func, device
     if best_model_path == '' or not os.path.exists(best_model_path):
         logging.warning("best model not found, skip test evaluation")
         return {}
-    ckpt = torch.load(best_model_path, map_location=device)
+    ckpt = torch.load(best_model_path, map_location=device, weights_only=False)
     model.load_state_dict(ckpt['model_state_dict'])
     model.eval()
 
