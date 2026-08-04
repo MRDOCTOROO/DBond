@@ -238,10 +238,7 @@ def select_statistical_samples(dataset, num_samples: int, random_seed: int,
         return sorted(rng.sample(range(total), target))
 
     lengths = df["seq"].astype(str).str.len()
-    df["length_group"] = pd.cut(
-        lengths, bins=[-np.inf, 24, 29, np.inf],
-        labels=["Short (<=24)", "Medium (25-29)", "Long (>=30)"],
-    ).astype(str)
+    df["length_group"], _ = build_length_groups(lengths)
     charge_numeric = pd.to_numeric(df["charge"], errors="coerce")
     df["charge_group"] = charge_numeric.map(
         lambda value: "Charge missing" if pd.isna(value) else f"Charge {value:g}"
@@ -290,6 +287,50 @@ def select_statistical_samples(dataset, num_samples: int, random_seed: int,
     return sorted(selected)
 
 
+def build_length_groups(lengths: pd.Series) -> Tuple[pd.Series, Dict[str, object]]:
+    """Build length strata from the observed distribution, not fixed cutoffs.
+
+    ``max_seq_len`` is a model/data-processing limit, not a scientific length
+    boundary. Quantile-based bins ensure that short, middle and long peptides
+    are compared using the lengths actually present after dataset filtering.
+    Duplicate quantile boundaries are removed; if the data contain only one
+    unique length, one group is returned and the limitation is recorded.
+    """
+    lengths = pd.to_numeric(lengths, errors="coerce").dropna().astype(int)
+    unique_lengths = sorted(lengths.unique().tolist())
+    if len(unique_lengths) <= 1:
+        label = f"All sequences (length={unique_lengths[0] if unique_lengths else 'NA'})"
+        return pd.Series(label, index=lengths.index, dtype="string"), {
+            "method": "single_observed_length",
+            "boundaries": unique_lengths,
+            "groups": [label],
+        }
+
+    quantiles = np.unique(np.quantile(lengths.to_numpy(), [0.0, 1 / 3, 2 / 3, 1.0]))
+    if len(quantiles) <= 2:
+        labels = pd.Series("Observed length range", index=lengths.index, dtype="string")
+        return labels, {
+            "method": "single_quantile_bin_due_to_duplicate_boundaries",
+            "boundaries": quantiles.tolist(),
+            "groups": ["Observed length range"],
+        }
+
+    bins = np.concatenate(([-np.inf], quantiles[1:-1], [np.inf]))
+    raw = pd.cut(lengths, bins=bins, include_lowest=True, duplicates="drop")
+    labels = pd.Series(index=lengths.index, dtype="string")
+    group_names = []
+    for group_index, interval in enumerate(raw.cat.categories):
+        name = f"Length Q{group_index + 1} ({int(interval.left) if np.isfinite(interval.left) else '-inf'}-" \
+               f"{int(interval.right) if np.isfinite(interval.right) else 'inf'})"
+        labels.loc[raw == interval] = name
+        group_names.append(name)
+    return labels, {
+        "method": "observed_length_tertiles",
+        "boundaries": quantiles.tolist(),
+        "groups": group_names,
+    }
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
@@ -314,7 +355,8 @@ def main():
     parser.add_argument("--num_stat_samples", type=int, default=500, help="用于统计分析的样本数量")
     parser.add_argument("--bootstrap_iters", type=int, default=1000,
                         help="bootstrap置信区间重抽样次数")
-    parser.add_argument("--max_seq_len", type=int, default=25, help="最大序列长度")
+    parser.add_argument("--max_seq_len", type=int, default=None,
+                        help="最大序列长度；不指定时使用配置文件中的限制")
     parser.add_argument("--device", type=str, choices=["cpu", "cuda", "mps"], default=None, help="计算设备")
     parser.add_argument("--infer_config", action="store_true", help="从检查点自动推断模型配置")
     parser.add_argument("--random_seed", type=int, default=42, help="随机种子")
@@ -388,12 +430,22 @@ def main():
     
     if args.max_seq_len:
         data_config["max_seq_len"] = args.max_seq_len
+
+    effective_max_seq_len = data_config.get("max_seq_len")
+    if effective_max_seq_len is None:
+        effective_max_seq_len = config.get("model", {}).get("max_seq_len", 32)
+        data_config["max_seq_len"] = effective_max_seq_len
+    # Downstream plotting code uses args.max_seq_len; normalize the optional
+    # CLI value once after resolving it from the configuration.
+    args.max_seq_len = int(effective_max_seq_len)
+    logger.info(f"Using max_seq_len={effective_max_seq_len}; "
+                "length groups will be computed from observed sequences")
     
     dataset_cls = CachedGraphDataset if data_config.get("cache_graphs", False) else GraphDataset
     dataset_kwargs = {
         "csv_path": data_config["test_csv_path"],
         "config": model_config,
-        "max_seq_len": data_config.get("max_seq_len"),
+        "max_seq_len": effective_max_seq_len,
         "graph_strategy": data_config.get("graph_strategy", "hybrid"),
         "augmentation": False,
         "split": "test",
@@ -408,6 +460,11 @@ def main():
     
     test_dataset = dataset_cls(**dataset_kwargs)
     logger.info(f"Loaded dataset with {len(test_dataset)} samples")
+    observed_lengths = test_dataset.data["seq"].astype(str).str.len()
+    observed_length_groups, length_group_info = build_length_groups(observed_lengths)
+    logger.info(f"Observed sequence lengths: min={observed_lengths.min()}, "
+                f"median={observed_lengths.median()}, max={observed_lengths.max()}")
+    logger.info(f"Length grouping: {length_group_info}")
     
     # 创建输出目录
     os.makedirs(args.output_dir, exist_ok=True)
@@ -570,11 +627,7 @@ def main():
 
                 row = test_dataset.data.iloc[sample_idx] if hasattr(test_dataset, 'data') else {}
                 seq_length = len(sequence)
-                stat_length_groups.append(
-                    "Short (<=24)" if seq_length <= 24
-                    else "Medium (25-29)" if seq_length <= 29
-                    else "Long (>=30)"
-                )
+                stat_length_groups.append(str(observed_length_groups.loc[sample_idx]))
                 charge = pd.to_numeric(row.get('charge', np.nan), errors='coerce')
                 stat_charge_groups.append(
                     "Charge missing" if pd.isna(charge) else f"Charge {charge:g}"
@@ -719,8 +772,7 @@ def main():
     if has_stat and len(stat_length_groups) == len(stat_attention_weights):
         grouped_specs = [
             (
-                "length", stat_length_groups,
-                ["Short (<=24)", "Medium (25-29)", "Long (>=30)"],
+                "length", stat_length_groups, length_group_info["groups"],
                 "Sequence Length",
             ),
             (
@@ -777,9 +829,16 @@ def main():
         "mode_caption": case_summary.get("mode_caption", ""),
         "sample_selection": {
             "case_study_rule": "length-stratified (select_diverse_samples), seed=42",
-            "statistical_rule": ("length (<=24 / 25-29 / >=30) x charge x FBR "
-                                 "(<0.3 / 0.3-0.7 / >=0.7) proportional stratified "
-                                 "sampling, seed=random_seed+1"),
+            "statistical_rule": ("observed-length tertiles x charge x FBR "
+                                 "proportional stratified sampling, "
+                                 "seed=random_seed+1"),
+            "length_distribution": {
+                "n_after_filter": int(len(observed_lengths)),
+                "min": int(observed_lengths.min()),
+                "median": float(observed_lengths.median()),
+                "max": int(observed_lengths.max()),
+                **length_group_info,
+            },
             "panel_a_representative_rule": rep_info,
             "panel_population_source": pop_source_label,
             "n_case_samples": len(all_attention_weights),

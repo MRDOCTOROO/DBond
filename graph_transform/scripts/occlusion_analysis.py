@@ -142,13 +142,25 @@ def stratified_sample(
     df["fbr"] = pd.to_numeric(df["fbr"], errors="coerce")
     df["charge"] = pd.to_numeric(df["charge"], errors="coerce")
 
-    def _len_bin(L):
-        if L <= 24:
-            return "L_short"
-        elif L <= 29:
-            return "L_mid"
-        else:
-            return "L_long"
+    # Use observed-length tertiles rather than fixed cutoffs. Fixed boundaries
+    # can collapse all samples into one group after dataset-level max-length
+    # filtering, making the subgroup analysis scientifically meaningless.
+    length_values = df["seq_len"]
+    length_quantiles = np.unique(
+        np.quantile(length_values.to_numpy(), [0.0, 1 / 3, 2 / 3, 1.0])
+    )
+    if len(length_quantiles) > 2:
+        length_bins = np.concatenate(([-np.inf], length_quantiles[1:-1], [np.inf]))
+        length_categories = pd.cut(
+            length_values, bins=length_bins, include_lowest=True, duplicates="drop"
+        )
+        length_labels = {
+            interval: f"L_Q{index + 1}"
+            for index, interval in enumerate(length_categories.cat.categories)
+        }
+        df["len_bin"] = length_categories.map(length_labels).astype(str)
+    else:
+        df["len_bin"] = "L_observed_range"
 
     def _charge_bin(charge):
         if pd.isna(charge):
@@ -165,7 +177,6 @@ def stratified_sample(
         else:
             return "F_high"
 
-    df["len_bin"] = df["seq_len"].apply(_len_bin)
     df["charge_bin"] = df["charge"].apply(_charge_bin)
     df["fbr_bin"] = df["fbr"].apply(_fbr_bin)
 
@@ -206,6 +217,24 @@ def stratified_sample(
     logger.info(f"Selected {len(selected_idx)} samples across "
                 f"{len(set(df.loc[selected_idx, 'stratum']))} strata")
     return selected_idx[:num_samples]
+
+
+def observed_length_group_labels(lengths: pd.Series) -> Tuple[pd.Series, List[str]]:
+    """Return labels matching the observed-length tertiles used for sampling."""
+    lengths = pd.to_numeric(lengths, errors="coerce")
+    quantiles = np.unique(np.quantile(lengths.dropna().to_numpy(), [0.0, 1 / 3, 2 / 3, 1.0]))
+    if len(quantiles) <= 2:
+        label = "Observed length range"
+        return pd.Series(label, index=lengths.index, dtype="string"), [label]
+    bins = np.concatenate(([-np.inf], quantiles[1:-1], [np.inf]))
+    categorical = pd.cut(lengths, bins=bins, include_lowest=True, duplicates="drop")
+    labels = {}
+    ordered = []
+    for index, interval in enumerate(categorical.cat.categories):
+        label = f"Length Q{index + 1}"
+        labels[interval] = label
+        ordered.append(label)
+    return categorical.map(labels).astype("string"), ordered
 
 
 # =============================================================================
@@ -483,6 +512,9 @@ def main():
     selected = stratified_sample(
         test_dataset, args.num_samples, args.random_seed, logger,
     )
+    observed_length_labels, observed_length_order = observed_length_group_labels(
+        test_dataset.data["seq"].astype(str).str.len()
+    )
 
     per_sample_results: List[Dict[str, Any]] = []
     all_attention_flat: List[np.ndarray] = []
@@ -561,9 +593,7 @@ def main():
         )
         fbr = float(fbr_raw) if not pd.isna(fbr_raw) else float("nan")
         length_groups.append(
-            "Short (<=24)" if seq_len <= 24
-            else "Medium (25-29)" if seq_len <= 29
-            else "Long (>=30)"
+            str(observed_length_labels.loc[idx])
         )
         charge_groups.append(f"Charge {float(sample['charge']):g}")
         fbr_groups.append(
@@ -619,7 +649,7 @@ def main():
     grouped_summaries: Dict[str, object] = {}
     grouped_specs = [
         ("length", length_groups,
-         ["Short (<=24)", "Medium (25-29)", "Long (>=30)"], "Sequence Length"),
+         observed_length_order, "Sequence Length"),
         ("charge", charge_groups, None, "Precursor Charge"),
         ("fbr", fbr_groups,
          ["Low FBR (<0.3)", "Medium FBR (0.3-0.7)", "High FBR (>0.7)"],
