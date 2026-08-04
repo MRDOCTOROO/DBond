@@ -310,6 +310,47 @@ def main(config:dict, run_id:str=None)->Dict:
     return test_metrics
 
 
+def evaluate_only(config: dict, run_id: str = None) -> Dict:
+    """仅评估模式(不训练): 扫 best_model_dir 找已有的 best_model_*.pt, 重载后在 test 上评估。
+
+    用于复用已训练好的 best_model, 只补跑 test 评估(如指标口径更新后重算)。
+    """
+    if run_id is None:
+        run_id = get_beijing_time().strftime("%Y_%m_%d_%H_%M")
+    best_model_dir = config.get('output', {}).get(
+        'best_model_dir', model_weight_dir_pattern.format(model=MODEL))
+    result_metric_dir = config.get('output', {}).get('result_metric_dir', f'./result/metric/{MODEL}/{run_id}')
+    result_pred_dir = config.get('output', {}).get('result_pred_dir', f'./result/pred/{MODEL}/{run_id}')
+    for d in [result_metric_dir, result_pred_dir]:
+        os.makedirs(d, exist_ok=True)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logging.info('='*10 + f'{device} (eval_only)' + '='*10)
+
+    import glob
+    candidates = sorted(glob.glob(os.path.join(best_model_dir, 'best_model_*.pt')),
+                        key=os.path.getmtime, reverse=True)
+    if not candidates:
+        raise FileNotFoundError(f'best_model_dir 下无 best_model_*.pt: {best_model_dir}')
+    best_model_path = candidates[0]
+    logging.info(f'[eval_only] 使用 best_model: {best_model_path}')
+
+    test_dataset = PepDataset(config, split='test')
+    test_dataloader = torch.utils.data.DataLoader(
+        test_dataset, pin_memory=True, shuffle=False,
+        batch_size=config['train_args']['batch_size'],
+        collate_fn=collate_callback,
+        num_workers=config['train_args']['dataloader_workers'])
+    model = Net(config).to(device)
+    loss_func = build_loss_func(config)
+
+    test_metrics = _evaluate_on_test(model, best_model_path, test_dataloader,
+                                     loss_func, device, len(test_dataset), config,
+                                     result_metric_dir, result_pred_dir, run_id)
+    test_metrics['best_model_path'] = best_model_path
+    return test_metrics
+
+
 def _evaluate_on_test(model, best_model_path, test_dataloader, loss_func, device,
                       dataset_len, config, result_metric_dir, result_pred_dir, run_id)->Dict:
     """重载 best checkpoint, 在 test 上评估, 输出 metric csv + pred csv。固定 0.5 阈值。"""

@@ -123,7 +123,7 @@ def aggregate_5fold(per_fold_metrics:list, output_dir:str, model_name:str)->tupl
 def run_5fold(base_config_path:str, fold_data_dir:str, train_module_name:str,
               train_suffix:str, test_suffix:str, model_name:str, base_seed:int,
               folds:list=None, force_new:bool=False, train_module_dir:str='.',
-              resume_from:str=None)->tuple:
+              resume_from:str=None, eval_only:bool=False)->tuple:
     """5fold 主流程。
 
     base_config_path: 基础 config yaml 路径(如 ludbond/dbond_s_config/default.yaml)
@@ -136,11 +136,15 @@ def run_5fold(base_config_path:str, fold_data_dir:str, train_module_name:str,
     resume_from: 可选, 续跑模式 — 指定旧的 cv_root 目录(如 result/cv/dbond_m/20260802_234055),
                  已完成(test_metric.csv 存在)的 fold 跳过, 未完成的从头训练。结果继续写入该目录。
                  None=全新跑, 生成带时间戳的新 cv_root。
+    eval_only: 仅评估模式 — 不训练, 用每个 fold 已有的 best_model_*.pt 重算 test 指标。
+               用于复用训练成果, 只更新评估口径(如指标补全后重算)。需配合 resume_from 指定旧 cv_root。
     """
     with open(base_config_path, 'r') as f:
         base_config = yaml.safe_load(f)
 
     # cv_root: 续跑模式用指定目录, 否则生成带时间戳的新目录
+    if eval_only and not resume_from:
+        raise ValueError('eval_only 模式必须配合 --resume_from 指定旧 cv_root(best_model 在旧目录里)')
     if resume_from:
         cv_root = resume_from
         if not os.path.isdir(cv_root):
@@ -149,7 +153,8 @@ def run_5fold(base_config_path:str, fold_data_dir:str, train_module_name:str,
         timestamp = beijing_now().strftime('%Y%m%d_%H%M%S')
         cv_root = os.path.join(f'./result/cv/{model_name}', timestamp)
     os.makedirs(cv_root, exist_ok=True)
-    logging.info(f'5fold cv_root: {cv_root}{" (resume)" if resume_from else " (new)"}')
+    mode_tag = '(eval_only)' if eval_only else ('(resume)' if resume_from else '(new)')
+    logging.info(f'5fold cv_root: {cv_root} {mode_tag}')
 
     # 动态 import 训练模块(注意 .py 文件名带点, 用 importlib)
     # 用 train_module_dir 解析绝对路径, 不依赖 CWD
@@ -162,6 +167,8 @@ def run_5fold(base_config_path:str, fold_data_dir:str, train_module_name:str,
     spec.loader.exec_module(train_module)
     if not hasattr(train_module, 'main'):
         raise AttributeError(f'{train_module_name} 缺少 main(config, run_id) 函数')
+    if eval_only and not hasattr(train_module, 'evaluate_only'):
+        raise AttributeError(f'{train_module_name} 缺少 evaluate_only(config, run_id) 函数(eval_only 模式需要)')
 
     fold_ids = folds if folds is not None else FOLD_IDS
     per_fold_metrics = []
@@ -172,14 +179,20 @@ def run_5fold(base_config_path:str, fold_data_dir:str, train_module_name:str,
             base_config, fold_id, fold_index, fold_data_dir,
             train_suffix, test_suffix, base_seed, model_name, cv_root)
 
-        # 断点续跑判定: 若该 fold 已有 test_metric.csv 且非 force_new, 跳过训练直接读结果
-        metric_csv = os.path.join(fold_config['_run_root'], 'metric', 'test_metric.csv')
-        if os.path.exists(metric_csv) and not force_new:
-            logging.info(f'fold {fold_id} 已有结果, 跳过(force_new=False): {metric_csv}')
-            fold_metrics = _read_metric_csv(metric_csv)
-        else:
+        if eval_only:
+            # 仅评估模式: 用已有 best_model 重算 test 指标, 不训练(复用训练成果)
             run_id = f'fold_{fold_id}'
-            fold_metrics = train_module.main(fold_config, run_id=run_id)
+            logging.info(f'fold {fold_id} [eval_only]: 重载 best_model 评估 test')
+            fold_metrics = train_module.evaluate_only(fold_config, run_id=run_id)
+        else:
+            # 断点续跑判定: 若该 fold 已有 test_metric.csv 且非 force_new, 跳过训练直接读结果
+            metric_csv = os.path.join(fold_config['_run_root'], 'metric', 'test_metric.csv')
+            if os.path.exists(metric_csv) and not force_new:
+                logging.info(f'fold {fold_id} 已有结果, 跳过(force_new=False): {metric_csv}')
+                fold_metrics = _read_metric_csv(metric_csv)
+            else:
+                run_id = f'fold_{fold_id}'
+                fold_metrics = train_module.main(fold_config, run_id=run_id)
 
         # 补充 fold 元信息
         fold_metrics['fold_id'] = fold_id
@@ -209,4 +222,7 @@ def build_argparser(model_name:str, default_config:str)->argparse.ArgumentParser
     p.add_argument('--resume_from', type=str, default=None,
                    help='续跑: 指定旧 cv_root 目录(如 result/cv/dbond_m/20260802_234055)。'
                         '已完成(test_metric.csv 存在)的 fold 跳过, 未完成的从头训练。')
+    p.add_argument('--eval_only', action='store_true',
+                   help='仅评估模式: 不训练, 用每个 fold 已有 best_model 重算 test 指标。'
+                        '需配合 --resume_from 指定旧 cv_root(写回原目录)。复用训练成果。')
     return p
