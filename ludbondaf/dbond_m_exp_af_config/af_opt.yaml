@@ -1,0 +1,76 @@
+# =============================================================================
+# DBond-AF-opt 配置(超参优化版, 对齐 DBond-GT 协议)
+# -----------------------------------------------------------------------------
+# 本配置在 DBond-AF 基线之上, 应用论文 §3.3 / Fig.3 "Hyperparameter Analysis"
+# 推断出的优化超参组合, 用于复现论文 Table 1 的 DBond-AF-opt 行
+# (Acc_subset=6.25, ex_F1=75.35, lab_F1=67.87)。
+#
+# 普通 DBond-AF 基线(论文 Fig.3 caption + §2.4.2):
+#   batch_size=1024, hidden_dim=256, attention_layer_num=1, dropout=0.1
+#
+# AF-opt 相对 AF 的改动(基于论文 §3.3 趋势 + Fig.3 搜索空间推断):
+#   - hidden_dim: 256 -> 64  (§3.3: "increasing hidden dim negatively affects
+#     performance, likely due to overfitting" -> 越小越好, 取搜索空间最小值 64)
+#   - dropout:    0.1 -> 0.4 (§3.3: "higher dropout ratio generally improves
+#     results by effectively mitigating overfitting" -> 取搜索空间最大值 0.4)
+#   - attention_layer_num: 保持 1 (论文 §3.3 称其与性能"non-monotonic",
+#     峰值在中间; 本配置先按"不变"处理, 若复现指标对不上 Table 1 再调为 2 或 3)
+#   - batch_size: 保持 1024 (§3.3: 正相关, 1024 已是搜索空间最大值, baseline 也是 1024)
+#
+# 注意 / 待确认:
+#   1) 论文未明确写 AF-opt 的最终超参组合, 上述为基于 §3.3 定性趋势 + Fig.3
+#      搜索空间的推断。hidden=64 / dropout=0.4 是趋势端点, 较确定;
+#      attention_layer_num 的最优值(1/2/3)需读 Fig.3(d) 柱状图峰值确认。
+#      若跑出来对不上 Table 1 的 AF-opt 数值, 优先把 attention_layer_num 改 2 或 3 重跑。
+#   2) hidden_dim=64 需被 num_heads(=4) 整除: 64/4=16, OK。
+#
+# 协议对齐(与 DBond-AF / DBond-m / DBond-s 完全一致, 解决审稿 R-05/R-06):
+#   - 数据划分: 5 个 sequence-level split(1222/2252/3514/6072/9075)
+#   - val 切分: 从 train random_split 20%(validation_split 字段)
+#   - 模型选择: 按 val_f1 选 best model
+#   - seed: 5fold 时由脚本注入 = 42 + fold_index
+# 数据: 与 DBond-m / DBond-AF 同源多标签, 复用 5fold 的 *.fbr.multi.csv。
+# =============================================================================
+tag: 'dbond_af_opt_5fold'
+train_args:
+ batch_size: 1024        # 普通 AF baseline 值(论文 §2.4.2), 不是 4096
+ epoch: 100              # 原 500, 降到 100(靠 early_stopping 早停)
+ save_per_epoch: 10
+ seed: 2024              # 单次训练默认值; 5fold 时由脚本覆盖为 42 + fold_index
+ loss_type: 'ce'
+ loss_args:
+  label_smoothing: 0.1   # 保留(AF 原始声明; 代码用 multilabel_soft_margin_loss 实际未用)
+ optimizer: 'adam'
+ optimizer_args:
+  weight_decay: 1.0e-4
+  lr: 1.0e-4
+ early_stopping:
+  patience: 5
+  delta: 1.0e-4
+ dataloader_workers: 4
+ # 对齐 DBond-GT: val 从 train 内 random_split 切出的比例
+ validation_split: 0.2
+csv:
+ # 单次训练默认路径(占位); 5fold 实验时由 train_dbond_af_opt_5fold.py 注入
+ train_dataset_path: '/workspace/dataset/dbond_m.train.shuffle.csv'
+ validation_dataset_path: ''   # 已弃用(val 由 random_split 切出)
+ test_dataset_path: '/workspace/dataset/dbond_m.test.csv'
+ label_col_name: 'true_multi'
+ seq_col_name: 'seq'
+ state_var_col_name:
+  - 'charge'
+  - 'pep_mass'
+  - 'intensity'
+ env_var_col_name:
+  - 'nce'
+  - 'scan_num'
+seq:
+ alphabet: '#ABCDEFGHIKLMNOPQRSTVWXYZ'
+ pad_char: '#'
+ max_len: 36
+model:
+ hidden_dim: 64          # AF-opt: 256 -> 64(§3.3 负相关, 取最小; 64/num_heads=16 OK)
+ num_heads: 4
+ dropout: 0.4            # AF-opt: 0.1 -> 0.4(§3.3 越高越好, 取最大)
+ forward_expansion: 2
+ attention_layer_num: 1  # 暂保持 baseline; §3.3 non-monotonic, 对不上 Table 1 时优先调 2/3

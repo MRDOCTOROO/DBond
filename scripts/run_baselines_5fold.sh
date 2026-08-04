@@ -42,7 +42,7 @@ set -uo pipefail   # 注意: 不用 -e, 让单个模型失败不中断后续模�
 
 # ============== 可调配置 ==============
 DEVICE_ID="${DEVICE_ID:-0}"
-MODELS="${MODELS:-dbond_m dbond_s dbond_af}"
+MODELS="${MODELS:-dbond_m dbond_s dbond_af dbond_af_opt}"
 FOLD_DATA_DIR="${FOLD_DATA_DIR:-dataset/5fold}"
 FORCE_NEW="${FORCE_NEW:-0}"
 # EVAL_ONLY=1: 仅评估模式, 不训练, 用每个 fold 已有 best_model 重算 test 指标(复用训练成果)
@@ -61,11 +61,13 @@ declare -A MODEL_CONFIG=(
   [dbond_m]="ludbond/dbond_m_config/default.yaml"
   [dbond_s]="ludbond/dbond_s_config/default.yaml"
   [dbond_af]="ludbondaf/dbond_m_exp_af_config/default.yaml"
+  [dbond_af_opt]="ludbondaf/dbond_m_exp_af_config/af_opt.yaml"
 )
 declare -A MODEL_ENTRY=(
   [dbond_m]="ludbond/train_dbond_m_5fold.py"
   [dbond_s]="ludbond/train_dbond_s_5fold.py"
   [dbond_af]="ludbondaf/train_dbond_af_5fold.py"
+  [dbond_af_opt]="ludbondaf/train_dbond_af_opt_5fold.py"
 )
 
 export CUDA_VISIBLE_DEVICES="${DEVICE_ID}"

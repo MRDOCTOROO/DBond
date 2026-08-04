@@ -15,7 +15,7 @@
 # =============================================================================
 tag: 'dbond_af_5fold'
 train_args:
- batch_size: 4096
+ batch_size: 1024        # 论文 §2.4.2: 普通 DBond-AF 用 1024(baseline s/m 才是 4096)
  epoch: 100           # 原始 500, 降到 100(靠 early_stopping 早停, 与 s/m 同量级)
  save_per_epoch: 10
  seed: 2024           # 单次训练默认值; 5fold 时由脚本覆盖为 42 + fold_index
