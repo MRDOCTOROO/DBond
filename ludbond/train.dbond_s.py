@@ -422,25 +422,44 @@ def _evaluate_on_test(model, best_model_path, test_dataloader, test_dataset, los
     sklearn_f1_label_0,sklearn_f1_label_1 = f1_score(trues, preds, average=None)
     val_f1 = sklearn_f1_label_1
 
-    # ---- 聚合回多标签: 按 test CSV 的 seq 分组, 用 bond_index 对齐键位置 ----
+    # ---- 聚合回多标签: 按 precursor(seq,charge,pep_mass,nce,scan_num) 分组, 用 bond_index 对齐键位置 ----
+    # 关键: 不能只按 seq 分组。MS 数据里同一 seq 有几百个 precursor(不同 charge/NCE/scan),
+    # 每个 precursor 有自己独立的断裂标签。只按 seq 会把几百个 precursor 压成 1 个 example,
+    # 且后写覆盖前写, example 级指标全部失真。precursor 粒度与 DBond-m / DBond-AF / DBond-GT
+    # 的多标签 example(一行一个 precursor)完全对齐, 才能公平对比表 3。
     import multi_label_metrics
     seq_col = test_dataset.seq_col_name
     bond_idx_col = test_dataset.bond_index_col_name
+    # precursor key 列名取自 config 的 state/env 变量(charge, pep_mass 在 state; nce, scan_num 在 env)
+    state_cols = list(config['csv'].get('state_var_col_name', []))
+    env_cols = list(config['csv'].get('env_var_col_name', []))
+    # 按 (seq, charge, pep_mass, nce, scan_num) 组装 precursor key; 容错: 缺列则退化为更窄 key
+    precursor_cols = []
+    for c in ['charge', 'pep_mass', 'nce', 'scan_num']:
+        if c in state_cols or c in env_cols:
+            precursor_cols.append(c)
     df = test_dataset.df
     n_rows = len(df)
-    # 用 row index 作为 example id 的代理(同 seq 的所有键行聚合成一个 example)
-    seq_ids = df[seq_col].values
-    unique_seqs, seq_inverse = numpy.unique(seq_ids, return_inverse=True)
-    # 重建每个 example 的多标签向量(按该 seq 实际键数, 不 pad 到 max_len)
+    # 构造每行的 precursor key(同 precursor 的所有 bond 行归到同一 example)
+    if precursor_cols:
+        key_tuples = list(zip(*[df[c].values for c in precursor_cols], df[seq_col].values))
+        unique_precursors, ex_inverse = numpy.unique(key_tuples, return_inverse=True)
+    else:
+        # 退化: 无 precursor 列时按 seq(不推荐, 仅兜底)
+        unique_precursors, ex_inverse = numpy.unique(df[seq_col].values, return_inverse=True)
+    n_examples = len(unique_precursors)
+    logging.info(f"[dbond_s aggregate] n_bond_rows={n_rows}, n_examples(precursor)={n_examples}, "
+                 f"avg bonds/example={n_rows/max(n_examples,1):.1f}, precursor_cols={precursor_cols}")
+    # 重建每个 example 的多标签向量(按该 precursor 实际键数, 不 pad 到 max_len)
     from collections import defaultdict
     ex_true = defaultdict(dict)
     ex_pred = defaultdict(dict)
     for i in range(n_rows):
-        ex = int(seq_inverse[i])
+        ex = int(ex_inverse[i])
         bi = int(bond_indices[i])
         ex_true[ex][bi] = int(trues[i])
         ex_pred[ex][bi] = int(preds[i])
-    # 转成定长矩阵(键数 = 该 example 最大 bond_index+1)
+    # 转成定长矩阵(键数 = 所有 example 中最大 bond_index+1, 与 DBond-m/AF 的 max_len-1 pad 口径一致)
     ex_keys = sorted(ex_true.keys())
     if len(ex_keys) > 0:
         max_bonds = max(max(ex_true[k].keys()) for k in ex_keys) + 1
