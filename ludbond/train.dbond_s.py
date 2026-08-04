@@ -406,12 +406,24 @@ def _evaluate_on_test(model, best_model_path, test_dataloader, test_dataset, los
                 gt_mat[r, bi] = v
             for bi, v in ex_pred[k].items():
                 pred_mat[r, bi] = v
+        # 完整 example/label 指标(与 DBond-m / DBond-AF 同口径, 便于表 3 同台对比)
         subset_acc = multi_label_metrics.example_subset_accuracy(gt_mat, pred_mat)
+        ex_acc = multi_label_metrics.example_accuracy(gt_mat, pred_mat)
+        ex_precision = multi_label_metrics.example_precision(gt_mat, pred_mat)
+        ex_recall = multi_label_metrics.example_recall(gt_mat, pred_mat)
         ex_f1 = multi_label_metrics.example_f1(gt_mat, pred_mat)
+        lab_acc_ma = multi_label_metrics.label_accuracy_macro(gt_mat, pred_mat)
+        lab_acc_mi = multi_label_metrics.label_accuracy_micro(gt_mat, pred_mat)
+        lab_precision_ma = multi_label_metrics.label_precision_macro(gt_mat, pred_mat)
+        lab_precision_mi = multi_label_metrics.label_precision_micro(gt_mat, pred_mat)
+        lab_recall_ma = multi_label_metrics.label_recall_macro(gt_mat, pred_mat)
+        lab_recall_mi = multi_label_metrics.label_recall_micro(gt_mat, pred_mat)
         lab_f1_ma = multi_label_metrics.label_f1_macro(gt_mat, pred_mat)
         lab_f1_mi = multi_label_metrics.label_f1_micro(gt_mat, pred_mat)
     else:
-        subset_acc = ex_f1 = lab_f1_ma = lab_f1_mi = 0.0
+        subset_acc = ex_acc = ex_precision = ex_recall = ex_f1 = 0.0
+        lab_acc_ma = lab_acc_mi = lab_precision_ma = lab_precision_mi = 0.0
+        lab_recall_ma = lab_recall_mi = lab_f1_ma = lab_f1_mi = 0.0
 
     metrics_dict = {
         'Loss': mean_loss,
@@ -423,9 +435,18 @@ def _evaluate_on_test(model, best_model_path, test_dataloader, test_dataset, los
         'f1': (sklearn_f1_label_0+sklearn_f1_label_1)/2,
         'Label 1: f1': sklearn_f1_label_1,
         'val_f1': val_f1,
-        # 多标签聚合指标(与 DBond-GT / DBond-m 同口径)
+        # 多标签聚合指标(与 DBond-GT / DBond-m / DBond-AF 同口径)
         'subset_acc': subset_acc,
+        'ex_acc': ex_acc,
+        'ex_precision': ex_precision,
+        'ex_recall': ex_recall,
         'ex_f1': ex_f1,
+        'lab_acc_ma': lab_acc_ma,
+        'lab_acc_mi': lab_acc_mi,
+        'lab_precision_ma': lab_precision_ma,
+        'lab_precision_mi': lab_precision_mi,
+        'lab_recall_ma': lab_recall_ma,
+        'lab_recall_mi': lab_recall_mi,
         'lab_f1_ma': lab_f1_ma,
         'lab_f1_mi': lab_f1_mi,
     }
