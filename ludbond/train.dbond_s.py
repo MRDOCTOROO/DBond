@@ -440,14 +440,34 @@ def _evaluate_on_test(model, best_model_path, test_dataloader, test_dataset, los
             precursor_cols.append(c)
     df = test_dataset.df
     n_rows = len(df)
-    # 构造每行的 precursor key(同 precursor 的所有 bond 行归到同一 example)
+    # 构造每行的 precursor key(同 precursor 的所有 bond 行归到同一 example)。
+    # 用 dict 做 stable 归类(避免 numpy.unique 对 tuple list 返回 2D ex_inverse 导致
+    # int() 转换报错); 第 i 行的 example id 写入 ex_inverse[i]。
+    ex_inverse = [0] * n_rows
+    precursor_to_id = {}
+    n_examples = 0
     if precursor_cols:
-        key_tuples = list(zip(*[df[c].values for c in precursor_cols], df[seq_col].values))
-        unique_precursors, ex_inverse = numpy.unique(key_tuples, return_inverse=True)
+        col_arrays = [df[c].values for c in precursor_cols]
+        seq_array = df[seq_col].values
+        for i in range(n_rows):
+            key = tuple(str(col_arrays[k][i]) for k in range(len(precursor_cols))) + (str(seq_array[i]),)
+            ex_id = precursor_to_id.get(key)
+            if ex_id is None:
+                ex_id = n_examples
+                precursor_to_id[key] = ex_id
+                n_examples += 1
+            ex_inverse[i] = ex_id
     else:
         # 退化: 无 precursor 列时按 seq(不推荐, 仅兜底)
-        unique_precursors, ex_inverse = numpy.unique(df[seq_col].values, return_inverse=True)
-    n_examples = len(unique_precursors)
+        seq_array = df[seq_col].values
+        for i in range(n_rows):
+            key = str(seq_array[i])
+            ex_id = precursor_to_id.get(key)
+            if ex_id is None:
+                ex_id = n_examples
+                precursor_to_id[key] = ex_id
+                n_examples += 1
+            ex_inverse[i] = ex_id
     logging.info(f"[dbond_s aggregate] n_bond_rows={n_rows}, n_examples(precursor)={n_examples}, "
                  f"avg bonds/example={n_rows/max(n_examples,1):.1f}, precursor_cols={precursor_cols}")
     # 重建每个 example 的多标签向量(按该 precursor 实际键数, 不 pad 到 max_len)
