@@ -5,6 +5,6 @@
 """
 
 from .evaluator import Evaluator
-from .metrics import BinaryBondMetrics, MultiLabelMetrics
+from .metrics import BinaryBondMetrics, MultiLabelMetrics, compute_calibration_metrics
 
-__all__ = ['Evaluator', 'BinaryBondMetrics', 'MultiLabelMetrics']
+__all__ = ['Evaluator', 'BinaryBondMetrics', 'MultiLabelMetrics', 'compute_calibration_metrics']

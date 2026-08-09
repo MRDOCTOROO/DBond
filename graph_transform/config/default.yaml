@@ -161,12 +161,16 @@ optimizer:
 
 # 评估配置
 evaluation:
-  # 评估指标
-  metrics: ["accuracy", "precision", "recall", "f1", "auc", "hamming_loss"]
-  
+  # 评估指标（R-20 补全：判别力 + 校准 + 排序相关）
+  metrics: ["accuracy", "precision", "recall", "f1", "auc",
+            "pr_auc", "mcc", "brier_score", "ece", "hamming_loss"]
+
   # 阈值配置
   threshold: 0.5
   threshold_strategy: "fixed"  # "fixed", "adaptive", "optimal"
+
+  # 校准分析（ECE / 可靠性图）bin 数
+  calibration_bins: 10
   
   # 验证频率
   eval_interval: 1

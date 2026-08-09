@@ -3842,3 +3842,160 @@ def plot_attention_occlusion_correlation(
 
     _save_figure(fig, save_path)
     return fig
+
+
+# =============================================================================
+# R-20: Probability calibration & candidate-level ranking visualizations
+# =============================================================================
+
+
+def plot_reliability_diagram(
+    calibration: Dict[str, Any],
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (6, 6),
+) -> plt.Figure:
+    """可靠性图（reliability diagram）：可视化 ECE / Brier 校准分析。
+
+    calibration 来自 metrics.compute_calibration_metrics()，需含：
+      bin_confidences / bin_accuracies / bin_counts / bin_edges / ece / brier_score
+
+    柱状高度 = 每个 bin 的实测正类频率；对角虚线 = 完美校准。
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+
+    bin_conf = calibration.get("bin_confidences", [])
+    bin_acc = calibration.get("bin_accuracies", [])
+    bin_counts = calibration.get("bin_counts", [])
+    n_bins = int(calibration.get("n_bins", 10))
+    bin_edges = np.array(calibration.get("bin_edges", np.linspace(0, 1, n_bins + 1)))
+    ece = float(calibration.get("ece", 0.0))
+    brier = float(calibration.get("brier_score", 0.0))
+
+    # 用 bin 中心画柱状（即使某些 bin 为空也保留位置）
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    bar_width = 1.0 / n_bins * 0.9
+    heights = np.zeros(n_bins)
+    counts_arr = np.zeros(n_bins)
+    # 把非空 bin 的准确率映射回对应索引位置
+    for conf, acc, cnt in zip(bin_conf, bin_acc, bin_counts):
+        idx = int(np.clip(np.digitize(conf, bin_edges[1:-1], right=False), 0, n_bins - 1))
+        heights[idx] = acc
+        counts_arr[idx] = cnt
+
+    ax.bar(bin_centers, heights, width=bar_width, color="#4C72B0",
+           edgecolor="white", alpha=0.85, label="Observed cleavage frequency")
+    ax.plot([0, 1], [0, 1], "k--", lw=1.2, alpha=0.7, label="Perfect calibration")
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Mean predicted probability", fontsize=11)
+    ax.set_ylabel("Observed cleavage frequency", fontsize=11)
+    ax.set_title(
+        f"Reliability Diagram\nECE = {ece:.4f}   Brier = {brier:.4f}",
+        fontsize=12, fontweight="bold",
+    )
+    ax.legend(loc="upper left", fontsize=9)
+    ax.grid(True, alpha=0.3, linestyle=":")
+    ax.set_aspect("equal", adjustable="box")
+
+    fig.tight_layout()
+    _save_figure(fig, save_path)
+    return fig
+
+
+def plot_predicted_vs_observed_scatter(
+    per_peptide_df: "pd.DataFrame",
+    spearman_result: Dict[str, Any],
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (6, 6),
+) -> plt.Figure:
+    """散点图：每条肽一个点，x=R_pred，y=R_true。标注 Spearman ρ、p、n。
+
+    per_peptide_df 来自 candidate_ranking_analysis.compute_per_peptide_ratios()，
+    需含 R_pred / R_true 列。
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+
+    x = per_peptide_df["R_pred"].values.astype(float)
+    y = per_peptide_df["R_true"].values.astype(float)
+    rho = float(spearman_result.get("rho", 0.0))
+    pval = float(spearman_result.get("p_value", 1.0))
+    n = int(spearman_result.get("n_peptides", len(x)))
+
+    # 半透明散点（避免大量点叠在一起）
+    ax.scatter(x, y, s=10, alpha=0.35, color="#4C72B0", edgecolors="none",
+               label=f"Peptides (n={n})")
+
+    # 线性拟合趋势线
+    if len(x) > 2 and np.std(x) > 0:
+        coef = np.polyfit(x, y, 1)
+        xs = np.linspace(max(0, x.min()), min(1, x.max()), 100)
+        ax.plot(xs, np.polyval(coef, xs), color="#C44E52", lw=1.8,
+                label=f"Linear fit (slope={coef[0]:.3f})")
+
+    # 对角参考线
+    ax.plot([0, 1], [0, 1], "k--", lw=1.0, alpha=0.5, label="y = x")
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Predicted cleavage ratio $R_{pred}$", fontsize=11)
+    ax.set_ylabel("Observed PBCLA cleavage ratio $R_{true}$", fontsize=11)
+    ax.set_title(
+        f"Predicted vs Observed Cleavage Ratio\n"
+        f"Spearman $\\rho$ = {rho:.3f}   p = {pval:.2e}",
+        fontsize=12, fontweight="bold",
+    )
+    ax.legend(loc="upper left", fontsize=9)
+    ax.grid(True, alpha=0.3, linestyle=":")
+    ax.set_aspect("equal", adjustable="box")
+
+    fig.tight_layout()
+    _save_figure(fig, save_path)
+    return fig
+
+
+def plot_topk_enrichment_curve(
+    enrichment_table: List[Dict[str, Any]],
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (6.5, 5),
+) -> plt.Figure:
+    """Top-k 富集曲线：x=候选选择比例，y=该子集实测断裂率。
+
+    enrichment_table 来自 candidate_ranking_analysis.compute_topk_enrichment()，
+    末行（"All"）提供全集基线。曲线高于水平基线虚线 → 筛选有效。
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # 只取 Top-k 行（fraction < 1），按比例升序排列成曲线
+    rows = [r for r in enrichment_table if r.get("selection") != "All"]
+    rows = sorted(rows, key=lambda r: r["fraction"])
+    baseline_row = next((r for r in enrichment_table if r.get("selection") == "All"), None)
+
+    fractions = [r["fraction"] * 100 for r in rows]
+    observed = [r["mean_R_true"] for r in rows]
+    predicted = [r["mean_R_pred"] for r in rows]
+
+    ax.plot(fractions, observed, "o-", color="#4C72B0", lw=2, ms=8,
+            label="Observed cleavage ratio")
+    ax.plot(fractions, predicted, "s--", color="#DD8452", lw=1.5, ms=6,
+            alpha=0.8, label="Predicted cleavage ratio")
+
+    if baseline_row is not None:
+        baseline = float(baseline_row["mean_R_true"])
+        ax.axhline(baseline, color="gray", ls=":", lw=1.2, alpha=0.8,
+                   label=f"All peptides baseline = {baseline:.3f}")
+
+    ax.set_xlabel("Top-k selection (%)", fontsize=11)
+    ax.set_ylabel("Mean cleavage ratio", fontsize=11)
+    ax.set_title(
+        "Candidate-level Top-k Enrichment\n"
+        "Higher curve above baseline → effective ranking",
+        fontsize=12, fontweight="bold",
+    )
+    ax.legend(loc="best", fontsize=9)
+    ax.grid(True, alpha=0.3, linestyle=":")
+    ax.set_ylim(0, 1)
+
+    fig.tight_layout()
+    _save_figure(fig, save_path)
+    return fig

@@ -13,7 +13,12 @@ from typing import Dict, Any, Optional
 from tqdm import tqdm
 import numpy as np
 
-from .metrics import BinaryBondMetrics, order_binary_bond_metric_dict, _sigmoid_if_needed
+from .metrics import (
+    BinaryBondMetrics,
+    order_binary_bond_metric_dict,
+    _sigmoid_if_needed,
+    compute_calibration_metrics,
+)
 
 try:
     from training import BinaryBondLoss
@@ -60,6 +65,8 @@ class Evaluator:
         # 指标计算器
         self.allow_target_aware_threshold = allow_target_aware_threshold
         self.metrics_calculator = BinaryBondMetrics(self.eval_config, allow_target_aware_threshold=allow_target_aware_threshold)
+        # 缓存最近一次 evaluate() 的校准分析结果（含 bin 数据），供可靠性图复用
+        self.last_calibration: Dict[str, Any] = {}
 
         # 将模型移动到设备
         self.model.to(self.device)
@@ -174,6 +181,16 @@ class Evaluator:
         
         # 计算指标
         metrics = self.metrics_calculator.compute()
+        # ECE 校准分析（与 compute() 内的 brier_score 互校），缓存 bin 数据供可靠性图使用
+        calib = compute_calibration_metrics(
+            self.metrics_calculator.last_probabilities,
+            self.metrics_calculator.last_targets,
+            n_bins=self.eval_config.get('calibration_bins', 10),
+        )
+        self.last_calibration = calib
+        metrics['ece'] = calib['ece']
+        # brier_score 由 compute() 已写入（基于 valid_probabilities），这里仅当缺失时补齐
+        metrics.setdefault('brier_score', calib['brier_score'])
         metrics['loss'] = avg_loss
         metrics['dbond_style_loss'] = total_dbond_style_loss / total_samples if total_samples > 0 else 0.0
         memory_eval_end = self._get_memory_stats()

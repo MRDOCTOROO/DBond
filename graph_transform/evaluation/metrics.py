@@ -15,8 +15,10 @@ import numpy as np
 import torch
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
     f1_score,
     hamming_loss,
+    matthews_corrcoef,
     precision_score,
     recall_score,
     roc_auc_score,
@@ -53,6 +55,10 @@ TASK_EXTRA_METRIC_ORDER = (
     "auc_macro",
     "auc_micro",
     "auc_weighted",
+    "pr_auc",
+    "mcc",
+    "brier_score",
+    "ece",
     "hamming_loss",
     "positive_rate",
     "pred_positive_rate",
@@ -218,6 +224,10 @@ class BinaryBondMetrics:
         self.all_valid_targets: List[np.ndarray] = []
         self.sample_predictions: List[np.ndarray] = []
         self.sample_targets: List[np.ndarray] = []
+        # 缓存最近一次 compute() 得到的扁平化概率与标签，供 evaluator 计算校准指标(ECE/Brier)
+        # 和外部诊断使用，避免重复推理。每次 compute() 都会覆盖。
+        self.last_probabilities: np.ndarray = np.array([], dtype=np.float32)
+        self.last_targets: np.ndarray = np.array([], dtype=np.int32)
 
     def update(self, predictions: torch.Tensor, targets: torch.Tensor, label_mask: torch.Tensor | None = None):
         if isinstance(predictions, torch.Tensor):
@@ -266,6 +276,10 @@ class BinaryBondMetrics:
         threshold = self._get_threshold(valid_probabilities, valid_targets)
         binary_valid_predictions = (valid_probabilities > threshold).astype(np.int32)
 
+        # 缓存扁平化概率/标签，供 evaluator 计算校准指标（ECE/Brier）使用
+        self.last_probabilities = valid_probabilities
+        self.last_targets = valid_targets
+
         sample_probabilities = [_sigmoid_if_needed(sample.astype(np.float32)) for sample in self.sample_predictions]
         max_len = max((sample.size for sample in sample_probabilities), default=0)
         pred_matrix = np.zeros((len(sample_probabilities), max_len), dtype=np.int32)
@@ -309,13 +323,23 @@ class BinaryBondMetrics:
                 auc = roc_auc_score(valid_targets, valid_probabilities)
             except ValueError:
                 auc = 0.0
+            # PR-AUC（average precision）：类别不平衡场景下比 ROC-AUC 更关注正类
+            try:
+                pr_auc = average_precision_score(valid_targets, valid_probabilities)
+            except ValueError:
+                pr_auc = 0.0
         else:
             auc = 0.0
+            pr_auc = 0.0
 
         metrics["auc"] = auc
         metrics["auc_macro"] = auc
         metrics["auc_micro"] = auc
         metrics["auc_weighted"] = auc
+        # 判别力（阈值无关）与校准指标：PR-AUC / MCC / Brier score
+        metrics["pr_auc"] = pr_auc
+        metrics["mcc"] = float(matthews_corrcoef(valid_targets, binary_valid_predictions))
+        metrics["brier_score"] = float(np.mean((valid_probabilities - valid_targets.astype(np.float32)) ** 2))
         metrics["class_0_precision"] = metrics["precision"]
         metrics["class_0_recall"] = metrics["recall"]
         metrics["class_0_f1"] = metrics["f1"]
@@ -358,6 +382,8 @@ class BinaryBondMetrics:
         self.all_valid_targets = []
         self.sample_predictions = []
         self.sample_targets = []
+        self.last_probabilities = np.array([], dtype=np.float32)
+        self.last_targets = np.array([], dtype=np.int32)
 
 
 def compute_binary_bond_metrics(
@@ -368,6 +394,79 @@ def compute_binary_bond_metrics(
     metrics = BinaryBondMetrics({"threshold": threshold, "threshold_strategy": "fixed"})
     metrics.update(predictions, targets)
     return metrics.compute()
+
+
+def compute_calibration_metrics(
+    probabilities: np.ndarray,
+    targets: np.ndarray,
+    n_bins: int = 10,
+) -> Dict[str, Any]:
+    """计算概率校准指标，用于 R-20 要求的概率可信度分析。
+
+    返回：
+      - ece: Expected Calibration Error（10-bin 加权平均 |置信度-准确率|）
+      - brier_score: Brier 分数（独立口径，与 compute() 内的 brier_score 互校）
+      - max_calibration_error: 最差 bin 的绝对偏差
+      - n_samples: 有效键数
+      - bin_confidences / bin_accuracies / bin_counts / bin_edges: 可靠性图原始数据
+
+    说明：键级二分类的"准确率"= 该 bin 内真实断裂比例（正类频率）。
+    空样本时所有数值指标返回 0.0，bin_* 返回空列表，保证可视化层无 NPE。
+    """
+    probabilities = np.asarray(probabilities, dtype=np.float32).reshape(-1)
+    targets = np.asarray(targets, dtype=np.int32).reshape(-1)
+
+    result: Dict[str, Any] = {
+        "ece": 0.0,
+        "brier_score": 0.0,
+        "max_calibration_error": 0.0,
+        "n_samples": int(probabilities.size),
+        "n_bins": int(n_bins),
+        "bin_confidences": [],
+        "bin_accuracies": [],
+        "bin_counts": [],
+        "bin_edges": [],
+    }
+
+    if probabilities.size == 0 or targets.size == 0:
+        return result
+
+    targets_float = targets.astype(np.float32)
+    bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+    bin_indices = np.clip(np.digitize(probabilities, bin_edges[1:-1], right=False), 0, n_bins - 1)
+
+    bin_confidences = []
+    bin_accuracies = []
+    bin_counts = []
+    ece = 0.0
+    max_calibration_error = 0.0
+    total = float(probabilities.size)
+
+    for bin_idx in range(n_bins):
+        mask = bin_indices == bin_idx
+        count = int(np.sum(mask))
+        if count == 0:
+            continue
+        conf = float(np.mean(probabilities[mask]))
+        acc = float(np.mean(targets_float[mask]))
+        bin_confidences.append(conf)
+        bin_accuracies.append(acc)
+        bin_counts.append(count)
+        gap = abs(acc - conf)
+        ece += gap * (count / total)
+        if gap > max_calibration_error:
+            max_calibration_error = gap
+
+    result.update({
+        "ece": float(ece),
+        "brier_score": float(np.mean((probabilities - targets_float) ** 2)),
+        "max_calibration_error": float(max_calibration_error),
+        "bin_confidences": bin_confidences,
+        "bin_accuracies": bin_accuracies,
+        "bin_counts": bin_counts,
+        "bin_edges": bin_edges.tolist(),
+    })
+    return result
 
 
 # Backward-compatible aliases for older imports.

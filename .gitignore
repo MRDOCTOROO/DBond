@@ -60,7 +60,7 @@ nul
 AGENTS.md
 .zcode/*
 *.drawio
-interpretability_revised/
+实验图/*
 # Feature-group progressive addition 消融实验产物
 # 训练 checkpoint / 5 折产物 / 日志 / 图缓存（权重由 *.pt 覆盖，这里补非 .pt 的派生文件）
 checkpoints/graph_transform/feature_group_ablation/
