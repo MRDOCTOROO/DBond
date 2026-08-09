@@ -48,6 +48,16 @@ cache/
 .venv/
 .claude/*
 .kilo/
+# 本地临时测试环境/脚本（如做代码验证时创建的 venv、一次性测试脚本），
+# 绝不进 git —— 真正执行在云端
+.r20_test_venv/
+.r20_test_figs/
+.r20_functional_test.py
+*_test_venv/
+.*_test_venv/
+# 兜底：任何本地临时的验证脚本（命名约定 .*_test.py 或 *_functional_test.py）
+.*_functional_test.py
+*_functional_test.py
 
  # 其他忽略
 *.pyc
@@ -99,3 +109,4 @@ ludbondaf/checkpoint/*
 # scripts/run_baselines_5fold.sh 用 state/{model}.cvroot 记录每个模型的 cv_root 以支持断点续跑
 state/
 
+docs/*
