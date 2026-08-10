@@ -288,46 +288,52 @@ def select_statistical_samples(dataset, num_samples: int, random_seed: int,
 
 
 def build_length_groups(lengths: pd.Series) -> Tuple[pd.Series, Dict[str, object]]:
-    """Build length strata from the observed distribution, not fixed cutoffs.
+    """Split contiguous observed lengths into three near-equal groups.
 
-    ``max_seq_len`` is a model/data-processing limit, not a scientific length
-    boundary. Quantile-based bins ensure that short, middle and long peptides
-    are compared using the lengths actually present after dataset filtering.
-    Duplicate quantile boundaries are removed; if the data contain only one
-    unique length, one group is returned and the limitation is recorded.
+    Quantile *values* are unsuitable here because repeated peptide lengths
+    produce duplicate cut points. We keep identical lengths together and choose
+    the two cut points whose group sizes are closest to one-third of the data.
     """
-    lengths = pd.to_numeric(lengths, errors="coerce").dropna().astype(int)
-    unique_lengths = sorted(lengths.unique().tolist())
-    if len(unique_lengths) <= 1:
-        label = f"All sequences (length={unique_lengths[0] if unique_lengths else 'NA'})"
+    numeric = pd.to_numeric(lengths, errors="coerce")
+    valid = numeric.dropna().astype(int)
+    unique_lengths = sorted(valid.unique().tolist())
+    if len(unique_lengths) < 3:
+        label = "Observed length range"
         return pd.Series(label, index=lengths.index, dtype="string"), {
-            "method": "single_observed_length",
+            "method": "single_observed_length_range",
             "boundaries": unique_lengths,
             "groups": [label],
         }
 
-    quantiles = np.unique(np.quantile(lengths.to_numpy(), [0.0, 1 / 3, 2 / 3, 1.0]))
-    if len(quantiles) <= 2:
-        labels = pd.Series("Observed length range", index=lengths.index, dtype="string")
-        return labels, {
-            "method": "single_quantile_bin_due_to_duplicate_boundaries",
-            "boundaries": quantiles.tolist(),
-            "groups": ["Observed length range"],
-        }
-
-    bins = np.concatenate(([-np.inf], quantiles[1:-1], [np.inf]))
-    raw = pd.cut(lengths, bins=bins, include_lowest=True, duplicates="drop")
+    counts = valid.value_counts().reindex(unique_lengths).to_numpy()
+    target = len(valid) / 3.0
+    best = min(
+        ((i, j) for i in range(1, len(counts) - 1)
+         for j in range(i + 1, len(counts))),
+        key=lambda cuts: sum(
+            abs(size - target)
+            for size in (
+                counts[:cuts[0]].sum(),
+                counts[cuts[0]:cuts[1]].sum(),
+                counts[cuts[1]:].sum(),
+            )
+        ),
+    )
+    cut_1, cut_2 = best
+    ranges = [
+        unique_lengths[:cut_1],
+        unique_lengths[cut_1:cut_2],
+        unique_lengths[cut_2:],
+    ]
+    group_names = [f"Length Q{i + 1} ({group[0]}-{group[-1]})" for i, group in enumerate(ranges)]
     labels = pd.Series(index=lengths.index, dtype="string")
-    group_names = []
-    for group_index, interval in enumerate(raw.cat.categories):
-        name = f"Length Q{group_index + 1} ({int(interval.left) if np.isfinite(interval.left) else '-inf'}-" \
-               f"{int(interval.right) if np.isfinite(interval.right) else 'inf'})"
-        labels.loc[raw == interval] = name
-        group_names.append(name)
+    for name, group in zip(group_names, ranges):
+        labels.loc[numeric.isin(group)] = name
     return labels, {
-        "method": "observed_length_tertiles",
-        "boundaries": quantiles.tolist(),
+        "method": "observed_length_three_balanced_groups",
+        "boundaries": [group[-1] for group in ranges[:-1]],
         "groups": group_names,
+        "group_counts": [int(counts[:cut_1].sum()), int(counts[cut_1:cut_2].sum()), int(counts[cut_2:].sum())],
     }
 
 

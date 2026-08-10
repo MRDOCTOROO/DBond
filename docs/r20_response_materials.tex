@@ -1,20 +1,21 @@
 % =============================================================================
-% R-20 Reviewer Response Materials（v2 — 5 模型对比版）
+% R-20 Reviewer Response Materials（v4 — 验证后定稿）
 %
-% 修复反馈指出的问题：
-%   1. MCC 不再称 threshold-free（caption 区分 ranking 指标 vs thresholded 指标）
-%   2. "Probability calibration" → "Consistency of predicted probabilities"（措辞降级）
-%   3. Table 3 的 All baseline 移到独立行（不作为 Model）
-%   4. n 值改为实际 peptide 序列数（peptide-seq 去重后，非 spectrum 数）
-%   5. 所有 R-20 指标扩展为 5 模型对比（DBond-S/M/AF/AF-opt/GT）
+% 本版整合外部反馈 15 条 + 两个数据验证的结论：
+%   1. 概率口径：5 个模型均在统一的 P(y=1) 定义下计算（softmax 正类概率 / sigmoid
+%      概率都转为 P(y=1)），不排除任何模型，校准表 5 模型同表对比
+%   2. R_true 聚合：同一序列跨多 spectrum 的 R_true 取均值（已验证 std≈0.27，
+%      反映实验条件可变性，论文明确说明）
+%   3. ρ 报告方式：fold-mean ± SD，不挂 pooled p（5 次独立划分非严格 CV，
+%      fold 间有序列重叠，pooled 会重复计数）
+%   4. 协议表述：5 independent sequence-level splits（非 "5-fold CV"）
 %
-% 占位符说明：
-%   \GTxxx  = DBond-GT 5fold mean±std（GT 已有数据，见下方注释）
-%   \BSxxx  = DBond-S 5fold mean±std（待跑 compute_baseline_r20.py）
-%   \BMxxx  = DBond-M 5fold mean±std
-%   \BAxxx  = DBond-AF 5fold mean±std
-%   \BOxxx  = DBond-AF-opt 5fold mean±std
-%   \NPEP   = peptide 去重后的唯一序列数（单折或 5 折合计，待确认）
+% 叙事策略（诚实，不强行"全面领先"）：
+%   - DBond-GT 在 ROC-AUC / PR-AUC / MCC / Spearman ρ 上第一
+%   - Brier：DBond-AF-opt 最好，DBond-GT 次之
+%   - ECE：DBond-S 最低，DBond-GT 中等
+%   - Top-k enrichment：各模型接近，DBond-GT 不明显领先
+%   - DBond-AF 的 ROC 高但 ρ 低 → 说明 discrimination ≠ ranking
 % =============================================================================
 
 % -----------------------------------------------------------------------------
@@ -27,19 +28,26 @@ DBond 保持一致，并采用 macro-average 计算方式。
 
 考虑到镜像肽断裂预测不仅可用于固定阈值下的断裂状态判定，还可用于候选序列
 筛选，本文进一步从概率判别能力、概率预测一致性以及候选序列排序能力三个方面
-进行补充评价。首先，采用 ROC-AUC 和 PR-AUC 评价模型与分类阈值无关的概率排序
-能力，采用 Matthews Correlation Coefficient（MCC）综合评价固定阈值下二分类
+进行补充评价。首先，采用 ROC-AUC 和 PR-AUC 评价与分类阈值无关的概率排序能力，
+并采用 Matthews Correlation Coefficient（MCC）综合评价固定阈值下的二分类
 预测结果。其次，采用 Brier score 和 Expected Calibration Error（ECE）衡量
 预测概率与实际断裂结果之间的一致性，其中两项指标均为越低越好，ECE 按 10 个
-等宽概率区间加权计算。进一步地，为验证预测断裂概率能否作为候选序列筛选的
-排序依据，本文在 peptide-sequence level 进行 candidate-level ranking test：
-对每条候选肽，由其各肽键的预测断裂概率计算预测断裂率 $R_{\text{pred}}$
-（Eq.~\ref{eq:rpred}），按 $R_{\text{pred}}$ 对测试序列降序排序，分别选取
-Top 10\%/20\%/50\% 序列计算其真实 PBCLA 断裂率 $R_{\text{true}}$
-（Eq.~\ref{eq:rtrue}），并以全部测试序列的真实断裂率作为基线计算 enrichment
-factor；同时采用 Spearman 秩相关系数 $\rho$ 衡量 $R_{\text{pred}}$ 与
-$R_{\text{true}}$ 之间的单调相关性。所有指标均在 5 个 sequence-level 划分上
-独立计算，最终以 mean $\pm$ SD 报告。
+等宽概率区间计算。对于 DBond-s，采用二分类 softmax 输出的正类概率作为预测
+概率；对于其余模型，采用 sigmoid 输出的正类概率，所有模型均在统一的
+$P(y=1)$ 定义下计算上述指标。
+
+进一步地，为验证预测断裂概率能否作为候选序列筛选的排序依据，本文在
+peptide-sequence level 进行 candidate-level ranking test。对于每条候选肽，
+根据其各肽键的预测断裂概率计算预测断裂率 $R_{\text{pred}}$，并按照
+$R_{\text{pred}}$ 对测试序列进行降序排序。随后分别选取预测得分最高的
+Top 10\%、Top 20\% 和 Top 50\% 候选序列，计算其实际 PBCLA 断裂率
+$R_{\text{true}}$，并以全部测试序列的实际断裂率作为基线计算 enrichment
+factor。同时，采用 Spearman 秩相关系数 $\rho$ 衡量 $R_{\text{pred}}$ 与
+$R_{\text{true}}$ 之间的单调相关性。较高的 Spearman $\rho$ 和 enrichment
+factor 表明预测断裂率具有更强的候选序列排序价值。
+
+所有指标均在 5 个 sequence-level 划分上独立计算，并以 mean $\pm$ SD 的形式
+报告。所有新增指标均在五个模型上采用统一的计算协议进行评价。
 
 % -----------------------------------------------------------------------------
 % 2) Candidate ranking 小节（新增）
@@ -55,38 +63,44 @@ $p_1, p_2, \ldots, p_{n}$，定义 peptide-level predicted cleavage ratio 为
     R_{\text{pred}} = \frac{1}{n}\sum_{i=1}^{n} p_i.
     \label{eq:rpred}
 \end{equation}
-对应地，实验观测的 PBCLA cleavage ratio 为真实断裂键数与总键数之比：
+对应地，实验观测的 PBCLA cleavage ratio 定义为该序列在所有观测 spectrum 下
+的断裂频率均值：
 \begin{equation}
-    R_{\text{true}} = \frac{1}{n}\sum_{i=1}^{n} y_i.
+    R_{\text{true}} = \frac{1}{S}\sum_{s=1}^{S} \frac{c_s}{m_s},
     \label{eq:rtrue}
 \end{equation}
-$R_{\text{pred}}$ 越高表示模型认为该肽段越容易碎裂、越适合测序。本文对所有
-唯一测试肽序列（去除同一序列在不同 precursor/spectrum 下的重复）按
-$R_{\text{pred}}$ 降序排列，并计算 $R_{\text{pred}}$ 与 $R_{\text{true}}$
-之间的 Spearman 秩相关 $\rho$，同时在 Top 10\%/20\%/50\% 候选子集上比较
-观测断裂率与全集基线的差异，以评估排序的下游筛选价值
-（Table~\ref{tab:ranking}, Fig.~\ref{fig:ranking}）。
+其中 $S$ 为该肽序列对应的 spectrum 数，$m_s$ 与 $c_s$ 分别为第 $s$ 个
+spectrum 的肽键总数与断裂键数。同一序列在不同 experimental condition
+（precursor charge、collision energy、scan）下的断裂行为存在差异（跨 spectrum
+的 $R_{\text{true}}$ 标准差约为 0.27），取均值得到的 $R_{\text{true}}$ 反映
+该序列在多种实验条件下的平均断裂倾向。$R_{\text{pred}}$ 越高表示模型预测该
+肽段具有更高的肽键断裂倾向；较高的 $R_{\text{true}}$ 表明候选序列具有更高的
+实际断裂比例，因此可用于评估预测断裂率作为候选筛选排序指标的潜在价值。
+
+本文对所有唯一测试肽序列（每折约 103 条）按 $R_{\text{pred}}$ 降序排列，并
+计算 $R_{\text{pred}}$ 与 $R_{\text{true}}$ 之间的 Spearman 秩相关 $\rho$，
+同时在 Top 10\%/20\%/50\% 候选子集上比较观测断裂率与全集基线的差异，以评估
+排序的下游筛选价值（Table~\ref{tab:ranking}, Fig.~\ref{fig:ranking}）。
 
 % -----------------------------------------------------------------------------
-% 3) Table 1: 判别力 + 分类指标（5 模型对比）
-%    ROC-AUC/PR-AUC = threshold-free ranking; MCC = thresholded binary
+% 3) Table 1: 判别力 + 分类指标（5 模型对比；DBond-GT 三项第一）
 % -----------------------------------------------------------------------------
 \begin{table}[t]
 \centering
 \caption{Discrimination and classification performance of all models on the
-5-fold cross-validation (mean $\pm$ SD). ROC-AUC and PR-AUC are
-threshold-independent ranking metrics computed from predicted probabilities,
-whereas MCC evaluates the quality of thresholded binary predictions
-(threshold $= 0.5$) in a single imbalance-aware score.}
+five independent sequence-level splits (mean $\pm$ SD). ROC-AUC and PR-AUC
+are threshold-independent ranking metrics computed from predicted positive
+class probabilities $P(y=1)$; MCC evaluates the quality of thresholded
+binary predictions (threshold $= 0.5$) in a single imbalance-aware score.}
 \label{tab:discrimination}
 \begin{tabular}{lccc}
 \toprule
 Model         & ROC-AUC              & PR-AUC               & MCC                  \\
 \midrule
-DBond-S       & \BSroc $\pm$ \BSrocs & \BSpr  $\pm$ \BSprs  & \BSmcc $\pm$ \BSmccs \\
-DBond-M       & \BMroc $\pm$ \BMrocs & \BMpr  $\pm$ \BMprs  & \BMmcc $\pm$ \BMmccs \\
-DBond-AF      & \BAroc $\pm$ \BArocs & \BApr  $\pm$ \BAprs  & \BAmcc $\pm$ \BAmccs \\
-DBond-AF-opt  & \BOroc $\pm$ \BOrocs & \BOpr  $\pm$ \BOprs  & \BOmcc $\pm$ \BOmccs \\
+DBond-S       & 0.8952 $\pm$ 0.0012  & 0.8767 $\pm$ 0.0030  & 0.6329 $\pm$ 0.0017  \\
+DBond-M       & 0.8949 $\pm$ 0.0038  & 0.8782 $\pm$ 0.0076  & 0.6273 $\pm$ 0.0084  \\
+DBond-AF      & 0.9072 $\pm$ 0.0022  & 0.8993 $\pm$ 0.0028  & 0.6459 $\pm$ 0.0053  \\
+DBond-AF-opt  & 0.9154 $\pm$ 0.0019  & 0.9063 $\pm$ 0.0006  & 0.6679 $\pm$ 0.0054  \\
 \midrule
 \textbf{DBond-GT} & \textbf{0.9218 $\pm$ 0.0024} & \textbf{0.9142 $\pm$ 0.0030} & \textbf{0.6848 $\pm$ 0.0049} \\
 \bottomrule
@@ -94,128 +108,148 @@ DBond-AF-opt  & \BOroc $\pm$ \BOrocs & \BOpr  $\pm$ \BOprs  & \BOmcc $\pm$ \BOmc
 \end{table}
 
 % -----------------------------------------------------------------------------
-% 4) Table 2: 概率一致性（措辞降级，不称 calibration）
+% 4) Table 2: 概率一致性（5 模型对比，统一 P(y=1) 口径）
 % -----------------------------------------------------------------------------
 \begin{table}[t]
 \centering
-\caption{Consistency of predicted probabilities with observed cleavage
-outcomes on the 5-fold cross-validation (mean $\pm$ SD). Brier score is the
-mean squared error between predicted probabilities and binary outcomes; ECE
-is the expected calibration error over 10 equal-width probability bins.
-Lower is better for both; values quantify the agreement between predicted
-probabilities and observed cleavage frequencies rather than claiming a
-calibrated probabilistic forester.}
+\caption{Agreement between predicted probabilities and observed cleavage
+outcomes on the five independent sequence-level splits (mean $\pm$ SD).
+Brier score is the mean squared error between $P(y=1)$ and binary outcomes;
+ECE is the expected calibration error over 10 equal-width probability bins.
+Lower is better for both.}
 \label{tab:calibration}
 \begin{tabular}{lcc}
 \toprule
 Model         & Brier score          & ECE                  \\
 \midrule
-DBond-S       & \BSbrier $\pm$ \BSbriers & \BSece $\pm$ \BSeces \\
-DBond-M       & \BMbrier $\pm$ \BMbriers & \BMece $\pm$ \BMeces \\
-DBond-AF      & \BAbrier $\pm$ \BAbriers & \BAece $\pm$ \BAeces \\
-DBond-AF-opt  & \BObrier $\pm$ \BObriers & \BOece $\pm$ \BOeces \\
+DBond-S       & 0.1301 $\pm$ 0.0008  & \textbf{0.0178 $\pm$ 0.0027} \\
+DBond-M       & 0.1328 $\pm$ 0.0029  & 0.0430 $\pm$ 0.0047  \\
+DBond-AF      & 0.1331 $\pm$ 0.0015  & 0.0837 $\pm$ 0.0012  \\
+DBond-AF-opt  & \textbf{0.1177 $\pm$ 0.0016}  & 0.0248 $\pm$ 0.0041  \\
 \midrule
-\textbf{DBond-GT} & \textbf{0.1185 $\pm$ 0.0021} & \textbf{0.0687 $\pm$ 0.0025} \\
+\textbf{DBond-GT} & 0.1185 $\pm$ 0.0021 & 0.0687 $\pm$ 0.0025 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 % -----------------------------------------------------------------------------
-% 5) Table 3: 候选排序（5 模型对比；All baseline 移到独立行；n 改正）
+% 5) Table 3: 候选排序（5 模型对比；caption 只描述方法，Discussion 移正文）
 % -----------------------------------------------------------------------------
 \begin{table}[t]
 \centering
-\caption{Candidate-level ranking capability on the 5-fold cross-validation
-(mean $\pm$ SD). Spearman $\rho$ is computed between predicted and observed
-cleavage ratios across unique peptide sequences in the test set
-($n = \NPEP$ unique sequences per fold; ranking is performed at the
-peptide-sequence level rather than the individual-spectrum level). For each
-Top-$k$ selection, the reported value is the mean observed cleavage ratio of
-the selected peptides, followed by the enrichment factor relative to the
-all-peptide baseline in parentheses. Higher Spearman correlation and
-enrichment indicate stronger candidate-ranking capability.}
+\caption{Candidate-level ranking capability on the five independent
+sequence-level splits (mean $\pm$ SD). Spearman $\rho$ is computed between
+predicted and observed cleavage ratios across unique peptide sequences in
+each test split ($n \approx 103$ unique sequences per split). For each
+Top-$k$ selection, the reported value is the mean observed cleavage ratio
+of the selected peptides, followed by the enrichment factor relative to the
+all-peptide baseline in parentheses. Higher Spearman $\rho$ and enrichment
+indicate stronger candidate-ranking capability.}
 \label{tab:ranking}
 \begin{tabular}{lcccc}
 \toprule
 Method        & Spearman $\rho$        & Top 10\%              & Top 20\%              & Top 50\%              \\
 \midrule
-DBond-S       & \BSrho $\pm$ \BSrhos   & \BSt10r\;(\BSt10e$\times$)  & \BSt20r\;(\BSt20e$\times$)  & \BSt50r\;(\BSt50e$\times$)  \\
-DBond-M       & \BMrho $\pm$ \BMrhos   & \BMt10r\;(\BMt10e$\times$)  & \BMt20r\;(\BMt20e$\times$)  & \BMt50r\;(\BMt50e$\times$)  \\
-DBond-AF      & \BArho $\pm$ \BArhos   & \BAt10r\;(\BAt10e$\times$)  & \BAt20r\;(\BAt20e$\times$)  & \BAt50r\;(\BAt50e$\times$)  \\
-DBond-AF-opt  & \BOrho $\pm$ \BOrhos   & \BOt10r\;(\BOt10e$\times$)  & \BOt20r\;(\BOt20e$\times$)  & \BOt50r\;(\BOt50e$\times$)  \\
+DBond-S       & 0.8053 $\pm$ 0.0207   & 0.5989 $\pm$ 0.0096\;(1.31$\times$)  & 0.5804 $\pm$ 0.0096\;(1.27$\times$)  & 0.5369 $\pm$ 0.0069\;(1.17$\times$)  \\
+DBond-M       & 0.7903 $\pm$ 0.0310   & 0.6058 $\pm$ 0.0184\;(1.32$\times$)  & 0.5775 $\pm$ 0.0045\;(1.26$\times$)  & 0.5361 $\pm$ 0.0071\;(1.17$\times$)  \\
+DBond-AF      & 0.6186 $\pm$ 0.0424   & 0.5690 $\pm$ 0.0443\;(1.24$\times$)  & 0.5537 $\pm$ 0.0184\;(1.21$\times$)  & 0.5215 $\pm$ 0.0088\;(1.14$\times$)  \\
+DBond-AF-opt  & 0.7941 $\pm$ 0.0104   & 0.6057 $\pm$ 0.0119\;(1.32$\times$)  & 0.5810 $\pm$ 0.0103\;(1.27$\times$)  & 0.5329 $\pm$ 0.0074\;(1.16$\times$)  \\
 \midrule
 \textbf{DBond-GT}
-              & \textbf{0.9351 $\pm$ 0.0025}
-              & \textbf{0.8919 $\pm$ 0.0056}\;(\textbf{1.87$\times$})
-              & \textbf{0.8554 $\pm$ 0.0075}\;(\textbf{1.79$\times$})
-              & \textbf{0.7182 $\pm$ 0.0100}\;(\textbf{1.50$\times$}) \\
+              & \textbf{0.8310 $\pm$ 0.0202}
+              & 0.6066 $\pm$ 0.0210\;(1.32$\times$)
+              & 0.5832 $\pm$ 0.0100\;(1.27$\times$)
+              & 0.5362 $\pm$ 0.0068\;(1.17$\times$) \\
 \midrule
 All peptides (baseline)
               & ---
-              & \multicolumn{3}{c}{0.4778 $\pm$ 0.0069} \\
+              & \multicolumn{3}{c}{0.4584 $\pm$ 0.0062} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 % -----------------------------------------------------------------------------
-% 6) 图引用
+% 6) 结果讨论（诚实叙事，每条结论都有数据支撑）
+%    - DBond-AF 反例已验证：5 折 ρ 稳定在 0.57-0.68（无异常折），现象可复现
+%    - 不再用"反证/underscores exactly"等过强措辞
+% -----------------------------------------------------------------------------
+在判别能力方面，DBond-GT 在 ROC-AUC、PR-AUC 和 MCC 三项指标上均取得五种模型
+中的最高值，表明其具有较强的 bond-level discrimination 能力。
+
+在概率预测一致性方面，DBond-AF-opt 获得最低的 Brier score，而 DBond-S 获得
+最低的 ECE；DBond-GT 的 Brier score 次于 DBond-AF-opt，ECE 则处于中等水平。
+这说明模型的概率一致性并不必然与其判别能力或候选排序能力同步变化。
+
+在 candidate-level ranking 方面，DBond-GT 获得最高的 Spearman $\rho$，说明
+其预测断裂率与实际断裂率之间具有最强的整体单调一致性。与此同时，各模型的
+Top-$k$ enrichment 整体较为接近，表明模型在高断裂率候选富集方面具有相似的
+趋势。
+
+值得注意的是，DBond-AF 虽然具有较高的 bond-level ROC-AUC，但其 peptide-level
+Spearman $\rho$ 明显低于其他模型（5 次独立划分上稳定在 0.57--0.68），并且
+ECE 最高。这一差异表明 bond-level discrimination 与 peptide-level candidate
+ranking 并非完全等价，仅依赖固定阈值下的分类指标可能不足以全面评价模型在
+候选序列筛选场景中的实际价值，这也进一步说明本文引入多维评价指标的必要性。
+
+% -----------------------------------------------------------------------------
+% 7) 图引用
 % -----------------------------------------------------------------------------
 \begin{figure}[t]
 \centering
 % \includegraphics[width=\textwidth]{figures/panel_reliability_diagram.pdf}
 % \includegraphics[width=\textwidth]{figures/panel_predicted_vs_observed.pdf}
 % \includegraphics[width=\textwidth]{figures/panel_topk_enrichment.pdf}
-\caption{\textbf{Consistency of predicted probabilities and candidate-level
+\caption{\textbf{Agreement of predicted probabilities and candidate-level
 ranking of DBond-GT.} (a) Reliability diagram: predicted bond-cleavage
-probabilities track observed cleavage frequencies closely
+probabilities track observed cleavage frequencies
 (ECE~$=$~0.069, Brier~$=$~0.119). (b) Scatter of peptide-level predicted
-vs.\ observed cleavage ratios (Spearman $\rho = 0.935$, $p < 0.001$,
-$n = \NPEP$ unique peptide sequences per fold). (c) Top-$k$ enrichment
-curve: peptides ranked by $R_{\text{pred}}$ show monotonically higher
-observed cleavage ratios than the all-peptide baseline, indicating that
-the predicted cleavage ratio has potential value as a candidate-sequence
-ranking score.}
+vs.\ observed cleavage ratios (Spearman $\rho = 0.831 \pm 0.020$ across
+five independent splits, $n \approx 103$ unique peptide sequences per
+split; per-split $p < 0.001$). (c) Top-$k$ enrichment curve: peptides
+ranked by $R_{\text{pred}}$ show monotonically higher observed cleavage
+ratios than the all-peptide baseline, indicating that the predicted
+cleavage ratio has potential value as a candidate-sequence ranking score.}
 \label{fig:ranking}
 \end{figure}
 
 % -----------------------------------------------------------------------------
-% 7) Point-by-point 审稿回应（英文，response letter 用）
+% 8) Point-by-point 审稿回应（英文，response letter 用）
 % -----------------------------------------------------------------------------
 % Reviewer R-20 [Moderate] — Evaluation metric completeness (p11 L21-L24)
 %
 \textbf{Response:} We thank the reviewer for highlighting the importance of
-ranking and calibration for downstream sequence screening. We have expanded
-the evaluation framework along three complementary dimensions and applied
-the new metrics uniformly to all compared models (DBond-S, DBond-M,
-DBond-AF, DBond-AF-opt, and DBond-GT) to enable a fair comparison.
+ranking and calibration for downstream sequence screening. Following the
+suggestion, we expanded the evaluation framework along three complementary
+dimensions and applied the new metrics uniformly to all compared models
+(DBond-S, DBond-M, DBond-AF, DBond-AF-opt, and DBond-GT) under a common
+positive-class probability $P(y=1)$ definition.
 
 \begin{enumerate}
     \item \textbf{Threshold-free ranking and thresholded classification.}
-    We report ROC-AUC and PR-AUC as threshold-independent ranking metrics
-    computed from predicted probabilities, and Matthews Correlation
-    Coefficient (MCC) to summarize thresholded binary predictions
-    (threshold $= 0.5$) in a single imbalance-aware score
-    (Table~\ref{tab:discrimination}).
+    We report ROC-AUC and PR-AUC as threshold-independent ranking metrics,
+    and Matthews Correlation Coefficient (MCC) for thresholded binary
+    predictions (threshold $=0.5$). DBond-GT achieves the highest score on
+    all three (Table~\ref{tab:discrimination}).
 
     \item \textbf{Agreement between predicted probabilities and outcomes.}
-    We use Brier score and Expected Calibration Error (ECE, 10 equal-width
-    bins) to quantify how closely the predicted bond-cleavage probabilities
-    match observed cleavage frequencies. These metrics quantify
-    probability--outcome agreement rather than claiming a fully calibrated
-    probabilistic forecaster (Table~\ref{tab:calibration},
-    Fig.~\ref{fig:ranking}a).
+    We report Brier score and Expected Calibration Error (ECE, 10 bins)
+    for all five models (Table~\ref{tab:calibration}). DBond-AF-opt
+    achieves the lowest Brier score (0.1177) and DBond-S the lowest ECE
+    (0.0178); DBond-GT is the second best on Brier (0.1185) with moderate
+    ECE (0.0687). This indicates that probability agreement does not
+    necessarily co-vary with discrimination or ranking ability, and the
+    three dimensions must be evaluated separately.
 
-    \item \textbf{Candidate-level ranking.} To directly address whether the
-    predicted cleavage ratio can serve as a candidate ranking score, we
-    aggregate bond-level probabilities into a peptide-level predicted
-    cleavage ratio $R_{\text{pred}}$ (Eq.~\ref{eq:rpred}) and compare it
-    with the PBCLA-observed ratio $R_{\text{true}}$ (Eq.~\ref{eq:rtrue}).
-    Ranking is performed at the peptide-sequence level across all unique
-    test sequences ($n = \NPEP$ per fold). For DBond-GT, the Spearman
-    correlation reaches $\rho = 0.935$ ($p < 0.001$), and Top-10\% peptides
-    by $R_{\text{pred}}$ exhibit an observed cleavage ratio of 0.892 — a
-    1.87$\times$ enrichment over the all-peptide baseline of 0.478 —
-    indicating that the predicted cleavage ratio has potential value as a
-    candidate-sequence ranking score (Table~\ref{tab:ranking},
-    Fig.~\ref{fig:ranking}b--c).
+    \item \textbf{Candidate-level ranking.} We aggregate bond-level
+    probabilities into a peptide-level predicted cleavage ratio
+    $R_{\text{pred}}$ (Eq.~\ref{eq:rpred}) and rank unique test peptide
+    sequences by it ($n \approx 103$ per split). DBond-GT attains the
+    highest Spearman $\rho = 0.831 \pm 0.020$ across five independent
+    sequence-level splits (per-split $p < 0.001$)
+    (Table~\ref{tab:ranking}, Fig.~\ref{fig:ranking}). Notably, DBond-AF
+    yields a substantially lower $\rho = 0.619 \pm 0.042$ despite a
+    competitive ROC-AUC (0.907), illustrating that bond-level
+    discrimination alone does not guarantee effective peptide-level
+    candidate ranking and validating the necessity of the newly
+    introduced ranking metrics.
 \end{enumerate}

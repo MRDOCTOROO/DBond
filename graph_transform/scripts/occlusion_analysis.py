@@ -125,6 +125,36 @@ def infer_model_config_from_checkpoint(
 # 分层抽样
 # =============================================================================
 
+def observed_length_groups(lengths: pd.Series) -> Tuple[pd.Series, List[str]]:
+    """Split observed lengths into three near-equal groups without splitting ties."""
+    numeric = pd.to_numeric(lengths, errors="coerce")
+    valid = numeric.dropna().astype(int)
+    unique_lengths = sorted(valid.unique().tolist())
+    if len(unique_lengths) < 3:
+        label = "Observed length range"
+        return pd.Series(label, index=lengths.index, dtype="string"), [label]
+
+    counts = valid.value_counts().reindex(unique_lengths).to_numpy()
+    target = len(valid) / 3.0
+    cut_1, cut_2 = min(
+        ((i, j) for i in range(1, len(counts) - 1)
+         for j in range(i + 1, len(counts))),
+        key=lambda cuts: sum(
+            abs(size - target)
+            for size in (
+                counts[:cuts[0]].sum(),
+                counts[cuts[0]:cuts[1]].sum(),
+                counts[cuts[1]:].sum(),
+            )
+        ),
+    )
+    ranges = [unique_lengths[:cut_1], unique_lengths[cut_1:cut_2], unique_lengths[cut_2:]]
+    labels = [f"Length Q{i + 1} ({group[0]}-{group[-1]})" for i, group in enumerate(ranges)]
+    result = pd.Series(index=lengths.index, dtype="string")
+    for label, group in zip(labels, ranges):
+        result.loc[numeric.isin(group)] = label
+    return result, labels
+
 def stratified_sample(
     dataset: GraphDataset,
     num_samples: int,
@@ -142,25 +172,7 @@ def stratified_sample(
     df["fbr"] = pd.to_numeric(df["fbr"], errors="coerce")
     df["charge"] = pd.to_numeric(df["charge"], errors="coerce")
 
-    # Use observed-length tertiles rather than fixed cutoffs. Fixed boundaries
-    # can collapse all samples into one group after dataset-level max-length
-    # filtering, making the subgroup analysis scientifically meaningless.
-    length_values = df["seq_len"]
-    length_quantiles = np.unique(
-        np.quantile(length_values.to_numpy(), [0.0, 1 / 3, 2 / 3, 1.0])
-    )
-    if len(length_quantiles) > 2:
-        length_bins = np.concatenate(([-np.inf], length_quantiles[1:-1], [np.inf]))
-        length_categories = pd.cut(
-            length_values, bins=length_bins, include_lowest=True, duplicates="drop"
-        )
-        length_labels = {
-            interval: f"L_Q{index + 1}"
-            for index, interval in enumerate(length_categories.cat.categories)
-        }
-        df["len_bin"] = length_categories.map(length_labels).astype(str)
-    else:
-        df["len_bin"] = "L_observed_range"
+    df["len_bin"], _ = observed_length_groups(df["seq_len"])
 
     def _charge_bin(charge):
         if pd.isna(charge):
@@ -217,24 +229,6 @@ def stratified_sample(
     logger.info(f"Selected {len(selected_idx)} samples across "
                 f"{len(set(df.loc[selected_idx, 'stratum']))} strata")
     return selected_idx[:num_samples]
-
-
-def observed_length_group_labels(lengths: pd.Series) -> Tuple[pd.Series, List[str]]:
-    """Return labels matching the observed-length tertiles used for sampling."""
-    lengths = pd.to_numeric(lengths, errors="coerce")
-    quantiles = np.unique(np.quantile(lengths.dropna().to_numpy(), [0.0, 1 / 3, 2 / 3, 1.0]))
-    if len(quantiles) <= 2:
-        label = "Observed length range"
-        return pd.Series(label, index=lengths.index, dtype="string"), [label]
-    bins = np.concatenate(([-np.inf], quantiles[1:-1], [np.inf]))
-    categorical = pd.cut(lengths, bins=bins, include_lowest=True, duplicates="drop")
-    labels = {}
-    ordered = []
-    for index, interval in enumerate(categorical.cat.categories):
-        label = f"Length Q{index + 1}"
-        labels[interval] = label
-        ordered.append(label)
-    return categorical.map(labels).astype("string"), ordered
 
 
 # =============================================================================
@@ -512,7 +506,7 @@ def main():
     selected = stratified_sample(
         test_dataset, args.num_samples, args.random_seed, logger,
     )
-    observed_length_labels, observed_length_order = observed_length_group_labels(
+    observed_length_labels, observed_length_order = observed_length_groups(
         test_dataset.data["seq"].astype(str).str.len()
     )
 
