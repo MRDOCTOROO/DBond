@@ -33,6 +33,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+# 让同目录下的 r20_metrics 可被 import（脚本直接执行时不识别包内 import）
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from r20_metrics import compute_bond_level_r20, build_peptide_level_table
 from scipy import stats
 
 
@@ -152,7 +156,7 @@ def main():
     parser.add_argument(
         "--pred_csv", type=str,
         default="result/pred/graph_transform/latest.pred.csv",
-        help="evaluate_graph_model.py 输出的预测 CSV（含 pred_prob/true 列）",
+        help="evaluate_graph_model.py 输出的预测 CSV（含 pred_prob/true/seq 列）",
     )
     parser.add_argument(
         "--output_dir", type=str, default="result/ranking",
@@ -162,11 +166,20 @@ def main():
         "--top_k_fractions", type=float, nargs="+", default=[0.1, 0.2, 0.5],
         help="Top-k 候选比例（默认 0.1 0.2 0.5）",
     )
+    parser.add_argument(
+        "--dedup_by_seq", action="store_true", default=True,
+        help="按唯一序列去重后再做 ranking（默认开启，符合审稿人 candidate-sequence 原意）",
+    )
+    parser.add_argument(
+        "--no_dedup", dest="dedup_by_seq", action="store_false",
+        help="关闭去重，按 spectrum 级 ranking（旧行为，不推荐用于论文）",
+    )
     args = parser.parse_args()
 
     logger = setup_logging(args.output_dir)
     logger.info("=" * 60)
     logger.info("Candidate-level ranking analysis (R-20)")
+    logger.info(f"dedup_by_seq = {args.dedup_by_seq}")
     logger.info("=" * 60)
 
     if not os.path.exists(args.pred_csv):
@@ -179,8 +192,50 @@ def main():
     if missing:
         raise ValueError(f"Prediction CSV missing required columns: {missing}")
 
-    per_peptide = compute_per_peptide_ratios(df, logger)
-    logger.info(f"Computed ratios for {len(per_peptide)} peptides")
+    # spectrum 级聚合（每行一肽/spectrum）
+    per_spectrum = compute_per_peptide_ratios(df, logger)
+    logger.info(f"Computed ratios for {len(per_spectrum)} spectra")
+
+    # 键级 R-20 指标（与基线同口径，从分号串展平）
+    all_probs: List[float] = []
+    all_targets: List[int] = []
+    for _, row in df.iterrows():
+        p = parse_semicolon_vector(row.get("pred_prob"), np.float32)
+        t = parse_semicolon_vector(row.get("true"), np.int32)
+        n = min(p.size, t.size)
+        if n == 0:
+            continue
+        all_probs.extend(p[:n].tolist())
+        all_targets.extend(t[:n].tolist())
+    bond_metrics = compute_bond_level_r20(
+        np.array(all_probs, dtype=np.float32),
+        np.array(all_targets, dtype=np.int32),
+    )
+    logger.info(
+        f"Bond-level R-20: ROC-AUC={bond_metrics['roc_auc']:.4f}  "
+        f"PR-AUC={bond_metrics['pr_auc']:.4f}  MCC={bond_metrics['mcc']:.4f}  "
+        f"Brier={bond_metrics['brier_score']:.4f}  ECE={bond_metrics['ece']:.4f}  "
+        f"n_bonds={bond_metrics['n_bonds']}"
+    )
+
+    # peptide-seq 级去重（审稿人 candidate-sequence ranking 原意）
+    if args.dedup_by_seq:
+        if "seq" not in per_spectrum.columns:
+            logger.warning("'seq' column missing; cannot dedup by sequence, using spectrum-level")
+            per_peptide = per_spectrum
+        else:
+            per_peptide = build_peptide_level_table(
+                seqs=per_spectrum["seq"].astype(str).tolist(),
+                r_pred_per_spectrum=per_spectrum["R_pred"].tolist(),
+                r_true_per_spectrum=per_spectrum["R_true"].tolist(),
+                n_bonds_per_spectrum=per_spectrum["n_bonds"].tolist(),
+            )
+            logger.info(
+                f"Deduplicated by seq: {len(per_spectrum)} spectra → "
+                f"{len(per_peptide)} unique peptide sequences"
+            )
+    else:
+        per_peptide = per_spectrum
 
     spearman = compute_spearman(per_peptide)
     logger.info(
@@ -208,7 +263,10 @@ def main():
 
     summary = {
         "pred_csv": os.path.abspath(args.pred_csv),
+        "dedup_by_seq": bool(args.dedup_by_seq),
+        "n_spectra": int(len(per_spectrum)),
         "n_peptides": int(len(per_peptide)),
+        "bond_metrics": bond_metrics,
         "spearman": spearman,
         "enrichment": enrichment,
         "overall": {
