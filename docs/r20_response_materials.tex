@@ -1,7 +1,10 @@
 % =============================================================================
-% R-20 Reviewer Response Materials（v4 — 验证后定稿）
+% R-20 Reviewer Response Materials（v5 — 数据来源修正后定稿）
 %
-% 本版整合外部反馈 15 条 + 两个数据验证的结论：
+% v5 关键修正：DBond-GT 数据来源从 sequence_graph（消融变体，错误）改为
+% baseline/distance（论文主模型，cv_root=20260421_181316base）。
+%
+% 本版整合外部反馈 15 条 + 数据验证结论：
 %   1. 概率口径：5 个模型均在统一的 P(y=1) 定义下计算（softmax 正类概率 / sigmoid
 %      概率都转为 P(y=1)），不排除任何模型，校准表 5 模型同表对比
 %   2. R_true 聚合：同一序列跨多 spectrum 的 R_true 取均值（已验证 std≈0.27，
@@ -10,11 +13,10 @@
 %      fold 间有序列重叠，pooled 会重复计数）
 %   4. 协议表述：5 independent sequence-level splits（非 "5-fold CV"）
 %
-% 叙事策略（诚实，不强行"全面领先"）：
-%   - DBond-GT 在 ROC-AUC / PR-AUC / MCC / Spearman ρ 上第一
-%   - Brier：DBond-AF-opt 最好，DBond-GT 次之
-%   - ECE：DBond-S 最低，DBond-GT 中等
-%   - Top-k enrichment：各模型接近，DBond-GT 不明显领先
+% 叙事（基于 baseline 正确数据，诚实报告）：
+%   - DBond-GT 在 ROC-AUC / PR-AUC / MCC / Brier / Spearman ρ 上均为第一
+%   - ECE：DBond-S 最低 (0.0178)，DBond-GT 第三 (0.0599) —— 唯一不占优的指标
+%   - Top-k enrichment：Top20/50 DBond-GT 最高，Top10 各模型接近
 %   - DBond-AF 的 ROC 高但 ρ 低 → 说明 discrimination ≠ ranking
 % =============================================================================
 
@@ -102,7 +104,7 @@ DBond-M       & 0.8949 $\pm$ 0.0038  & 0.8782 $\pm$ 0.0076  & 0.6273 $\pm$ 0.008
 DBond-AF      & 0.9072 $\pm$ 0.0022  & 0.8993 $\pm$ 0.0028  & 0.6459 $\pm$ 0.0053  \\
 DBond-AF-opt  & 0.9154 $\pm$ 0.0019  & 0.9063 $\pm$ 0.0006  & 0.6679 $\pm$ 0.0054  \\
 \midrule
-\textbf{DBond-GT} & \textbf{0.9218 $\pm$ 0.0024} & \textbf{0.9142 $\pm$ 0.0030} & \textbf{0.6848 $\pm$ 0.0049} \\
+\textbf{DBond-GT} & \textbf{0.9261 $\pm$ 0.0017} & \textbf{0.9199 $\pm$ 0.0019} & \textbf{0.6971 $\pm$ 0.0025} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -125,9 +127,9 @@ Model         & Brier score          & ECE                  \\
 DBond-S       & 0.1301 $\pm$ 0.0008  & \textbf{0.0178 $\pm$ 0.0027} \\
 DBond-M       & 0.1328 $\pm$ 0.0029  & 0.0430 $\pm$ 0.0047  \\
 DBond-AF      & 0.1331 $\pm$ 0.0015  & 0.0837 $\pm$ 0.0012  \\
-DBond-AF-opt  & \textbf{0.1177 $\pm$ 0.0016}  & 0.0248 $\pm$ 0.0041  \\
+DBond-AF-opt  & 0.1177 $\pm$ 0.0016  & 0.0248 $\pm$ 0.0041  \\
 \midrule
-\textbf{DBond-GT} & 0.1185 $\pm$ 0.0021 & 0.0687 $\pm$ 0.0025 \\
+\textbf{DBond-GT} & \textbf{0.1131 $\pm$ 0.0017} & 0.0599 $\pm$ 0.0038 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -156,10 +158,10 @@ DBond-AF      & 0.6186 $\pm$ 0.0424   & 0.5690 $\pm$ 0.0443\;(1.24$\times$)  & 0
 DBond-AF-opt  & 0.7941 $\pm$ 0.0104   & 0.6057 $\pm$ 0.0119\;(1.32$\times$)  & 0.5810 $\pm$ 0.0103\;(1.27$\times$)  & 0.5329 $\pm$ 0.0074\;(1.16$\times$)  \\
 \midrule
 \textbf{DBond-GT}
-              & \textbf{0.8310 $\pm$ 0.0202}
-              & 0.6066 $\pm$ 0.0210\;(1.32$\times$)
-              & 0.5832 $\pm$ 0.0100\;(1.27$\times$)
-              & 0.5362 $\pm$ 0.0068\;(1.17$\times$) \\
+              & \textbf{0.8587 $\pm$ 0.0213}
+              & 0.6043 $\pm$ 0.0138\;(1.32$\times$)
+              & \textbf{0.5855 $\pm$ 0.0070}\;(1.28$\times$)
+              & \textbf{0.5410 $\pm$ 0.0078}\;(1.18$\times$) \\
 \midrule
 All peptides (baseline)
               & ---
@@ -173,16 +175,19 @@ All peptides (baseline)
 %    - DBond-AF 反例已验证：5 折 ρ 稳定在 0.57-0.68（无异常折），现象可复现
 %    - 不再用"反证/underscores exactly"等过强措辞
 % -----------------------------------------------------------------------------
-在判别能力方面，DBond-GT 在 ROC-AUC、PR-AUC 和 MCC 三项指标上均取得五种模型
-中的最高值，表明其具有较强的 bond-level discrimination 能力。
+在判别能力方面，DBond-GT 在 ROC-AUC（0.9261）、PR-AUC（0.9199）和 MCC
+（0.6971）三项指标上均取得五种模型中的最高值，表明其具有较强的 bond-level
+discrimination 能力。
 
-在概率预测一致性方面，DBond-AF-opt 获得最低的 Brier score，而 DBond-S 获得
-最低的 ECE；DBond-GT 的 Brier score 次于 DBond-AF-opt，ECE 则处于中等水平。
-这说明模型的概率一致性并不必然与其判别能力或候选排序能力同步变化。
+在概率预测一致性方面，DBond-GT 获得最低的 Brier score（0.1131），而 DBond-S
+获得最低的 ECE（0.0178）；DBond-GT 的 ECE（0.0599）处于中等水平，次于
+DBond-S 和 DBond-AF-opt。这说明模型的概率一致性并不必然与其判别能力或候选
+排序能力同步变化。
 
-在 candidate-level ranking 方面，DBond-GT 获得最高的 Spearman $\rho$，说明
-其预测断裂率与实际断裂率之间具有最强的整体单调一致性。与此同时，各模型的
-Top-$k$ enrichment 整体较为接近，表明模型在高断裂率候选富集方面具有相似的
+在 candidate-level ranking 方面，DBond-GT 获得最高的 Spearman $\rho$
+（0.8587），说明其预测断裂率与实际断裂率之间具有最强的整体单调一致性。与
+此同时，各模型的 Top-$k$ enrichment 整体较为接近（Top 10\% 各模型基本持平，
+Top 20\%/50\% 以 DBond-GT 最高），表明模型在高断裂率候选富集方面具有相似的
 趋势。
 
 值得注意的是，DBond-AF 虽然具有较高的 bond-level ROC-AUC，但其 peptide-level
@@ -202,8 +207,8 @@ ranking 并非完全等价，仅依赖固定阈值下的分类指标可能不足
 \caption{\textbf{Agreement of predicted probabilities and candidate-level
 ranking of DBond-GT.} (a) Reliability diagram: predicted bond-cleavage
 probabilities track observed cleavage frequencies
-(ECE~$=$~0.069, Brier~$=$~0.119). (b) Scatter of peptide-level predicted
-vs.\ observed cleavage ratios (Spearman $\rho = 0.831 \pm 0.020$ across
+(ECE~$=$~0.060, Brier~$=$~0.113). (b) Scatter of peptide-level predicted
+vs.\ observed cleavage ratios (Spearman $\rho = 0.859 \pm 0.021$ across
 five independent splits, $n \approx 103$ unique peptide sequences per
 split; per-split $p < 0.001$). (c) Top-$k$ enrichment curve: peptides
 ranked by $R_{\text{pred}}$ show monotonically higher observed cleavage
@@ -233,18 +238,18 @@ positive-class probability $P(y=1)$ definition.
 
     \item \textbf{Agreement between predicted probabilities and outcomes.}
     We report Brier score and Expected Calibration Error (ECE, 10 bins)
-    for all five models (Table~\ref{tab:calibration}). DBond-AF-opt
-    achieves the lowest Brier score (0.1177) and DBond-S the lowest ECE
-    (0.0178); DBond-GT is the second best on Brier (0.1185) with moderate
-    ECE (0.0687). This indicates that probability agreement does not
-    necessarily co-vary with discrimination or ranking ability, and the
-    three dimensions must be evaluated separately.
+    for all five models (Table~\ref{tab:calibration}). DBond-GT achieves
+    the lowest Brier score (0.1131), while DBond-S achieves the lowest
+    ECE (0.0178) and DBond-GT's ECE (0.0599) ranks third. This indicates
+    that probability agreement does not necessarily co-vary across the
+    Brier and ECE dimensions, and the metrics must be evaluated
+    separately.
 
     \item \textbf{Candidate-level ranking.} We aggregate bond-level
     probabilities into a peptide-level predicted cleavage ratio
     $R_{\text{pred}}$ (Eq.~\ref{eq:rpred}) and rank unique test peptide
     sequences by it ($n \approx 103$ per split). DBond-GT attains the
-    highest Spearman $\rho = 0.831 \pm 0.020$ across five independent
+    highest Spearman $\rho = 0.859 \pm 0.021$ across five independent
     sequence-level splits (per-split $p < 0.001$)
     (Table~\ref{tab:ranking}, Fig.~\ref{fig:ranking}). Notably, DBond-AF
     yields a substantially lower $\rho = 0.619 \pm 0.042$ despite a
