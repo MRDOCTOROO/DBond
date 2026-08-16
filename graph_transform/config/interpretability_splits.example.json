@@ -2,32 +2,32 @@
   "splits": [
     {
       "id": "1222",
-      "config": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/<run>/fold_1222/config.yaml",
-      "checkpoint": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/<run>/fold_1222/checkpoints/<tag>/<timestamp>/best_model.pt",
+      "config": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/20260421_181316base/fold_1222/config.yaml",
+      "checkpoint_glob": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/20260421_181316base/fold_1222/**/best_model.pt",
       "input_csv": "/public/home/ssjxgsj/graphtrans/DBond/dataset/5fold/1222.test.fbr.multi.csv"
     },
     {
       "id": "2252",
-      "config": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/<run>/fold_2252/config.yaml",
-      "checkpoint": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/<run>/fold_2252/checkpoints/<tag>/<timestamp>/best_model.pt",
+      "config": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/20260421_181316base/fold_2252/config.yaml",
+      "checkpoint_glob": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/20260421_181316base/fold_2252/**/best_model.pt",
       "input_csv": "/public/home/ssjxgsj/graphtrans/DBond/dataset/5fold/2252.test.fbr.multi.csv"
     },
     {
       "id": "3514",
-      "config": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/<run>/fold_3514/config.yaml",
-      "checkpoint": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/<run>/fold_3514/checkpoints/<tag>/<timestamp>/best_model.pt",
+      "config": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/20260421_181316base/fold_3514/config.yaml",
+      "checkpoint_glob": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/20260421_181316base/fold_3514/**/best_model.pt",
       "input_csv": "/public/home/ssjxgsj/graphtrans/DBond/dataset/5fold/3514.test.fbr.multi.csv"
     },
     {
       "id": "6072",
-      "config": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/<run>/fold_6072/config.yaml",
-      "checkpoint": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/<run>/fold_6072/checkpoints/<tag>/<timestamp>/best_model.pt",
+      "config": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/20260421_181316base/fold_6072/config.yaml",
+      "checkpoint": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/20260421_181316base/fold_6072/checkpoints/20260422_012157/best_model.pt",
       "input_csv": "/public/home/ssjxgsj/graphtrans/DBond/dataset/5fold/6072.test.fbr.multi.csv"
     },
     {
       "id": "9075",
-      "config": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/<run>/fold_9075/config.yaml",
-      "checkpoint": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/<run>/fold_9075/checkpoints/<tag>/<timestamp>/best_model.pt",
+      "config": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/20260421_181316base/fold_9075/config.yaml",
+      "checkpoint_glob": "/public/home/ssjxgsj/graphtrans/DBond/checkpoints/graph_transform/5fold/20260421_181316base/fold_9075/**/best_model.pt",
       "input_csv": "/public/home/ssjxgsj/graphtrans/DBond/dataset/5fold/9075.test.fbr.multi.csv"
     }
   ]

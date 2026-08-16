@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import glob
 import json
 import logging
 import math
@@ -137,12 +138,19 @@ def validate_manifest(manifest: Any) -> List[Dict[str, str]]:
         folds = manifest
     if not isinstance(folds, list) or len(folds) != 5:
         raise ValueError("split_manifest must contain exactly five split entries")
-    required = ("id", "config", "checkpoint", "input_csv")
+    required = ("id", "config", "input_csv")
     normalized = []
     for entry in folds:
         if not isinstance(entry, dict) or any(key not in entry for key in required):
-            raise ValueError("Each fold requires id, config, checkpoint and input_csv")
-        normalized.append({key: str(entry[key]) for key in required})
+            raise ValueError("Each split requires id, config and input_csv")
+        if "checkpoint" not in entry and "checkpoint_glob" not in entry:
+            raise ValueError("Each split requires checkpoint or checkpoint_glob")
+        normalized_entry = {key: str(entry[key]) for key in required}
+        if "checkpoint" in entry:
+            normalized_entry["checkpoint"] = str(entry["checkpoint"])
+        else:
+            normalized_entry["checkpoint_glob"] = str(entry["checkpoint_glob"])
+        normalized.append(normalized_entry)
     ids = [entry["id"] for entry in normalized]
     if len(set(ids)) != len(ids):
         raise ValueError("Split ids must be unique")
@@ -155,6 +163,21 @@ def run_fold(
     output_root: str,
     logger: logging.Logger,
 ) -> Dict[str, str]:
+    checkpoint = fold.get("checkpoint")
+    if not checkpoint:
+        candidates = glob.glob(fold["checkpoint_glob"], recursive=True)
+        candidates = [path for path in candidates if os.path.isfile(path)]
+        if not candidates:
+            raise FileNotFoundError(
+                "No checkpoint matched split %s: %s" % (fold["id"], fold["checkpoint_glob"])
+            )
+        if len(candidates) > 1:
+            raise RuntimeError(
+                "Multiple checkpoints matched split %s; replace checkpoint_glob "
+                "with an exact checkpoint path: %s" % (fold["id"], candidates)
+            )
+        checkpoint = candidates[0]
+
     fold_root = os.path.join(output_root, "per_split", "split_%s" % fold["id"])
     interpretability_root = os.path.join(fold_root, "interpretability")
     occlusion_root = os.path.join(fold_root, "occlusion")
@@ -170,7 +193,7 @@ def run_fold(
         sys.executable,
         os.path.join(SCRIPT_DIR, "interpretability_analysis.py"),
         "--config", fold["config"],
-        "--checkpoint", fold["checkpoint"],
+        "--checkpoint", checkpoint,
         "--input_csv", fold["input_csv"],
         "--output_dir", interpretability_root,
         "--num_samples", str(args.num_case_samples),
@@ -184,7 +207,7 @@ def run_fold(
         sys.executable,
         os.path.join(SCRIPT_DIR, "occlusion_analysis.py"),
         "--config", fold["config"],
-        "--checkpoint", fold["checkpoint"],
+        "--checkpoint", checkpoint,
         "--input_csv", fold["input_csv"],
         "--output_dir", occlusion_root,
         "--num_samples", str(args.num_occlusion_samples),
@@ -208,7 +231,7 @@ def run_fold(
     return {
         "id": fold["id"],
         "config": fold["config"],
-        "checkpoint": fold["checkpoint"],
+        "checkpoint": checkpoint,
         "input_csv": fold["input_csv"],
         "interpretability_dir": interpretability_root,
         "occlusion_dir": occlusion_root,
