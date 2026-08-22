@@ -182,6 +182,18 @@ def build_ablation_tag(config: Dict[str, Any]) -> str:
     # R-01 DBond-GT-pre（合成前评分版）：屏蔽实测协变量 intensity 与 scan_num/rt
     if ablation_config.get('pre_synthesis', False):
         tags.append('gt_pre')
+    # R-03 leave-one-feature-out（LOFO）：从 full 出发每次只去一个特征（5 缺 1），
+    # 与 single-only（Table 9 充分性）互为镜像（必要性），所有 setting 以 full 为参照。
+    if ablation_config.get('lofo_no_charge', False):
+        tags.append('lofo_no_charge')
+    if ablation_config.get('lofo_no_mass', False):
+        tags.append('lofo_no_mass')
+    if ablation_config.get('lofo_no_intensity', False):
+        tags.append('lofo_no_intensity')
+    if ablation_config.get('lofo_no_nce', False):
+        tags.append('lofo_no_nce')
+    if ablation_config.get('lofo_no_scan', False):
+        tags.append('lofo_no_scan')
 
     return "_".join(tags) if tags else "baseline"
 
@@ -207,6 +219,8 @@ def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
         'state_mass_only', 'state_intensity_only', 'env_rt_only',
         # R-01 合成前评分版（DBond-GT-pre）
         'pre_synthesis',
+        # R-03 leave-one-feature-out（每次从 full 只去一个特征，互斥）
+        'lofo_no_charge', 'lofo_no_mass', 'lofo_no_intensity', 'lofo_no_nce', 'lofo_no_scan',
     ]
     active_flags = [f for f in exclusive_flags if ablation_config.get(f, False)]
     if len(active_flags) > 1:
@@ -300,6 +314,25 @@ def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
     # 屏蔽位置在归一化后精确置 0。rebuild_cache 必须 true：edge_attr 数值随 mask 变化。
     elif ablation_config.get('pre_synthesis', False):
         model_config['state_feature_mask'] = [True, True, False]
+        model_config['env_feature_mask'] = [True, False]
+    # R-03 leave-one-feature-out（LOFO）：从 full 出发每次只屏蔽一个特征（5 缺 1）。
+    # 注意与已有实验的边界：lofo_no_intensity ≠ gt_pre（后者同时屏蔽 scan）；
+    # single-only 系列是充分性（只给一个），LOFO 是必要性（只去一个），二者互补。
+    # mask 顺序固定 state=[charge,pep_mass,intensity]，env=[nce,scan_num]。
+    elif ablation_config.get('lofo_no_charge', False):
+        model_config['state_feature_mask'] = [False, True, True]
+        model_config['env_feature_mask'] = [True, True]
+    elif ablation_config.get('lofo_no_mass', False):
+        model_config['state_feature_mask'] = [True, False, True]
+        model_config['env_feature_mask'] = [True, True]
+    elif ablation_config.get('lofo_no_intensity', False):
+        model_config['state_feature_mask'] = [True, True, False]
+        model_config['env_feature_mask'] = [True, True]
+    elif ablation_config.get('lofo_no_nce', False):
+        model_config['state_feature_mask'] = [True, True, True]
+        model_config['env_feature_mask'] = [False, True]
+    elif ablation_config.get('lofo_no_scan', False):
+        model_config['state_feature_mask'] = [True, True, True]
         model_config['env_feature_mask'] = [True, False]
 
     if ablation_config.get('rebuild_cache', False):

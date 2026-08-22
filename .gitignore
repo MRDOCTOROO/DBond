@@ -84,6 +84,12 @@ tensorboard/graph_transform/feature_group_ablation/
 result/pred/graph_transform/feature_group_ablation/
 # R-01 基线 pre 变体批量运行器的实验日志（result/cv/ 已由上方 result/* 规则忽略）
 logs/pre_baselines/
+# R-03 LOFO 实验产物：checkpoint 目录内非 .pt 快照/指标、运行日志、派生配置（由 run_lofo_experiments.py 从主模型快照自动生成）
+checkpoints/graph_transform/lofo/
+logs/lofo/
+logs/graph_transform/lofo/
+tensorboard/graph_transform/lofo/
+graph_transform/config/lofo_derived/
 # 对比分析结果默认放 result/metric/.../feature_group_comparison/，CSV 通常希望保留，故不忽略
 # 但生成的 PDF 图表由 *.pdf 规则决定（当前未忽略 *.pdf，如需忽略可显式加 result/metric/graph_transform/feature_group_comparison/*.pdf）
 
