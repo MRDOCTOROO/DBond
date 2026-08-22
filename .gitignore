@@ -58,6 +58,11 @@ cache/
 # 兜底：任何本地临时的验证脚本（命名约定 .*_test.py 或 *_functional_test.py）
 .*_functional_test.py
 *_functional_test.py
+# 本地临时的 PDF 提取/分析产物
+.pdf_tmp_venv/
+.pdf_*.py
+.pdf_fulltext.txt
+.pdf_*.txt
 
  # 其他忽略
 *.pyc

@@ -31,6 +31,7 @@ import os
 import shutil
 import subprocess
 import sys
+import re
 from statistics import mean, median, stdev
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -178,6 +179,15 @@ def run_fold(
             )
         checkpoint = candidates[0]
 
+    expected_token = "fold_%s" % fold["id"]
+    for path, label in ((fold["config"], "config"), (checkpoint, "checkpoint")):
+        normalized_path = os.path.normpath(path).replace("\\", "/")
+        if expected_token not in normalized_path:
+            raise ValueError(
+                "Split %s %s is not under %s: %s"
+                % (fold["id"], label, expected_token, path)
+            )
+
     fold_root = os.path.join(output_root, "per_split", "split_%s" % fold["id"])
     interpretability_root = os.path.join(fold_root, "interpretability")
     occlusion_root = os.path.join(fold_root, "occlusion")
@@ -269,6 +279,13 @@ def aggregate_interpretability(fold_records: List[Dict[str, Any]]) -> Dict[str, 
         values = [get_path(summary, path.split(".")) for summary in summaries]
         effects[path.split(".")[-1]] = summarize_values(values)
 
+    def canonical_group_name(group_type: str, name: str) -> str:
+        if group_type == "length":
+            match = re.match(r"Length Q([123])", name)
+            if match:
+                return "Length Q%s" % match.group(1)
+        return name
+
     grouped: Dict[str, Any] = {}
     group_types = set()
     for summary in summaries:
@@ -276,13 +293,17 @@ def aggregate_interpretability(fold_records: List[Dict[str, Any]]) -> Dict[str, 
     for group_type in sorted(group_types):
         names = set()
         for summary in summaries:
-            names.update(summary.get("grouped_robustness", {}).get(group_type, {}).get("groups", {}).keys())
+            names.update(
+                canonical_group_name(group_type, name)
+                for name in summary.get("grouped_robustness", {}).get(group_type, {}).get("groups", {})
+            )
         grouped[group_type] = {}
         for name in sorted(names):
-            entries = [
-                summary.get("grouped_robustness", {}).get(group_type, {}).get("groups", {}).get(name, {})
-                for summary in summaries
-            ]
+            entries = []
+            for summary in summaries:
+                for raw_name, entry in summary.get("grouped_robustness", {}).get(group_type, {}).get("groups", {}).items():
+                    if canonical_group_name(group_type, raw_name) == name:
+                        entries.append(entry)
             grouped[group_type][name] = {
                 metric: summarize_values(entry.get(metric) for entry in entries)
                 for metric in ("n", "mean_abs_r", "mean_signed_r", "ci_low", "ci_high")
@@ -315,6 +336,13 @@ def aggregate_occlusion(fold_records: List[Dict[str, Any]]) -> Dict[str, Any]:
         for name, path in aggregate_paths.items()
     }
 
+    def canonical_group_name(group_type: str, name: str) -> str:
+        if group_type == "length":
+            match = re.match(r"Length Q([123])", name)
+            if match:
+                return "Length Q%s" % match.group(1)
+        return name
+
     grouped: Dict[str, Any] = {}
     group_types = set()
     for summary in summaries:
@@ -322,13 +350,17 @@ def aggregate_occlusion(fold_records: List[Dict[str, Any]]) -> Dict[str, Any]:
     for group_type in sorted(group_types):
         names = set()
         for summary in summaries:
-            names.update(summary.get("grouped_robustness", {}).get(group_type, {}).get("groups", {}).keys())
+            names.update(
+                canonical_group_name(group_type, name)
+                for name in summary.get("grouped_robustness", {}).get(group_type, {}).get("groups", {})
+            )
         grouped[group_type] = {}
         for name in sorted(names):
-            entries = [
-                summary.get("grouped_robustness", {}).get(group_type, {}).get("groups", {}).get(name, {})
-                for summary in summaries
-            ]
+            entries = []
+            for summary in summaries:
+                for raw_name, entry in summary.get("grouped_robustness", {}).get(group_type, {}).get("groups", {}).items():
+                    if canonical_group_name(group_type, raw_name) == name:
+                        entries.append(entry)
             grouped[group_type][name] = {
                 metric: summarize_values(entry.get(metric) for entry in entries)
                 for metric in ("n", "mean", "median", "ci_low", "ci_high")
@@ -493,6 +525,7 @@ def main() -> None:
             "num_splits": 5,
             "split_type": "repeated/random data splits; not strict cross-validation",
             "overlap_policy": "split-level summaries only; no cross-split pooling as independent observations",
+            "length_group_policy": "canonical Q1/Q2/Q3 labels for within-split rank-based groups; absolute boundaries may differ by split",
             "num_stat_samples_per_split": args.num_stat_samples,
             "num_occlusion_samples_per_split": args.num_occlusion_samples,
             "bootstrap_iters_per_split": args.bootstrap_iters,

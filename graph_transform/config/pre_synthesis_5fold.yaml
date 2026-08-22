@@ -1,0 +1,240 @@
+# DBond-GT-pre（R-01 合成前评分版）五折训练配置 —— 本地模板
+#
+# 目标：屏蔽实测协变量（intensity、scan_num/rt），保留序列可计算特征
+#   （seq/position/理化性质/理论 m/z）+ 可预设条件（charge、NCE），
+#   得到真正 sequence-computable + prespecified-condition 的候选评分模型。
+#
+# mask 映射（state=[charge,pep_mass,intensity], env=[nce,scan_num]）：
+#   pre_synthesis → state=[T,T,F] env=[T,F]
+#   由 train_graph_model.apply_ablation_config 强制写入，无需在此手填 mask。
+#
+# ⚠️ 权威超参来源：本文件是按主模型架构（3 GCN + 2 GAT, distance graph, scan_num）
+#   克隆的模板。云端启动前必须保证与主模型唯一变量 = 特征 mask：
+#   推荐用 scripts/make_pre_synthesis_config.py 从
+#   checkpoints/graph_transform/5fold/20260421_181316base/fold_*/config.yaml
+#   快照直接派生权威配置（自动只改 ablation 段与输出目录，其余逐字节保留）；
+#   或将本文件与该快照 diff，确认除 ablation/输出目录外无差异后再用。
+#
+# ⚠️ rebuild_cache: true 必须保留：图缓存 edge_attr 固化了 5 个 state/env 数值，
+#   mask 不同则数值不同，复用旧缓存会把实测信息泄漏进 pre 模型。
+#
+# 云端运行：
+#   python graph_transform/scripts/train_5fold.py \
+#       --config graph_transform/config/pre_synthesis_5fold.yaml
+
+model:
+  hidden_dim: 256
+  num_attention_heads: 4
+  dropout: 0.1
+  leaky_relu_slope: 0.2
+  use_edge_features: true
+  edge_dim: 32
+  concat_heads: true
+  # 与主模型一致的完整架构：3 GCN + 2 GAT（须与快照 diff 确认）
+  num_gcn_layers: 3
+  num_gat_layers: 2
+  max_seq_len: 32
+  alphabet: '#ABCDEFGHIKLMNOPQRSTVWXYZ'
+  pad_char: '#'
+  aa_embedding_dim: 64
+  position_embedding_dim: 32
+  physicochemical_dim: 32
+  num_physicochemical_features: 4
+  num_state_features: 3
+  num_env_features: 2
+  use_position_embedding: true
+  use_physicochemical_features: true
+  use_state_features: true
+  use_env_features: true
+  state_feature_mask: [true, true, true]
+  env_feature_mask: [true, true]
+  edge_types:
+  - sequence
+  - distance
+  - functional
+  - long_range
+  - global
+  edge_embedding_dim: 16
+  distance_embedding_dim: 16
+  max_distance: 10
+  use_edge_type_embedding: true
+  use_distance_embedding: true
+  use_raw_edge_attr: true
+  gat_use_edge_bias: true
+  gat_use_edge_gate: true
+  bond_use_edge_repr: true
+  bond_use_diff_feature: true
+  bond_use_product_feature: true
+  use_long_range_edges: false
+  long_range_stride: 10
+  long_range_hops: 1
+  use_global_node: true
+  num_classes: 1
+training:
+  epochs: 100
+  batch_size: 1024
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  gradient_clip_norm: 1.0
+  scheduler: cosine
+  warmup_epochs: 10
+  min_lr: 1.0e-05
+  early_stopping: true
+  patience: 10
+  min_delta: 0.001
+  validation_split: 0.2
+  validation_interval: 1
+  save_interval: 10
+  save_best_only: false
+  # 5 折调度时 train_5fold.py 在此路径下建 5fold/<timestamp>/fold_<id>/ 子目录，
+  # apply_ablation_config 再附加 /gt_pre 子目录隔离（与主模型 baseline tag 同机制）。
+  checkpoint_dir: checkpoints/graph_transform/pre_synthesis
+data:
+  # 5 折调度时 train_5fold.py 会覆盖为 dataset/5fold/<fold_id>.{train,test}.*.csv
+  train_csv_path: dataset/dataset_private/1222.train.fbr.shuffle.multi.csv
+  test_csv_path: dataset/dataset_private/1222.test.fbr.multi.csv
+  val_csv_path: null
+  max_seq_len: 32
+  graph_strategy: distance
+  # env 第二维 scan_num（与主模型/DBond-s/m 一致；pre 版中此维被 mask 屏蔽，
+  # scan_num 与 rt 二选一在 pre 模型中无差别，此处保持与主模型一致以便严格对照）
+  env_feature_name: scan_num
+  env_feature_scale: 1.0
+  augmentation: false
+  cache_graphs: true
+  cache_full_graphs: false
+  cache_dir: cache/graph_data
+  augmentation_prob: 0.3
+  max_augmentation_trials: 3
+  num_workers: 16
+  pin_memory: true
+  drop_last: true
+  use_class_weights: true
+  focal_loss_alpha: 0.25
+  focal_loss_gamma: 2.0
+loss:
+  main_loss: binary_cross_entropy
+  use_auxiliary_losses: false
+  auxiliary_loss_weights:
+    focal: 0.5
+    dice: 0.3
+    l2_regularization: 0.1
+  handle_imbalance: false
+  imbalance_strategy: weighted
+  pos_weight: null
+optimizer:
+  type: adamw
+  betas:
+  - 0.9
+  - 0.999
+  eps: 1e-8
+  momentum: 0.9
+  nesterov: true
+  step_size: 30
+  gamma: 0.1
+  t_max: 100
+  eta_min: 0.0
+evaluation:
+  metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1
+  - auc
+  - hamming_loss
+  threshold: 0.5
+  threshold_strategy: fixed
+  eval_interval: 1
+  test_time_augmentation: false
+  ensemble_predictions: false
+  num_ensemble_models: 5
+  save_outputs: true
+  output_pred_dir: result/pred/graph_transform/pre_synthesis
+  output_metric_dir: result/metric/graph_transform/pre_synthesis
+device:
+  auto_detect: true
+  device_type: cuda
+  gpu_id: 0
+  use_amp: true
+  amp_backend: native
+logging:
+  level: INFO
+  log_dir: logs/graph_transform/pre_synthesis
+  log_file: training.log
+  use_tensorboard: true
+  tensorboard_log_dir: tensorboard/graph_transform/pre_synthesis
+  save_training_curves: true
+  save_loss_curves: true
+  plot_dir: null
+  log_interval: 10
+  save_graph_interval: 50
+experiment:
+  name: graph_transform_pre_synthesis
+  version: v1.0
+  description: DBond-GT-pre (R-01): sequence-computable + prespecified charge/NCE grid, masks state=[T,T,F] env=[T,F]
+  seed: 42
+  deterministic: false
+  benchmark: true
+ablation:
+  # 显式 tag：目录推导稳定为 gt_pre（不依赖开关名拼接）
+  tag: gt_pre
+  base_experiment_name: null
+  use_sequence_graph: false
+  use_hybrid_graph: false
+  disable_global_node: false
+  gcn_only: false
+  gat_only: false
+  no_message_passing: false
+  no_edge_attr: false
+  no_state_env: false
+  baseline_no_state_env: false
+  state_charge_only: false
+  state_mass_intensity_only: false
+  env_nce_only: false
+  env_scan_num_only: false
+  state_mass_only: false
+  state_intensity_only: false
+  env_rt_only: false
+  # 本配置的唯一实验变量：屏蔽 intensity（state 第 3 维）与 scan_num/rt（env 第 2 维）
+  pre_synthesis: true
+  # edge_attr 数值随 mask 变化，必须重建缓存（勿改 false）
+  rebuild_cache: true
+advanced:
+  use_ensemble: false
+  ensemble_methods:
+  - voting
+  - averaging
+  - stacking
+  hyperparameter_search: false
+  search_method: grid
+  distributed: false
+  backend: nccl
+  quantization: false
+  quantization_method: dynamic
+  distillation: false
+  teacher_model_path: null
+  distillation_alpha: 0.5
+  distillation_temperature: 4.0
+performance:
+  gradient_checkpointing: false
+  use_efficient_attention: false
+  max_memory_usage: 8GB
+  compile_model: false
+  use_torch_compile: false
+  prefetch_factor: 2
+  persistent_workers: false
+debug:
+  debug_mode: false
+  check_gradients: false
+  check_nan_inf: true
+  log_grad_norm: true
+  save_nonfinite_batch: true
+  diagnostic_dir: logs/graph_transform/diagnostics
+  force_gc_on_epoch_end: true
+  force_gc_on_eval_end: true
+  empty_cache_on_epoch_end: true
+  save_attention_weights: false
+  save_graph_structures: false
+  visualize_predictions: false
+  profile_memory: false
+  profile_time: false

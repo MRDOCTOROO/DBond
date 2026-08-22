@@ -179,6 +179,9 @@ def build_ablation_tag(config: Dict[str, Any]) -> str:
     # env 第二维用 rt（需同时切 env_feature_name=rt + 量级对齐的 env_feature_scale=0.01）
     if ablation_config.get('env_rt_only', False):
         tags.append('env_rt_only')
+    # R-01 DBond-GT-pre（合成前评分版）：屏蔽实测协变量 intensity 与 scan_num/rt
+    if ablation_config.get('pre_synthesis', False):
+        tags.append('gt_pre')
 
     return "_".join(tags) if tags else "baseline"
 
@@ -202,6 +205,8 @@ def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
         'env_nce_only', 'env_scan_num_only',
         # 细粒度拆分（mass / intensity 各自单独）+ rt 替代 scan_num
         'state_mass_only', 'state_intensity_only', 'env_rt_only',
+        # R-01 合成前评分版（DBond-GT-pre）
+        'pre_synthesis',
     ]
     active_flags = [f for f in exclusive_flags if ablation_config.get(f, False)]
     if len(active_flags) > 1:
@@ -288,6 +293,14 @@ def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
         model_config['env_feature_mask'] = [False, True]
         data_config['env_feature_name'] = 'rt'
         data_config['env_feature_scale'] = 0.01
+    # R-01 DBond-GT-pre（合成前评分版）：只保留序列可计算特征 + 可预设条件。
+    #   state 保留 charge/pep_mass（序列+charge 可理论计算 m/z），屏蔽 intensity（前体强度，实测）；
+    #   env 保留 nce（采集参数，可预设），屏蔽 scan_num/rt（实测）。
+    # 三处注入点（NodeEncoder / global_node_proj / graph_builder edge_attr）同步生效，
+    # 屏蔽位置在归一化后精确置 0。rebuild_cache 必须 true：edge_attr 数值随 mask 变化。
+    elif ablation_config.get('pre_synthesis', False):
+        model_config['state_feature_mask'] = [True, True, False]
+        model_config['env_feature_mask'] = [True, False]
 
     if ablation_config.get('rebuild_cache', False):
         data_config['rebuild_cache'] = True
