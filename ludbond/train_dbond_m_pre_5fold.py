@@ -22,7 +22,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 TRAIN_SUFFIX = '.train.fbr.shuffle.multi.csv'
 TEST_SUFFIX  = '.test.fbr.multi.csv'
 MODEL_NAME   = 'dbond_m_pre'
-DEFAULT_CONFIG = 'dbond_m_config/pre.yaml'
+# 默认配置相对本脚本目录解析(CWD 无关; run_5fold 按 CWD 打开相对路径会踩坑)
+DEFAULT_CONFIG = os.path.join(_THIS_DIR, 'dbond_m_config', 'pre.yaml')
 
 
 def main():

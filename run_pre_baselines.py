@@ -33,13 +33,13 @@ import os
 import subprocess
 import sys
 
-# 实验注册表: 名称 -> 训练器脚本路径(相对仓库根)。
-# 配置无需传入: 各训练器默认指向对应 pre.yaml。
+# 实验注册表: 名称 -> (训练器脚本, 配置文件)，均相对仓库根。
+# --config 显式传入(不依赖训练器默认值)，启动前校验存在，避免相对路径踩坑。
 EXPERIMENTS = {
-    "dbond_s_pre": "ludbond/train_dbond_s_pre_5fold.py",
-    "dbond_m_pre": "ludbond/train_dbond_m_pre_5fold.py",
-    "dbond_af_pre": "ludbondaf/train_dbond_af_pre_5fold.py",
-    "dbond_af_opt_pre": "ludbondaf/train_dbond_af_opt_pre_5fold.py",
+    "dbond_s_pre": ("ludbond/train_dbond_s_pre_5fold.py", "ludbond/dbond_s_config/pre.yaml"),
+    "dbond_m_pre": ("ludbond/train_dbond_m_pre_5fold.py", "ludbond/dbond_m_config/pre.yaml"),
+    "dbond_af_pre": ("ludbondaf/train_dbond_af_pre_5fold.py", "ludbondaf/dbond_m_exp_af_config/af_pre.yaml"),
+    "dbond_af_opt_pre": ("ludbondaf/train_dbond_af_opt_pre_5fold.py", "ludbondaf/dbond_m_exp_af_config/af_opt_pre.yaml"),
 }
 EXPERIMENT_ORDER = list(EXPERIMENTS.keys())
 
@@ -103,9 +103,13 @@ def count_done_folds(cv_root: str) -> int:
     return n
 
 
-def run_experiment(name: str, script: str, args: argparse.Namespace, env: dict) -> str:
+def run_experiment(name: str, script: str, config: str, args: argparse.Namespace, env: dict) -> str:
     """执行单个实验, 返回状态字符串(SUCCEEDED / FAILED)。"""
-    cmd = [sys.executable, script, "--fold_data_dir", args.fold_data_dir]
+    for path, label in ((script, "训练器脚本"), (config, "配置文件")):
+        if not os.path.exists(path):
+            print(f"[runner] {name}: {label}不存在: {os.path.abspath(path)}")
+            return "FAILED(missing_file)"
+    cmd = [sys.executable, script, "--config", config, "--fold_data_dir", args.fold_data_dir]
     if args.folds:
         cmd.extend(["--folds"] + list(args.folds))
     if args.force_new:
@@ -203,7 +207,8 @@ def main() -> None:
         print("\n" + "=" * 70)
         print(f"[runner] ===== 实验 {name} =====")
         print("=" * 70)
-        results[name] = run_experiment(name, EXPERIMENTS[name], args, env)
+        script, config = EXPERIMENTS[name]
+        results[name] = run_experiment(name, script, config, args, env)
 
     print("\n[runner] ===== 汇总 =====")
     failed = 0

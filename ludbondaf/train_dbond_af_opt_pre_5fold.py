@@ -28,7 +28,8 @@ from _5fold_common import run_5fold, build_argparser
 TRAIN_SUFFIX = '.train.fbr.shuffle.multi.csv'
 TEST_SUFFIX = '.test.fbr.multi.csv'
 MODEL_NAME = 'dbond_af_opt_pre'
-DEFAULT_CONFIG = 'dbond_m_exp_af_config/af_opt_pre.yaml'
+# 默认配置相对本脚本目录解析(CWD 无关; run_5fold 按 CWD 打开相对路径会踩坑)
+DEFAULT_CONFIG = os.path.join(_THIS_DIR, 'dbond_m_exp_af_config', 'af_opt_pre.yaml')
 TRAIN_MODULE_NAME = 'train.dbond_m.exp_af'
 
 
