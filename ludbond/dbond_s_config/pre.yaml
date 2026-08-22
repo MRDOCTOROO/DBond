@@ -1,0 +1,60 @@
+# =============================================================================
+# DBond-s-pre 配置(R-01 pre 变体, 对齐 DBond-GT-pre)
+# -----------------------------------------------------------------------------
+# 与 default.yaml 的唯一差异: zero_fill_col_name 把实测协变量列置 0
+#   - intensity  (前体离子强度, MGF PEPMASS[1], 合成后采集才有)
+#   - scan_num   (采集顺序号, 合成后采集才有)
+# 保留 charge / pep_mass / nce(可预设、可理论计算)。
+# 与 DBond-GT-pre 的 state_mask=[T,T,F] / env_mask=[T,F] 同语义:
+# 输入维度不变, 被屏蔽特征在数据加载时置 0, 等价于该特征不进入模型。
+# 其余(数据划分/超参/seed/评价协议)与 default.yaml 逐项一致, 单变量原则。
+# 结果输出: ./result/cv/dbond_s_pre/{timestamp}/...
+# =============================================================================
+tag: 'dbond_s_pre_5fold'
+train_args:
+ batch_size: 4096
+ epoch: 50
+ save_per_epoch: 10
+ seed: 2024            # 单次训练默认值; 5fold 时由脚本覆盖为 42 + fold_index
+ loss_type: 'ce'
+ loss_args:
+  label_smoothing: 0.1
+ optimizer: 'adam'
+ optimizer_args:
+  weight_decay: 1.0e-4
+  lr: 1.0e-4
+ early_stopping:
+  patience: 5
+  delta: 1.0e-4
+ dataloader_workers: 4
+ validation_split: 0.2
+csv:
+ train_dataset_path: '/workspace/dataset/dbond_s.train.shuffle.csv'
+ validation_dataset_path: '/workspace/dataset/dbond_s.validation.csv'
+ test_dataset_path: '/workspace/dataset/dbond_s.test.csv'
+ label_col_name: 'bond_label'
+ seq_col_name: 'seq'
+ bond_index_col_name: 'bond_pos'
+ state_var_col_name:
+  - 'charge'
+  - 'pep_mass'
+  - 'intensity'
+ bond_var_col_name:
+  - 'bond_pos'
+ env_var_col_name:
+  - 'nce'
+  - 'scan_num'
+ # R-01 pre 变体唯一开关: 实测协变量列置 0
+ zero_fill_col_name:
+  - 'intensity'
+  - 'scan_num'
+seq:
+ alphabet: '#ABCDEFGHIKLMNOPQRSTVWXYZ'
+ pad_char: '#'
+ max_len: 36
+model:
+ hidden_dim: 256
+ num_heads: 4
+ dropout: 0.1
+ forward_expansion: 2
+ attention_layer_num: 1

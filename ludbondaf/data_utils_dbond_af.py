@@ -53,9 +53,43 @@ class PepDataset(Dataset):
         self.alphabet_pos_dict:dict[str,int] = {}
         for i,c in enumerate(self.alphabet):
             self.alphabet_pos_dict[c] = i
+        # R-01 pre 变体：实测协变量列置 0（intensity / scan_num），等价于该特征不输入
+        # 模型，与 DBond-GT-pre 的 state/env feature mask 同语义。默认空 = 原行为不变。
+        self.zero_fill_cols = {str(c) for c in (config['csv'].get('zero_fill_col_name') or [])}
+        if self.zero_fill_cols:
+            known = set(map(str, list(self.state_var_col_name_list) + list(self.env_var_col_name_list)))
+            unknown = self.zero_fill_cols - known
+            if unknown:
+                raise ValueError(
+                    f"zero_fill_col_name contains unknown columns {sorted(unknown)}; "
+                    f"available: {sorted(known)}"
+                )
+            self.zero_fill_state_idx = [
+                i for i, c in enumerate(self.state_var_col_name_list) if str(c) in self.zero_fill_cols
+            ]
+            self.zero_fill_env_idx = [
+                i for i, c in enumerate(self.env_var_col_name_list) if str(c) in self.zero_fill_cols
+            ]
+        else:
+            self.zero_fill_state_idx = []
+            self.zero_fill_env_idx = []
 
     
     
+    def _zero_fill_vars(
+        self, state_vars: numpy.ndarray, env_vars: numpy.ndarray
+    ) -> tuple[numpy.ndarray, numpy.ndarray]:
+        """R-01 pre 变体：把实测协变量位置置 0。兼容单样本 1-D 与批量 2-D。"""
+        if self.zero_fill_state_idx:
+            state_vars = numpy.array(state_vars, copy=True)
+            for i in self.zero_fill_state_idx:
+                state_vars[..., i] = 0.0
+        if self.zero_fill_env_idx:
+            env_vars = numpy.array(env_vars, copy=True)
+            for i in self.zero_fill_env_idx:
+                env_vars[..., i] = 0.0
+        return state_vars, env_vars
+
     def __getitems__(self,index:List[int])->Tuple[Tensor,Tensor,Tensor,Tensor]:
         # print('called')
         if isinstance(index,list):
@@ -71,6 +105,7 @@ class PepDataset(Dataset):
           
             state_vars: numpy.ndarray = row[self.state_var_col_name_list].values.astype(numpy.float32)
             env_vars:numpy.ndarray = row[self.env_var_col_name_list].values.astype(numpy.float32)
+            state_vars, env_vars = self._zero_fill_vars(state_vars, env_vars)
             label_list = self.label_func(row[self.label_col_name])
             seq_index = self.seq2index(seq)
             seq_mask = self.seq2mask(seq)
@@ -89,6 +124,7 @@ class PepDataset(Dataset):
             
             state_vars_ndarray:numpy.ndarray = df_sub[self.state_var_col_name_list].values.astype(numpy.float32)
             env_vars_ndarray:numpy.ndarray = df_sub[self.env_var_col_name_list].values.astype(numpy.float32)
+            state_vars_ndarray, env_vars_ndarray = self._zero_fill_vars(state_vars_ndarray, env_vars_ndarray)
             label_list:List[List[int]] = df_sub[self.label_col_name].apply(self.label_func).to_list()
             # label_ndarray:numpy.ndarray = numpy.array(label_list)
             

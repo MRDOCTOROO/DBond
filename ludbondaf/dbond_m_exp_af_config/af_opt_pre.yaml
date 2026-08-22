@@ -1,0 +1,57 @@
+# =============================================================================
+# DBond-AF-opt-pre 配置(R-01 pre 变体, 对齐 DBond-GT-pre)
+# -----------------------------------------------------------------------------
+# 与 af_opt.yaml(AF-opt 基线)的唯一差异: zero_fill_col_name 把实测协变量列置 0
+#   - intensity  (前体离子强度, MGF PEPMASS[1], 合成后采集才有)
+#   - scan_num   (采集顺序号, 合成后采集才有)
+# 保留 charge / pep_mass / nce(可预设、可理论计算)。
+# AF-opt 相对 AF 的既有差异保持不变: hidden_dim=64(AF 为 256)、dropout=0.4(AF 为 0.1);
+# batch_size=1024 两者相同(1024 是 AF 系相对 s/m 系 4096 的差异, 不是 opt 的改动)。
+# 其余(数据划分/超参/seed/评价协议)与 af_opt.yaml 逐项一致, 单变量原则。
+# 结果输出: ./result/cv/dbond_af_opt_pre/{timestamp}/...
+# =============================================================================
+tag: 'dbond_af_opt_pre_5fold'
+train_args:
+ batch_size: 1024        # AF 系基线值(与 af_opt.yaml 相同)
+ epoch: 100              # 原始 500, 降到 100(靠 early_stopping 早停)
+ save_per_epoch: 10
+ seed: 2024              # 单次训练默认值; 5fold 时由脚本覆盖为 42 + fold_index
+ loss_type: 'ce'
+ loss_args:
+  label_smoothing: 0.1   # 保留(AF 原始声明; 代码用 multilabel_soft_margin_loss 实际未用)
+ optimizer: 'adam'
+ optimizer_args:
+  weight_decay: 1.0e-4
+  lr: 1.0e-4
+ early_stopping:
+  patience: 5
+  delta: 1.0e-4
+ dataloader_workers: 4
+ validation_split: 0.2
+csv:
+ train_dataset_path: '/workspace/dataset/dbond_m.train.shuffle.csv'
+ validation_dataset_path: ''   # 已弃用(val 由 random_split 切出)
+ test_dataset_path: '/workspace/dataset/dbond_m.test.csv'
+ label_col_name: 'true_multi'
+ seq_col_name: 'seq'
+ state_var_col_name:
+  - 'charge'
+  - 'pep_mass'
+  - 'intensity'
+ env_var_col_name:
+  - 'nce'
+  - 'scan_num'
+ # R-01 pre 变体唯一开关: 实测协变量列置 0
+ zero_fill_col_name:
+  - 'intensity'
+  - 'scan_num'
+seq:
+ alphabet: '#ABCDEFGHIKLMNOPQRSTVWXYZ'
+ pad_char: '#'
+ max_len: 36
+model:
+ hidden_dim: 64          # AF-opt: 256 -> 64(与 af_opt.yaml 相同)
+ num_heads: 4
+ dropout: 0.4            # AF-opt: 0.1 -> 0.4(与 af_opt.yaml 相同)
+ forward_expansion: 2
+ attention_layer_num: 1  # 与 af_opt.yaml 相同
