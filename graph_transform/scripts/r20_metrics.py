@@ -122,6 +122,12 @@ def build_peptide_level_table(
     """spectrum 级 R_pred/R_true → peptide-seq 级（去重，同 seq 取均值）。
 
     符合审稿人 "candidate sequence ranking" 原意：每个唯一序列一个点。
+    R-02 聚合定义（回顾性 obs 口径）：
+      R_pred(p) = (1/N_p) Σ_{s∈S_p} R_pred(p,s)
+      R_true(p) = (1/N_p) Σ_{s∈S_p} R_true(p,s)
+      S_p = 该序列全部实验谱记录 —— 与 R_true 用完全相同的谱集合与等权（逐谱平均，
+      非保留单条记录），排序结果与输入文件行序无关。
+    n_spectra 列记录每候选的谱记录数（R-02 要求披露的"重复记录"数）。
     """
     df = pd.DataFrame({
         "seq": seqs,
@@ -129,11 +135,13 @@ def build_peptide_level_table(
         "R_true": r_true_per_spectrum,
         "n_bonds": n_bonds_per_spectrum,
     })
-    # 同一 seq 的多个 spectrum 取均值（R_pred/R_true），n_bonds 取 max（同序列键数相同）
+    # 同一 seq 的多个 spectrum 取均值（R_pred/R_true），n_bonds 取 max（同序列键数相同），
+    # n_spectra 计数（= 该候选进入聚合的实际条件记录数）
     peptide_df = df.groupby("seq", as_index=False).agg({
         "R_pred": "mean",
         "R_true": "mean",
         "n_bonds": "max",
+        "n_spectra": "size",
     })
     return peptide_df
 
@@ -164,7 +172,14 @@ def compute_peptide_ranking(peptide_df: pd.DataFrame, top_k_fractions: List[floa
 
     # Top-k enrichment
     overall_true = float(peptide_df["R_true"].mean())
-    ranked = peptide_df.sort_values("R_pred", ascending=False).reset_index(drop=True)
+    # R-02 tie 稳定化：R_pred 降序、seq 字典序升序（稳定 mergesort），
+    # 使排序完全确定、与输入行序无关；并列分数的 Top-k 边界取该字典序前 k 行。
+    if "seq" in peptide_df.columns:
+        ranked = peptide_df.sort_values(
+            ["R_pred", "seq"], ascending=[False, True], kind="mergesort"
+        ).reset_index(drop=True)
+    else:
+        ranked = peptide_df.sort_values("R_pred", ascending=False, kind="mergesort").reset_index(drop=True)
     enrichment_rows: List[Dict[str, Any]] = []
     for frac in sorted(set(top_k_fractions)):
         frac = float(frac)

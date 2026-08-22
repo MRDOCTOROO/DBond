@@ -171,7 +171,7 @@ logging:
 experiment:
   name: graph_transform_pre_synthesis
   version: v1.0
-  description: DBond-GT-pre (R-01): sequence-computable + prespecified charge/NCE grid, masks state=[T,T,F] env=[T,F]
+  description: "DBond-GT-pre (R-01): sequence-computable + prespecified charge/NCE grid; masks state=[T,T,F] env=[T,F]"
   seed: 42
   deterministic: false
   benchmark: true

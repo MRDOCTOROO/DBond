@@ -114,10 +114,19 @@ def compute_topk_enrichment(
     fractions: List[float],
     logger: logging.Logger,
 ) -> List[Dict[str, Any]]:
-    """按 R_pred 降序选择 Top-k 候选，比较其 mean(R_true) 与全集基线。"""
+    """按 R_pred 降序选择 Top-k 候选，比较其 mean(R_true) 与全集基线。
+
+    R-02 tie 稳定化：R_pred 降序、seq 字典序升序（稳定 mergesort），
+    排序结果与输入文件行序无关；并列分数时 Top-k 边界取该字典序前 k 行。
+    """
     overall_ratio = float(per_peptide["R_true"].mean())
     n_total = len(per_peptide)
-    ranked = per_peptide.sort_values("R_pred", ascending=False).reset_index(drop=True)
+    if "seq" in per_peptide.columns:
+        ranked = per_peptide.sort_values(
+            ["R_pred", "seq"], ascending=[False, True], kind="mergesort"
+        ).reset_index(drop=True)
+    else:
+        ranked = per_peptide.sort_values("R_pred", ascending=False, kind="mergesort").reset_index(drop=True)
 
     rows: List[Dict[str, Any]] = []
     for frac in sorted(set(fractions)):
@@ -151,6 +160,116 @@ def compute_topk_enrichment(
     return rows
 
 
+def verify_row_order_invariance(
+    df: pd.DataFrame,
+    dedup_by_seq: bool,
+    top_k_fractions: List[float],
+    seed: int,
+    logger: logging.Logger,
+) -> Dict[str, Any]:
+    """R-02 验收自检：打乱输入行序 → 全流程重算 → 逐值比对。
+
+    比对项：每候选 R_pred/R_true、Spearman ρ、各 Top-k 的 mean_R_true 与
+    enrichment_ratio、tie 规则排序后的候选顺序。浮点求和顺序随行序变化，
+    容差 1e-12（末位舍入级别）。
+    """
+    rng = np.random.default_rng(seed)
+    shuffled = df.iloc[rng.permutation(len(df))].reset_index(drop=True)
+
+    def pipeline(frame: pd.DataFrame):
+        spec = compute_per_peptide_ratios(frame, logger)
+        if dedup_by_seq and "seq" in spec.columns:
+            pep = build_peptide_level_table(
+                seqs=spec["seq"].astype(str).tolist(),
+                r_pred_per_spectrum=spec["R_pred"].tolist(),
+                r_true_per_spectrum=spec["R_true"].tolist(),
+                n_bonds_per_spectrum=spec["n_bonds"].tolist(),
+            )
+        else:
+            pep = spec
+        return pep, compute_spearman(pep), compute_topk_enrichment(pep, top_k_fractions, logger)
+
+    pep_a, sp_a, en_a = pipeline(df)
+    pep_b, sp_b, en_b = pipeline(shuffled)
+
+    a = pep_a.sort_values("seq").reset_index(drop=True)
+    b = pep_b.sort_values("seq").reset_index(drop=True)
+    if list(a["seq"]) != list(b["seq"]):
+        return {"passed": False, "reason": "candidate set differs after shuffle"}
+    max_rp = float(np.max(np.abs(a["R_pred"].values - b["R_pred"].values)))
+    max_rt = float(np.max(np.abs(a["R_true"].values - b["R_true"].values)))
+    rho_diff = abs(sp_a["rho"] - sp_b["rho"])
+    topk_true_diff = max(
+        (abs(x["mean_R_true"] - y["mean_R_true"]) for x, y in zip(en_a, en_b)), default=0.0
+    )
+    topk_ratio_diff = max(
+        (abs(x["enrichment_ratio"] - y["enrichment_ratio"]) for x, y in zip(en_a, en_b)), default=0.0
+    )
+    # 排序确定性：两侧按 tie 规则（R_pred 降序 + seq 字典序）排序后的顺序逐位一致
+    def tie_order(pep: pd.DataFrame) -> List[str]:
+        if "seq" in pep.columns:
+            s = pep.sort_values(["R_pred", "seq"], ascending=[False, True], kind="mergesort")
+        else:
+            s = pep.sort_values("R_pred", ascending=False, kind="mergesort")
+        return [str(x) for x in s["seq"]]
+
+    order_identical = tie_order(pep_a) == tie_order(pep_b)
+    tol = 1e-12
+    passed = (
+        max_rp <= tol and max_rt <= tol and rho_diff <= tol
+        and topk_true_diff <= tol and topk_ratio_diff <= tol and order_identical
+    )
+    report = {
+        "passed": bool(passed),
+        "seed": int(seed),
+        "tolerance": tol,
+        "max_abs_diff": {
+            "R_pred": max_rp,
+            "R_true": max_rt,
+            "spearman_rho": rho_diff,
+            "topk_mean_R_true": topk_true_diff,
+            "topk_enrichment_ratio": topk_ratio_diff,
+        },
+        "ranking_order_identical": bool(order_identical),
+        "note": "order_identical=False 且数值差≤容差时，说明存在浮点末位级近平局导致名次互换",
+    }
+    logger.info(
+        f"[verify] row-order invariance: passed={passed}  "
+        f"max|ΔR_pred|={max_rp:.3e}  max|ΔR_true|={max_rt:.3e}  "
+        f"max|Δρ|={rho_diff:.3e}  order_identical={order_identical}"
+    )
+    return report
+
+
+def build_aggregation_metadata(per_peptide: pd.DataFrame, dedup_by_seq: bool) -> Dict[str, Any]:
+    """R-02 披露块：聚合定义/权重/tie 规则/每候选谱记录数统计（machine-readable）。"""
+    meta: Dict[str, Any] = {
+        "mode": "obs_retrospective_per_spectrum_equal_weight" if dedup_by_seq else "spectrum_level",
+        "definition": (
+            "R_pred(p) = (1/N_p) * sum_{s in S_p} R_pred(p,s); "
+            "R_true(p) = (1/N_p) * sum_{s in S_p} R_true(p,s); "
+            "S_p = all acquired spectra records of sequence p (same set & weights as R_true)"
+        ),
+        "weights": "equal weight per acquired spectrum record; identical to R_true",
+        "missing_conditions": "only actually acquired spectra enter aggregation; no imputation",
+        "tie_handling": (
+            "ranking sorted by R_pred desc, then seq asc (stable mergesort); "
+            "Top-k boundary takes the first k rows of this deterministic order"
+        ),
+    }
+    if "n_spectra" in per_peptide.columns:
+        ns = per_peptide["n_spectra"]
+        meta["n_spectra_per_candidate"] = {
+            "mean": float(ns.mean()),
+            "std": float(ns.std(ddof=0)),
+            "min": int(ns.min()),
+            "median": float(ns.median()),
+            "max": int(ns.max()),
+            "total": int(ns.sum()),
+        }
+    return meta
+
+
 def main():
     parser = argparse.ArgumentParser(description="Candidate-level ranking analysis for R-20")
     parser.add_argument(
@@ -173,6 +292,14 @@ def main():
     parser.add_argument(
         "--no_dedup", dest="dedup_by_seq", action="store_false",
         help="关闭去重，按 spectrum 级 ranking（旧行为，不推荐用于论文）",
+    )
+    parser.add_argument(
+        "--verify", action="store_true",
+        help="R-02 验收自检：打乱输入行序重算全部结果并逐值比对（结果写入 ranking_summary.json）",
+    )
+    parser.add_argument(
+        "--verify_seed", type=int, default=42,
+        help="--verify 打乱行序的随机种子",
     )
     args = parser.parse_args()
 
@@ -266,6 +393,7 @@ def main():
         "dedup_by_seq": bool(args.dedup_by_seq),
         "n_spectra": int(len(per_spectrum)),
         "n_peptides": int(len(per_peptide)),
+        "aggregation": build_aggregation_metadata(per_peptide, args.dedup_by_seq),
         "bond_metrics": bond_metrics,
         "spearman": spearman,
         "enrichment": enrichment,
@@ -277,6 +405,10 @@ def main():
         },
         "top_k_fractions": args.top_k_fractions,
     }
+    if args.verify:
+        summary["verify"] = verify_row_order_invariance(
+            df, args.dedup_by_seq, args.top_k_fractions, args.verify_seed, logger
+        )
     summary_path = os.path.join(args.output_dir, "ranking_summary.json")
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False, default=str)
