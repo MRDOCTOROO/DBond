@@ -171,7 +171,8 @@ def verify_row_order_invariance(
 
     比对项：每候选 R_pred/R_true、Spearman ρ、各 Top-k 的 mean_R_true 与
     enrichment_ratio、tie 规则排序后的候选顺序。浮点求和顺序随行序变化，
-    容差 1e-12（末位舍入级别）。
+    容差 1e-9（与 score_presynthesis.py 的 --verify 统一；覆盖 float64 聚合
+    的末位重排差异）。
     """
     rng = np.random.default_rng(seed)
     shuffled = df.iloc[rng.permutation(len(df))].reset_index(drop=True)
@@ -214,7 +215,7 @@ def verify_row_order_invariance(
         return [str(x) for x in s["seq"]]
 
     order_identical = tie_order(pep_a) == tie_order(pep_b)
-    tol = 1e-12
+    tol = 1e-9
     passed = (
         max_rp <= tol and max_rt <= tol and rho_diff <= tol
         and topk_true_diff <= tol and topk_ratio_diff <= tol and order_identical

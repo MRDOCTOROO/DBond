@@ -134,14 +134,17 @@ def build_peptide_level_table(
         "R_pred": r_pred_per_spectrum,
         "R_true": r_true_per_spectrum,
         "n_bonds": n_bonds_per_spectrum,
+        "n_spectra": 1,  # 占位计数列（每行一条谱记录），聚合时 sum 即该候选的谱数
     })
     # 同一 seq 的多个 spectrum 取均值（R_pred/R_true），n_bonds 取 max（同序列键数相同），
-    # n_spectra 计数（= 该候选进入聚合的实际条件记录数）
+    # n_spectra 求和（= 该候选进入聚合的实际条件记录数）。
+    # 注：不能写 agg({"n_spectra": "size"}) 依赖"size 不需要列存在"的旧行为——
+    # 云端 pandas 2.3.3 实测抛 KeyError（Column(s) do not exist），pandas 3.x 同样。
     peptide_df = df.groupby("seq", as_index=False).agg({
         "R_pred": "mean",
         "R_true": "mean",
         "n_bonds": "max",
-        "n_spectra": "size",
+        "n_spectra": "sum",
     })
     return peptide_df
 
