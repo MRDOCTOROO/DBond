@@ -1,33 +1,35 @@
 #!/usr/bin/env python3
-"""GT 变体批量 valid-bond 统一指标生成（tab:ablation / LOFO / 主表 GT 行的 label 列重算）。
+"""统一口径批量指标生成（GT 变体 + 基线 pre/obs，valid-bond 口径，全模型可比）。
 
-背景：GT 管线各变体的 label 指标矩阵宽 = 实际最大键数（内部可比，无 m/af 的
-35 维 padding 问题），但主对比表换成 valid-bond 口径后，所有 GT 表格的 label
-列必须同口径重算，否则跨表数字冲突（R-09）。
+与 valid_bond_metrics.py 的关系：后者是计算引擎（读 pred CSV → 有效键指标），
+本脚本是编排器——自动补缺失的 pred 评估（仅 GT 需要）→ 调用后者 → 拼宽表。
+不算重复实现。
 
-对注册表（DEFAULT_RUNS）中每个 GT 变体：
-  1. 若 {cv_root}/r20_aggregation/per_fold/fold_{id}/pred.csv 五折不全 →
-     自动调用 aggregate_r20_5fold.py 补评估（逐折加载 best_model 重跑推理，
-     生成 metric/pred/ranking；已存在的折自动跳过 → 断点续跑安全）
-  2. 全部就绪后一次性调用 valid_bond_metrics.py 统一重算
-     bond_acc / bond_precision / bond_recall / bond_f1 / bond_mcc
-     （valid bonds only，阈值 0.5，padding 无关）
-  3. 汇总宽表：每变体一行 = subset/ex 五项（取自 {cv_root}/5fold_summary.csv，
-     训练汇总、padding 无关）+ valid-bond 五项（替换原 label 四列 + MCC）
+注册表（DEFAULT_RUNS）三类条目：
+  - gt         : GT 管线运行。缺 pred.csv 时自动调 aggregate_r20_5fold.py 补评估
+                 （逐折 best_model 推理，已存在折自动跳过，断点续跑安全），tag 自动探测
+  - multilabel : 基线 m/af/af_opt（pred/test.pred.csv 训练时已落盘，无需评估）
+  - single     : 基线 dbond_s（同上）
+路径不存在的条目自动跳过 → 同一脚本在两台机器各跑各的：
+  - graphtrans 机：GT 变体行（obs full / gt_pre / LOFO / 消融）
+  - dbond-gt-2 机：基线行（4 obs + 4 pre）
+跑完把两台的 valid_bond_wide.csv 汇总即得全模型统一口径大表。
 
-tag 自动探测：扫描 fold_*/checkpoints/ 的公共子目录名，无需手填。
-5 个旧消融变体路径未知已留占位（None）——填路径或用 --extra name=path 追加。
+待填路径：5 个旧消融（wo_*）与 4 个基线 obs 的 cv_root（None 占位）——
+填进 DEFAULT_RUNS 或用 --extra 追加。
 
-用法（graphtrans 机，DBond 仓库根目录）：
-  python graph_transform/scripts/run_gt_valid_bond_batch.py
+用法（各自仓库根目录）：
+  python graph_transform/scripts/run_gt_valid_bond_batch.py            # 全部已注册条目
   python graph_transform/scripts/run_gt_valid_bond_batch.py --only gt_pre lofo_no_nce
   python graph_transform/scripts/run_gt_valid_bond_batch.py \
-      --extra wo_edge_features=checkpoints/graph_transform/5fold/<ts>_wo_edge
+      --extra wo_edge_features=gt=checkpoints/graph_transform/5fold/<ts>_wo_edge \
+      --extra dbond_s=single=result/cv/dbond_s/<obs_ts>
 
 输出（默认 result/valid_bond_metrics_gt_all/）：
-  valid_bond_wide.csv     宽表（"58.81±0.34" 百分数格式，论文直接取数）
-  valid_bond_metrics.csv  valid_bond_metrics.py 原始长表（model × metric）
-  per_model/*.csv         每变体逐折明细
+  valid_bond_wide.csv     宽表（"58.81±0.34" 百分数格式）：
+                          subset/ex 五项（各 cv_root 的 5fold_summary.csv，padding 无关）
+                          + valid-bond 五项（替换原 label 四列 + MCC）
+  valid_bond_metrics.csv / per_model/*.csv   valid_bond_metrics.py 原始输出
   run.log
 """
 
@@ -44,32 +46,40 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.dirname(SCRIPT_DIR)
 AGGREGATE_SCRIPT = os.path.join(SCRIPT_DIR, "aggregate_r20_5fold.py")
 VALID_BOND_SCRIPT = os.path.join(SCRIPT_DIR, "valid_bond_metrics.py")
 
 DEFAULT_FOLDS = ["1222", "2252", "3514", "6072", "9075"]
 
-# 注册表：(显示名, cv_root 或 glob 模式)。tag 自动探测；None = 占位待填路径。
-DEFAULT_RUNS: List[Tuple[str, Optional[str]]] = [
-    # 主模型 obs full（r20_aggregation 已存在，只补 valid-bond 计算）
-    ("dbond_gt_obs", "checkpoints/graph_transform/5fold/20260421_181316base"),
-    # R-01 pre 版（pred 已生成）
-    ("gt_pre", "checkpoints/graph_transform/pre_synthesis/5fold/*"),
-    # R-03 LOFO 5 个 setting（每 setting 5fold/ 下单一时间戳，glob 直接匹配）
-    ("lofo_no_charge", "checkpoints/graph_transform/lofo/lofo_no_charge/5fold/*"),
-    ("lofo_no_mass", "checkpoints/graph_transform/lofo/lofo_no_mass/5fold/*"),
-    ("lofo_no_intensity", "checkpoints/graph_transform/lofo/lofo_no_intensity/5fold/*"),
-    ("lofo_no_nce", "checkpoints/graph_transform/lofo/lofo_no_nce/5fold/*"),
-    ("lofo_no_scan", "checkpoints/graph_transform/lofo/lofo_no_scan/5fold/*"),
-    # 旧消融表 6 行：sequence_graph 路径已知；其余 5 个待填（None 占位）
-    ("sequence_graph", "checkpoints/graph_transform/5fold/20260422_232825*"),
-    ("wo_message_passing", None),
-    ("wo_edge_features", None),
-    ("wo_state_env", None),
-    ("wo_global_node", None),
-    ("gcn_only", None),
+# 注册表：(显示名, cv_root 或 glob 模式, 类型 gt/multilabel/single)。None = 占位待填。
+# GT 变体（graphtrans 机）
+GT_RUNS: List[Tuple[str, Optional[str], str]] = [
+    ("dbond_gt_obs", "checkpoints/graph_transform/5fold/20260421_181316base", "gt"),
+    ("gt_pre", "checkpoints/graph_transform/pre_synthesis/5fold/*", "gt"),
+    ("lofo_no_charge", "checkpoints/graph_transform/lofo/lofo_no_charge/5fold/*", "gt"),
+    ("lofo_no_mass", "checkpoints/graph_transform/lofo/lofo_no_mass/5fold/*", "gt"),
+    ("lofo_no_intensity", "checkpoints/graph_transform/lofo/lofo_no_intensity/5fold/*", "gt"),
+    ("lofo_no_nce", "checkpoints/graph_transform/lofo/lofo_no_nce/5fold/*", "gt"),
+    ("lofo_no_scan", "checkpoints/graph_transform/lofo/lofo_no_scan/5fold/*", "gt"),
+    ("sequence_graph", "checkpoints/graph_transform/5fold/20260422_232825*", "gt"),
+    ("wo_message_passing", None, "gt"),
+    ("wo_edge_features", None, "gt"),
+    ("wo_state_env", None, "gt"),
+    ("wo_global_node", None, "gt"),
+    ("gcn_only", None, "gt"),
 ]
+# 基线（dbond-gt-2 机）：obs 四个路径待填；pre 四个时间戳已定（glob 自动匹配）
+BASELINE_RUNS: List[Tuple[str, Optional[str], str]] = [
+    ("dbond_s", None, "single"),
+    ("dbond_m", None, "multilabel"),
+    ("dbond_af", None, "multilabel"),
+    ("dbond_af_opt", None, "multilabel"),
+    ("dbond_s_pre", "result/cv/dbond_s_pre/*", "single"),
+    ("dbond_m_pre", "result/cv/dbond_m_pre/*", "multilabel"),
+    ("dbond_af_pre", "result/cv/dbond_af_pre/*", "multilabel"),
+    ("dbond_af_opt_pre", "result/cv/dbond_af_opt_pre/*", "multilabel"),
+]
+DEFAULT_RUNS = GT_RUNS + BASELINE_RUNS
 
 # 宽表列：训练汇总（padding 无关） + valid-bond 口径（替换原 label 列）
 SUMMARY_KEYS = ["subset_acc", "ex_acc", "ex_precision", "ex_recall", "ex_f1"]
@@ -98,7 +108,7 @@ def resolve_cv_root(pattern: str) -> Optional[str]:
     if not candidates:
         return None
     with_folds = [p for p in candidates
-                  if glob.glob(os.path.join(p, "fold_*", "config.yaml"))]
+                  if glob.glob(os.path.join(p, "fold_*"))]
     pool = with_folds or candidates
     pool.sort(key=lambda p: os.path.getmtime(p), reverse=True)
     if len(pool) > 1:
@@ -118,7 +128,7 @@ def detect_tag(cv_root: str) -> Optional[str]:
     return counter.most_common(1)[0][0]
 
 
-def all_pred_csv_exist(cv_root: str, folds: List[str]) -> bool:
+def all_gt_pred_csv_exist(cv_root: str, folds: List[str]) -> bool:
     for fold_id in folds:
         path = os.path.join(cv_root, "r20_aggregation", "per_fold", f"fold_{fold_id}", "pred.csv")
         if not os.path.exists(path):
@@ -126,16 +136,33 @@ def all_pred_csv_exist(cv_root: str, folds: List[str]) -> bool:
     return True
 
 
+def baseline_pred_status(cv_root: str, folds: List[str]) -> Tuple[int, List[str]]:
+    """基线 pred 检查（与 valid_bond_metrics 的 find_pred_csv 相同的两种布局）。
+    返回 (找到 pred 的折数, 缺失折 id 列表)。"""
+    found, missing = 0, []
+    for fold_id in folds:
+        patterns = [
+            os.path.join(cv_root, "*", f"fold_{fold_id}", "pred", "test.pred.csv"),
+            os.path.join(cv_root, f"fold_{fold_id}", "pred", "test.pred.csv"),
+        ]
+        if any(glob.glob(p) for p in patterns):
+            found += 1
+        else:
+            missing.append(fold_id)
+    return found, missing
+
+
 def run_aggregate(cv_root: str, tag: str, folds: List[str]) -> bool:
     """调用 aggregate_r20_5fold.py 补 pred.csv（已存在的折它自己会跳过）。"""
+    import subprocess
     cmd = [sys.executable, AGGREGATE_SCRIPT,
            "--cv_root", cv_root, "--tag", tag, "--folds", *folds]
     logger.info("  AGGREGATE CMD: " + " ".join(cmd))
-    rc = subprocess_run(cmd)
+    rc = subprocess.run(cmd).returncode
     if rc != 0:
         logger.error(f"  aggregate 失败 (rc={rc}): {cv_root}")
         return False
-    return all_pred_csv_exist(cv_root, folds)
+    return all_gt_pred_csv_exist(cv_root, folds)
 
 
 def subprocess_run(cmd: List[str]) -> int:
@@ -172,82 +199,103 @@ def fmt_pct(pair: Optional[Tuple[float, float]]) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="GT 变体批量 valid-bond 统一指标")
+    parser = argparse.ArgumentParser(description="GT 变体 + 基线 pre/obs 批量 valid-bond 统一指标")
     parser.add_argument("--output_dir", type=str, default="result/valid_bond_metrics_gt_all")
+    parser.add_argument("--fold_data_dir", type=str, default="dataset/5fold",
+                        help="5fold 测试数据目录（基线条目需要）")
     parser.add_argument("--folds", type=str, nargs="+", default=DEFAULT_FOLDS)
     parser.add_argument("--only", type=str, nargs="+", default=None,
                         help="只处理指定名字的变体（注册表名或 --extra 名）")
     parser.add_argument("--extra", type=str, nargs="+", default=[],
-                        help="追加变体 name=cv_root（glob 可用），如 wo_edge_features=checkpoints/...")
+                        help="追加条目 name=kind=cv_root（gt/multilabel/single），"
+                             "或 name=cv_root（默认 gt）")
     parser.add_argument("--skip_aggregate", action="store_true",
                         help="不补评估（pred 已齐全时直接算指标）")
     parser.add_argument("--force_aggregate", action="store_true",
-                        help="忽略已有 pred 强制重跑评估（慎用）")
+                        help="忽略已有 pred 强制重跑评估（慎用，仅对 gt 条目生效）")
     args = parser.parse_args()
 
     setup_logging(args.output_dir)
     logger.info("=" * 70)
-    logger.info("GT valid-bond batch | output=" + args.output_dir)
+    logger.info("Valid-bond batch (GT variants + baselines) | output=" + args.output_dir)
     logger.info("=" * 70)
 
-    runs: List[Tuple[str, Optional[str]]] = list(DEFAULT_RUNS)
+    runs: List[Tuple[str, Optional[str], str]] = list(DEFAULT_RUNS)
     for spec in args.extra:
-        if "=" not in spec:
-            parser.error(f"--extra 格式应为 name=cv_root: {spec}")
-        name, path = spec.split("=", 1)
-        runs.append((name, path))
+        parts = spec.split("=")
+        if len(parts) == 3:
+            name, kind, path = parts
+        elif len(parts) == 2:
+            name, path = parts
+            kind = "gt"
+        else:
+            parser.error(f"--extra 格式应为 name=kind=cv_root 或 name=cv_root: {spec}")
+        if kind not in ("gt", "multilabel", "single"):
+            parser.error(f"--extra kind 只能是 gt/multilabel/single: {spec}")
+        runs.append((name, path, kind))
     if args.only:
-        runs = [r for r in runs if r[0] in set(args.only)]
+        wanted = set(args.only)
+        runs = [r for r in runs if r[0] in wanted]
 
-    # ---- 阶段 1：逐变体准备 pred.csv ----
-    ready: List[Tuple[str, str]] = []  # (name, cv_root)
+    # ---- 阶段 1：逐条目准备 pred ----
+    ready: List[Tuple[str, str, str]] = []  # (name, cv_root, kind)
     summary_stats: Dict[str, Dict[str, Tuple[float, float]]] = {}
-    for name, pattern in runs:
+    for name, pattern, kind in runs:
         logger.info("\n" + "=" * 60)
         if not pattern:
             logger.info(f"[{name}] 跳过：占位路径未填（DEFAULT_RUNS 中补上或用 --extra）")
             continue
-        logger.info(f"[{name}] cv_root pattern = {pattern}")
+        logger.info(f"[{name}] kind={kind} | cv_root pattern = {pattern}")
         cv_root = resolve_cv_root(pattern)
         if not cv_root:
-            logger.error(f"[{name}] 跳过：glob 无匹配目录")
+            logger.warning(f"[{name}] 跳过：本机 glob 无匹配目录（另一台机器的条目属正常跳过）")
             continue
         logger.info(f"[{name}] cv_root = {cv_root}")
 
-        tag = detect_tag(cv_root)
-        if not tag:
-            logger.error(f"[{name}] 跳过：fold_*/checkpoints/*/ 下未找到 best_model.pt")
-            continue
-        logger.info(f"[{name}] tag = {tag}")
-
-        if all_pred_csv_exist(cv_root, args.folds):
-            if args.force_aggregate:
-                logger.info(f"[{name}] pred 五折齐全，但 --force_aggregate → 重跑评估")
+        if kind == "gt":
+            tag = detect_tag(cv_root)
+            if not tag:
+                logger.error(f"[{name}] 跳过：fold_*/checkpoints/*/ 下未找到 best_model.pt")
+                continue
+            logger.info(f"[{name}] tag = {tag}")
+            if all_gt_pred_csv_exist(cv_root, args.folds):
+                if args.force_aggregate:
+                    logger.info(f"[{name}] pred 五折齐全，但 --force_aggregate → 重跑评估")
+                    if not run_aggregate(cv_root, tag, args.folds):
+                        continue
+                else:
+                    logger.info(f"[{name}] pred 五折齐全，跳过评估")
+            else:
+                if args.skip_aggregate:
+                    logger.error(f"[{name}] 跳过：pred 不全且指定 --skip_aggregate")
+                    continue
                 if not run_aggregate(cv_root, tag, args.folds):
                     continue
-            else:
-                logger.info(f"[{name}] pred 五折齐全，跳过评估")
         else:
-            if args.skip_aggregate:
-                logger.error(f"[{name}] 跳过：pred 不全且指定 --skip_aggregate")
+            # 基线：pred 由训练落盘，无需评估；只做存在性预检
+            found, missing = baseline_pred_status(cv_root, args.folds)
+            if found == 0:
+                logger.error(f"[{name}] 跳过：未找到任何 fold 的 pred/test.pred.csv")
                 continue
-            if not run_aggregate(cv_root, tag, args.folds):
-                continue
+            if missing:
+                logger.warning(f"[{name}] pred 缺失折 {missing}（这些折将不计入，其余照常）")
 
-        ready.append((name, cv_root))
+        ready.append((name, cv_root, kind))
         summary_stats[name] = load_summary_mean_std(cv_root)
 
     if not ready:
-        logger.error("没有就绪的变体，退出。")
+        logger.error("没有就绪的条目，退出。")
         return
 
     # ---- 阶段 2：统一 valid-bond 指标（一次调用，全部同代码路径） ----
-    names = [n for n, _ in ready]
-    roots = [r for _, r in ready]
+    names = [n for n, _, _ in ready]
+    roots = [r for _, r, _ in ready]
+    kinds = [k for _, _, k in ready]
     cmd = [sys.executable, VALID_BOND_SCRIPT,
            "--models", *names,
            "--cv_roots", *roots,
-           "--types", *["gt"] * len(names),
+           "--types", *kinds,
+           "--fold_data_dir", args.fold_data_dir,
            "--folds", *args.folds,
            "--output_dir", args.output_dir]
     logger.info("\n" + "=" * 60)
@@ -266,7 +314,7 @@ def main():
             float(row["mean"]), float(row["std"]))
 
     wide_rows = []
-    for name, _cv_root in ready:
+    for name, _cv_root, _kind in ready:
         row = {"model": name}
         for key in SUMMARY_KEYS:
             row[key] = fmt_pct(summary_stats.get(name, {}).get(key))
