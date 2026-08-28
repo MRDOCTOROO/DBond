@@ -52,9 +52,9 @@ VALID_BOND_SCRIPT = os.path.join(SCRIPT_DIR, "valid_bond_metrics.py")
 DEFAULT_FOLDS = ["1222", "2252", "3514", "6072", "9075"]
 
 # 注册表：(显示名, cv_root 或 glob 模式, 类型 gt/multilabel/single)。None = 占位待填。
-# GT 变体（graphtrans 机）
+# GT 变体（dbond_gt_obs 在 dbond-gt-2 机；其余在 graphtrans 机，各自机器自动跳过对方条目）
 GT_RUNS: List[Tuple[str, Optional[str], str]] = [
-    ("dbond_gt_obs", "checkpoints/graph_transform/5fold/20260421_181316base", "gt"),
+    ("dbond_gt_obs", "checkpoints/graph_transform/feature_group_ablation/full/5fold/20260725_201242", "gt"),
     ("gt_pre", "checkpoints/graph_transform/pre_synthesis/5fold/*", "gt"),
     ("lofo_no_charge", "checkpoints/graph_transform/lofo/lofo_no_charge/5fold/*", "gt"),
     ("lofo_no_mass", "checkpoints/graph_transform/lofo/lofo_no_mass/5fold/*", "gt"),
