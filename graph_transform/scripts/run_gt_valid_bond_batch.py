@@ -62,18 +62,21 @@ GT_RUNS: List[Tuple[str, Optional[str], str]] = [
     ("lofo_no_nce", "checkpoints/graph_transform/lofo/lofo_no_nce/5fold/*", "gt"),
     ("lofo_no_scan", "checkpoints/graph_transform/lofo/lofo_no_scan/5fold/*", "gt"),
     ("sequence_graph", "checkpoints/graph_transform/5fold/20260422_232825*", "gt"),
-    ("wo_message_passing", None, "gt"),
-    ("wo_edge_features", None, "gt"),
-    ("wo_state_env", None, "gt"),
-    ("wo_global_node", None, "gt"),
-    ("gcn_only", None, "gt"),
+    # 5 个旧消融（2026-08-28 数字锚定确认：5fold_summary 与旧 tab:ablation 逐位吻合）
+    ("wo_message_passing", "checkpoints/graph_transform/5fold/20260425_124056", "gt"),
+    ("wo_edge_features", "checkpoints/graph_transform/5fold/20260427_095250", "gt"),
+    ("wo_global_node", "checkpoints/graph_transform/5fold/20260423_234010", "gt"),
+    ("gcn_only", "checkpoints/graph_transform/5fold/20260424_114816", "gt"),
+    # wo_state_env 在 dbond-gt-2 机（baseline_no_state_env 语义=屏蔽全部 5 协变量；
+    # 2026-08-28 核对 43.70/65.85 ≈ 旧表 43.69/65.81）
+    ("wo_state_env", "checkpoints/graph_transform/feature_group_ablation/baseline_none/5fold/20260724_161453", "gt"),
 ]
-# 基线（dbond-gt-2 机）：obs 四个路径待填；pre 四个时间戳已定（glob 自动匹配）
+# 基线（dbond-gt-2 机）：obs 四个 2026-08-28 已填；pre 四个 glob 自动匹配
 BASELINE_RUNS: List[Tuple[str, Optional[str], str]] = [
-    ("dbond_s", None, "single"),
-    ("dbond_m", None, "multilabel"),
-    ("dbond_af", None, "multilabel"),
-    ("dbond_af_opt", None, "multilabel"),
+    ("dbond_s", "result/cv/dbond_s/20260803_000359", "single"),
+    ("dbond_m", "result/cv/dbond_m/20260802_235648", "multilabel"),
+    ("dbond_af", "result/cv/dbond_af/20260804_211139", "multilabel"),
+    ("dbond_af_opt", "result/cv/dbond_af_opt/20260804_174933", "multilabel"),
     ("dbond_s_pre", "result/cv/dbond_s_pre/*", "single"),
     ("dbond_m_pre", "result/cv/dbond_m_pre/*", "multilabel"),
     ("dbond_af_pre", "result/cv/dbond_af_pre/*", "multilabel"),
