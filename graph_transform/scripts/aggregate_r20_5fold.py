@@ -75,7 +75,7 @@ def find_best_model(fold_dir: str, tag: str, logger: logging.Logger) -> Optional
                 f"No best_model.pt under checkpoints/{tag}/*/ ; falling back to {pattern2}"
             )
     if not candidates:
-        pattern3 = os.path.join(fold_dir, "**", "best_model.pt", recursive=True)
+        pattern3 = os.path.join(fold_dir, "**", "best_model.pt")
         candidates = glob.glob(pattern3, recursive=True)
     if not candidates:
         return None
