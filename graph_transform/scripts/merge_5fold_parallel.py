@@ -32,6 +32,10 @@ def main() -> None:
     ap.add_argument("--checkpoint_base", default="checkpoints/graph_transform/pre_synthesis")
     ap.add_argument("--output", default="result/metric/graph_transform/5fold_parallel_summary.csv")
     ap.add_argument("--tag", default="gt_pre", help="ablation tag 子目录名")
+    ap.add_argument("--run_ts", default=None,
+                    help="只汇聚指定 5fold/<时间戳> 目录的那次运行（推荐多次运行后使用）")
+    ap.add_argument("--allow_mixed", action="store_true",
+                    help="允许混合不同次运行的折（不推荐，会破坏 mean±std 含义）")
     args = ap.parse_args()
 
     pattern = os.path.join(
@@ -43,23 +47,41 @@ def main() -> None:
         print(f"ERROR: no per-fold metric csv under {pattern}", file=sys.stderr)
         sys.exit(1)
 
-    # fold_id -> 最新 csv（同折多次运行取 mtime 最新）
-    by_fold: dict[str, str] = {}
+    # fold_id -> (run_ts, path)。同折多次运行取 mtime 最新；
+    # run_ts = 5fold/<时间戳> 目录名，用于混合运行检测。
+    by_fold: dict[str, tuple[str, str]] = {}
     for p in paths:
         parts = p.split(os.sep)
-        outer_fold = parts[-8]   # 5fold_par/fold_<id>
+        outer_fold = parts[-8]   # .../5fold_par/fold_<id>/5fold/<ts>/fold_<id>/metrics/<tag>/file
+        run_ts = parts[-5]
         mtime = os.path.getmtime(p)
-        if outer_fold not in by_fold or mtime > os.path.getmtime(by_fold[outer_fold]):
-            by_fold[outer_fold] = p
+        if outer_fold not in by_fold or mtime > os.path.getmtime(by_fold[outer_fold][1]):
+            by_fold[outer_fold] = (run_ts, p)
+
+    # 混合运行检测：各折必须来自同一次 5 折运行（同一 run_ts），否则
+    # mean±std 会把不同配置的折静默混在一起。--allow_mixed 可显式放行。
+    used_ts = {ts for ts, _ in by_fold.values()}
+    if len(used_ts) > 1 and not args.allow_mixed:
+        print("ERROR: 检测到来自多次运行的折结果混用:", file=sys.stderr)
+        for fold, (ts, p) in sorted(by_fold.items()):
+            print(f"  fold_{fold.replace('fold_', '')}: run_ts={ts}  {p}", file=sys.stderr)
+        print("请用 --run_ts <时间戳> 指定要汇聚的那次运行，或 --allow_mixed 强制合并。",
+              file=sys.stderr)
+        sys.exit(2)
+    if args.run_ts:
+        by_fold = {f: v for f, v in by_fold.items() if v[0] == args.run_ts}
+        if not by_fold:
+            print(f"ERROR: --run_ts {args.run_ts} 没有匹配的折结果", file=sys.stderr)
+            sys.exit(1)
 
     rows = {}
-    for fold_dir, path in sorted(by_fold.items()):
+    for fold_dir, (run_ts, path) in sorted(by_fold.items()):
         fold_id = fold_dir.replace("fold_", "")
         df = pd.read_csv(path)
         d = {r["metric"]: float(r["value"]) for _, r in df.iterrows()}
         rows[fold_id] = d
-        print("fold {}: f1={:.4f} pr_auc={:.4f} mcc={:.4f} auc={:.4f} bond_acc/lab_acc_mi={:.4f}/{:.4f}".format(
-            fold_id, d.get("f1", float("nan")), d.get("pr_auc", float("nan")),
+        print("fold {} (run_ts={}): f1={:.4f} pr_auc={:.4f} mcc={:.4f} auc={:.4f} bond_acc/lab_acc_mi={:.4f}/{:.4f}".format(
+            fold_id, run_ts, d.get("f1", float("nan")), d.get("pr_auc", float("nan")),
             d.get("mcc", float("nan")), d.get("auc", float("nan")),
             d.get("bond_acc", float("nan")), d.get("lab_acc_mi", float("nan"))))
 
