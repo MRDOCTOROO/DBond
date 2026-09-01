@@ -54,6 +54,10 @@ TASK_EXTRA_METRIC_ORDER = (
     "auc_macro",
     "auc_micro",
     "auc_weighted",
+    "spearman_rho",
+    "top10_precision",
+    "top20_precision",
+    "top50_precision",
     "hamming_loss",
     "positive_rate",
     "pred_positive_rate",
@@ -385,10 +389,47 @@ class BinaryBondMetrics:
         metrics["auc_macro"] = auc
         metrics["auc_micro"] = auc
         metrics["auc_weighted"] = auc
+        metrics.update(self._compute_peptide_ranking_metrics())
         metrics["class_0_precision"] = metrics["precision"]
         metrics["class_0_recall"] = metrics["recall"]
         metrics["class_0_f1"] = metrics["f1"]
         return order_binary_bond_metric_dict(metrics)
+
+    def _compute_peptide_ranking_metrics(self) -> Dict[str, float]:
+        """肽级排名指标（对齐 R-01 pre-synthesis 用法，阈值无关）。
+
+        以每条肽的断裂率（有效键概率均值 vs 标签均值）为样本分数：
+          - spearman_rho: 预测断裂率与真实断裂率的 Spearman 相关；
+          - topK_precision: 按预测排序的前 K% 肽中，落在真实前 K% 内的比例
+            (K = 10/20/50)。
+        均为评估集内的描述性指标，不参与任何阈值/模型选择。
+        """
+        result = {"spearman_rho": 0.0, "top10_precision": 0.0,
+                  "top20_precision": 0.0, "top50_precision": 0.0}
+        pred_ratios, true_ratios = [], []
+        for logit_row, target_row in zip(self.sample_predictions, self.sample_targets):
+            if logit_row.size == 0:
+                continue
+            pred_ratios.append(float(_to_probabilities(logit_row.astype(np.float32), from_logits=True).mean()))
+            true_ratios.append(float(target_row.mean()))
+        n = len(pred_ratios)
+        if n < 2:
+            return result
+        pred_arr = np.asarray(pred_ratios, dtype=np.float64)
+        true_arr = np.asarray(true_ratios, dtype=np.float64)
+        try:
+            from scipy.stats import spearmanr
+            rho = float(spearmanr(pred_arr, true_arr).statistic)
+            result["spearman_rho"] = rho if np.isfinite(rho) else 0.0
+        except Exception:
+            result["spearman_rho"] = 0.0
+        order_pred = np.argsort(-pred_arr)
+        order_true = np.argsort(-true_arr)
+        for k_pct in (10, 20, 50):
+            n_k = max(1, int(round(k_pct / 100.0 * n)))
+            overlap = len(set(order_pred[:n_k].tolist()) & set(order_true[:n_k].tolist()))
+            result[f"top{k_pct}_precision"] = overlap / n_k
+        return result
 
     def _get_threshold(self, predictions: np.ndarray, targets: np.ndarray) -> float:
         if self.threshold_strategy == "fixed":

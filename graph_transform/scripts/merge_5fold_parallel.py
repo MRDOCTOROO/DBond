@@ -22,6 +22,7 @@ import pandas as pd
 
 DEFAULT_KEYS = [
     "f1", "accuracy", "auc", "pr_auc", "mcc", "brier_score", "ece",
+    "spearman_rho", "top10_precision", "top20_precision", "top50_precision",
     "ex_f1", "lab_f1_mi", "subset_acc", "bond_acc",
 ]
 
