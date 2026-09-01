@@ -334,10 +334,14 @@ class BinaryBondMetrics:
         pred_matrix = np.zeros((n_samples, max_len), dtype=np.int32)
         target_matrix = np.zeros((n_samples, max_len), dtype=np.int32)
         valid_matrix = np.zeros((n_samples, max_len), dtype=bool)
-        for idx, (prob_row, target_row) in enumerate(zip(self.sample_predictions, self.sample_targets)):
-            row_len = prob_row.size
+        for idx, (logit_row, target_row) in enumerate(zip(self.sample_predictions, self.sample_targets)):
+            row_len = logit_row.size
             if row_len == 0:
                 continue
+            # 注意：sample_predictions 存的是原始 logits，必须先转概率再与阈值比较，
+            # 与扁平指标（sigmoid(logits)>threshold）保持同一语义。
+            # （修复前直接 logits>threshold，等价于更严的阈值，压低了全部矩阵系指标）
+            prob_row = _to_probabilities(logit_row.astype(np.float32), from_logits=True)
             pred_matrix[idx, :row_len] = (prob_row > threshold).astype(np.int32)
             target_matrix[idx, :row_len] = target_row.astype(np.int32)
             valid_matrix[idx, :row_len] = True

@@ -1,27 +1,3 @@
-# DBond-GT-pre（R-01 合成前评分版）五折训练配置 —— 本地模板
-#
-# 目标：屏蔽实测协变量（intensity、scan_num/rt），保留序列可计算特征
-#   （seq/position/理化性质/理论 m/z）+ 可预设条件（charge、NCE），
-#   得到真正 sequence-computable + prespecified-condition 的候选评分模型。
-#
-# mask 映射（state=[charge,pep_mass,intensity], env=[nce,scan_num]）：
-#   pre_synthesis → state=[T,T,F] env=[T,F]
-#   由 train_graph_model.apply_ablation_config 强制写入，无需在此手填 mask。
-#
-# ⚠️ 权威超参来源：本文件是按主模型架构（3 GCN + 2 GAT, distance graph, scan_num）
-#   克隆的模板。云端启动前必须保证与主模型唯一变量 = 特征 mask：
-#   推荐用 scripts/make_pre_synthesis_config.py 从
-#   checkpoints/graph_transform/5fold/20260421_181316base/fold_*/config.yaml
-#   快照直接派生权威配置（自动只改 ablation 段与输出目录，其余逐字节保留）；
-#   或将本文件与该快照 diff，确认除 ablation/输出目录外无差异后再用。
-#
-# ⚠️ rebuild_cache: true 必须保留：图缓存 edge_attr 固化了 5 个 state/env 数值，
-#   mask 不同则数值不同，复用旧缓存会把实测信息泄漏进 pre 模型。
-#
-# 云端运行：
-#   python graph_transform/scripts/train_5fold.py \
-#       --config graph_transform/config/pre_synthesis_5fold.yaml
-
 model:
   hidden_dim: 256
   num_attention_heads: 4
@@ -30,7 +6,6 @@ model:
   use_edge_features: true
   edge_dim: 32
   concat_heads: true
-  # 与主模型一致的完整架构：3 GCN + 2 GAT（须与快照 diff 确认）
   num_gcn_layers: 3
   num_gat_layers: 2
   max_seq_len: 32
@@ -46,8 +21,13 @@ model:
   use_physicochemical_features: true
   use_state_features: true
   use_env_features: true
-  state_feature_mask: [true, true, true]
-  env_feature_mask: [true, true]
+  state_feature_mask:
+  - true
+  - true
+  - true
+  env_feature_mask:
+  - true
+  - true
   edge_types:
   - sequence
   - distance
@@ -56,7 +36,7 @@ model:
   - global
   edge_embedding_dim: 16
   distance_embedding_dim: 16
-  max_distance: 10
+  max_distance: 3
   use_edge_type_embedding: true
   use_distance_embedding: true
   use_raw_edge_attr: true
@@ -86,18 +66,13 @@ training:
   validation_interval: 1
   save_interval: 10
   save_best_only: false
-  # 5 折调度时 train_5fold.py 在此路径下建 5fold/<timestamp>/fold_<id>/ 子目录，
-  # apply_ablation_config 再附加 /gt_pre 子目录隔离（与主模型 baseline tag 同机制）。
   checkpoint_dir: checkpoints/graph_transform/pre_synthesis
 data:
-  # 5 折调度时 train_5fold.py 会覆盖为 dataset/5fold/<fold_id>.{train,test}.*.csv
   train_csv_path: dataset/dataset_private/1222.train.fbr.shuffle.multi.csv
   test_csv_path: dataset/dataset_private/1222.test.fbr.multi.csv
   val_csv_path: null
   max_seq_len: 32
   graph_strategy: distance
-  # env 第二维 scan_num（与主模型/DBond-s/m 一致；pre 版中此维被 mask 屏蔽，
-  # scan_num 与 rt 二选一在 pre 模型中无差别，此处保持与主模型一致以便严格对照）
   env_feature_name: scan_num
   env_feature_scale: 1.0
   augmentation: false
@@ -106,12 +81,13 @@ data:
   cache_dir: cache/graph_data
   augmentation_prob: 0.3
   max_augmentation_trials: 3
-  num_workers: 16
+  num_workers: 8
   pin_memory: true
   drop_last: true
   use_class_weights: true
   focal_loss_alpha: 0.25
   focal_loss_gamma: 2.0
+  prefetch_factor: 2
 loss:
   main_loss: binary_cross_entropy
   use_auxiliary_losses: false
@@ -169,14 +145,13 @@ logging:
   log_interval: 10
   save_graph_interval: 50
 experiment:
-  name: graph_transform_pre_synthesis
+  name: gt_pre_5fold_md3
   version: v1.0
-  description: "DBond-GT-pre (R-01): sequence-computable + prespecified charge/NCE grid; masks state=[T,T,F] env=[T,F]"
+  description: DBond-GT-pre md3 (maxdist=3, workers=8) 5fold template
   seed: 42
   deterministic: false
   benchmark: true
 ablation:
-  # 显式 tag：目录推导稳定为 gt_pre（不依赖开关名拼接）
   tag: gt_pre
   base_experiment_name: null
   use_sequence_graph: false
@@ -195,9 +170,7 @@ ablation:
   state_mass_only: false
   state_intensity_only: false
   env_rt_only: false
-  # 本配置的唯一实验变量：屏蔽 intensity（state 第 3 维）与 scan_num/rt（env 第 2 维）
   pre_synthesis: true
-  # edge_attr 数值随 mask 变化，必须重建缓存（勿改 false）
   rebuild_cache: true
 advanced:
   use_ensemble: false
@@ -230,8 +203,6 @@ debug:
   log_grad_norm: true
   save_nonfinite_batch: true
   diagnostic_dir: logs/graph_transform/diagnostics
-  # 速度优化：训练/评估阶段不再每 epoch 强制 gc + empty_cache（调试项，清 GPU
-  # 缓存会拖慢吞吐；需要排查显存时再手动开启）。
   force_gc_on_epoch_end: false
   force_gc_on_eval_end: false
   empty_cache_on_epoch_end: false

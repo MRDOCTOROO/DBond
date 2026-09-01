@@ -166,13 +166,15 @@ class Trainer:
             total_grad_norm += self.last_grad_norm
             max_grad_norm = max(max_grad_norm, self.last_grad_norm)
             
-            # 更新进度条
+            # 更新进度条（速度优化：loss.item() 是 GPU 同步点，仅在 log_interval
+            # 的 batch 更新，避免每 batch 打断流水线；数值口径不变）
             avg_loss = total_weighted_loss / total_valid_bonds if total_valid_bonds > 0 else 0.0
-            pbar.set_postfix({
-                'Loss': f'{loss.item():.4f}',
-                'Avg Loss': f'{avg_loss:.4f}',
-                'Batch s': f'{batch_time:.3f}'
-            })
+            if batch_idx % self.training_config.get('log_interval', 10) == 0:
+                pbar.set_postfix({
+                    'Loss': f'{loss.item():.4f}',
+                    'Avg Loss': f'{avg_loss:.4f}',
+                    'Batch s': f'{batch_time:.3f}'
+                })
             
             # 记录日志
             if batch_idx % self.training_config.get('log_interval', 10) == 0:

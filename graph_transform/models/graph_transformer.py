@@ -204,29 +204,37 @@ class NodeEncoder(nn.Module):
         return node_features
     
     def _encode_sequences(self, sequences: List[str], device: torch.device) -> torch.Tensor:
-        """将氨基酸序列编码为token序列"""
-        encoded_sequences = []
-        lookup = self.ascii_lookup.to(device=device)
+        """将氨基酸序列编码为token序列（批量向量化，P0-4 速度优化）。
 
-        for seq in sequences:
+        原实现逐序列建 torch tensor + pad_sequence（Python 循环 + 多次内核启动），
+        在 batch=1024 时是 forward 的最大热点；改为单次 byte 缓冲 + 单次查表。
+        """
+        n = len(sequences)
+        if n == 0:
+            return torch.empty(0, 0, dtype=torch.long, device=device)
+        max_len = max((len(s) for s in sequences), default=0)
+        if max_len == 0:
+            return torch.empty(n, 0, dtype=torch.long, device=device)
+
+        # 单次构建 [B, max_len] byte 缓冲：padding 位置填 pad_char（查表=0，与
+        # pad_sequence 的 padding_value 一致），避免 \0 被误判为非法字符。
+        # Python 层仅做内存拷贝，无 torch 对象创建。
+        buf = np.full((n, max_len), ord(self.pad_char), dtype=np.uint8)
+        for i, seq in enumerate(sequences):
             try:
-                seq_bytes = np.frombuffer(seq.encode('ascii'), dtype=np.uint8).copy()
+                b = seq.encode('ascii')
             except UnicodeEncodeError as exc:
                 raise ValueError(f"Sequence contains non-ASCII amino acid symbols: {seq}") from exc
+            buf[i, :len(b)] = np.frombuffer(b, dtype=np.uint8)
 
-            if seq_bytes.size == 0:
-                encoded_sequences.append(torch.empty(0, dtype=torch.long, device=device))
-                continue
-
-            byte_tensor = torch.as_tensor(seq_bytes, device=device, dtype=torch.long)
-            encoded = lookup[byte_tensor]
-            invalid_mask = encoded < 0
-            if invalid_mask.any():
-                invalid_pos = int(invalid_mask.nonzero(as_tuple=False)[0].item())
-                raise ValueError(f"Unknown amino acid: {seq[invalid_pos]}")
-            encoded_sequences.append(encoded)
-
-        return pad_sequence(encoded_sequences, batch_first=True, padding_value=0)
+        byte_tensor = torch.as_tensor(buf, device=device, dtype=torch.long)
+        lookup = self.ascii_lookup.to(device=device)
+        encoded = lookup[byte_tensor]
+        invalid_mask = encoded < 0
+        if invalid_mask.any():
+            bad_row, bad_col = [int(x) for x in invalid_mask.nonzero(as_tuple=False)[0]]
+            raise ValueError(f"Unknown amino acid: {sequences[bad_row][bad_col]}")
+        return encoded
     
     def _encode_physicochemical(self, seq_tokens: torch.Tensor) -> torch.Tensor:
         """编码物理化学性质"""
@@ -310,7 +318,12 @@ class NodeEncoder(nn.Module):
         return table
     
     def _get_aa_properties(self) -> Dict[str, List[float]]:
-        """获取氨基酸物理化学性质"""
+        """获取氨基酸物理化学性质 [疏水性(KD), 电荷(pH7), 极性, 分子量]
+
+        B/O/X/Z 为特殊 D-氨基酸（论文确认：B=D-Dap, O=D-Orn,
+        X=3-(3-Pyridyl)-D-Ala, Z=D-Cha），标准 KD 表不含这些非标准残基，
+        取相似标准残基锚点估算（见 P0-1 说明）；分子量取 PBCLA 表确定值。
+        """
         return {
             'A': [1.8, 0.0, 0.0, 89.1],  # 疏水性, 电荷, 极性, 分子量
             'C': [2.5, 0.0, 0.0, 121.2],
@@ -331,7 +344,16 @@ class NodeEncoder(nn.Module):
             'T': [-0.7, 0.0, 1.0, 119.1],
             'V': [4.2, 0.0, 0.0, 117.1],
             'W': [-0.9, 0.0, 0.0, 204.2],
-            'Y': [-1.3, 0.0, 1.0, 181.2]
+            'Y': [-1.3, 0.0, 1.0, 181.2],
+            # P0-1：特殊残基（论文确认身份）。KD 锚点：B/O 参考 Lys/Arg（亲水），
+            # X 参考 Phe（吡啶环芳香，因 N 降低疏水），Z 参考 Ile（环己基更强疏水）。
+            # 分子量取 PBCLA/utils.py 确定值：B=86.04801, O=114.07931, X=148.06366, Z=153.11536。
+            # 电荷(pH7)：B/O 侧链氨基质子化 +1；X 吡啶 pKa≈5.2 不质子化；Z 无电荷。
+            # 极性：B/O 强极性；X 吡啶氮中等极性；Z 非极性。
+            'B': [-4.0, 1.0, 1.0, 86.04801],   # D-Dap（双氨基，比 Lys 更亲水）
+            'O': [-3.9, 1.0, 1.0, 114.07931],  # D-Orn（侧链氨基，近似 Lys）
+            'X': [1.0, 0.0, 0.5, 148.06366],   # 3-(3-Pyridyl)-D-Ala（吡啶环芳香/弱极性）
+            'Z': [4.8, 0.0, 0.0, 153.11536],   # D-Cha（环己基强疏水）
         }
 
 
