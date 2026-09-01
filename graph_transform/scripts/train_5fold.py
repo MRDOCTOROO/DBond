@@ -2,6 +2,7 @@
 """五折交叉验证封装脚本。"""
 
 import argparse
+import glob
 import hashlib
 import os
 import subprocess
@@ -183,12 +184,32 @@ def main():
         "--force_new", action="store_true",
         help="强制新建 cv_root（忽略 --resume_from 和自动续跑检测）。",
     )
+    parser.add_argument(
+        "--cv_root", default=None,
+        help="显式指定 cv_root（并行调度时多个子进程共用同一目录，跳过自动时间戳）。",
+    )
+    parser.add_argument(
+        "--summary_suffix", default="",
+        help="汇总 CSV 文件名后缀（并行时每折用 .fold_<id> 防写冲突；默认空=标准文件名）。",
+    )
+    parser.add_argument(
+        "--aggregate_only", action="store_true",
+        help="只扫描 cv_root/fold_*/ 已有产物重建标准汇总 CSV，不训练（并行收尾用）。",
+    )
     args = parser.parse_args()
+
+    summary_suffix = args.summary_suffix or ""
+
+    if args.aggregate_only:
+        if not args.cv_root:
+            raise SystemExit("--aggregate_only 需要 --cv_root")
+        aggregate_only(args.cv_root, summary_suffix)
+        return
 
     with open(args.config, "r", encoding="utf-8") as f:
         base_config = yaml.safe_load(f)
 
-    base_seed = args.seed or base_config.get("experiment", {}).get("seed", 42)
+    base_seed = args.seed if args.seed is not None else base_config.get("experiment", {}).get("seed", 42)
     available_folds = discover_folds(args.fold_data_dir)
     fold_ids = args.folds or available_folds
     missing = [fold_id for fold_id in fold_ids if fold_id not in available_folds]
@@ -197,8 +218,12 @@ def main():
 
     ckpt_base = base_config.get("training", {}).get("checkpoint_dir", "checkpoints/graph_transform")
 
-    # 确定 cv_root：resume 优先，否则新建
-    if args.force_new:
+    # 确定 cv_root：显式指定 > resume > 新建
+    if args.cv_root:
+        cv_root = args.cv_root
+        os.makedirs(cv_root, exist_ok=True)
+        print(f"[5fold] 使用指定 cv_root = {cv_root}")
+    elif args.force_new:
         cv_root = os.path.join(ckpt_base, "5fold", datetime.now().strftime("%Y%m%d_%H%M%S"))
         print(f"[5fold] force_new: 新建 cv_root = {cv_root}")
     elif args.resume_from == "auto":
@@ -270,6 +295,23 @@ def main():
         else:
             print(f"[5fold] done fold={fold_id}")
 
+    per_fold_df, agg_df = summarize_fold_results(results, summary_metric_order)
+
+    metrics_path = os.path.join(cv_root, f"5fold_metrics{summary_suffix}.csv")
+    summary_path = os.path.join(cv_root, f"5fold_summary{summary_suffix}.csv")
+    aggregate_path = os.path.join(cv_root, f"5fold_aggregate{summary_suffix}.csv")
+    per_fold_df.to_csv(metrics_path, index=False)
+    agg_df.to_csv(summary_path, index=False)
+    agg_df.to_csv(aggregate_path, index=False)
+
+    print(f"[5fold] per-fold metrics saved to {metrics_path}")
+    print(f"[5fold] summary saved to {summary_path}")
+    print(f"[5fold] aggregate saved to {aggregate_path}")
+    print(f"[5fold] total_time={time.perf_counter() - overall_start:.2f}s")
+
+
+def summarize_fold_results(results, summary_metric_order):
+    """按 fold 结果列表构建 per-fold DataFrame 与 mean/std 汇总 DataFrame。"""
     per_fold_df = pd.DataFrame(results)
     agg_rows = []
     for metric in summary_metric_order:
@@ -285,19 +327,75 @@ def main():
                 "max": float(series.max()),
                 "num_folds": int(series.shape[0]),
             })
-    agg_df = pd.DataFrame(agg_rows, columns=SUMMARY_COLUMNS)
+    return per_fold_df, pd.DataFrame(agg_rows, columns=SUMMARY_COLUMNS)
 
-    metrics_path = os.path.join(cv_root, "5fold_metrics.csv")
-    summary_path = os.path.join(cv_root, "5fold_summary.csv")
-    aggregate_path = os.path.join(cv_root, "5fold_aggregate.csv")
+
+def aggregate_only(cv_root: str, summary_suffix: str = "") -> None:
+    """只做汇总（并行训练收尾用）：扫描 cv_root/fold_*/ 的已有产物，
+    重建标准 5fold_metrics.csv / 5fold_summary.csv / 5fold_aggregate.csv。
+
+    每折需存在 fold_<id>/checkpoints/<tag>/<runid>/best_model.pt 与
+    fold_<id>/metrics/<tag>/latest_test_metric.csv（训练子进程已落盘）；
+    seed 从 fold_<id>/config.yaml 读取。
+    """
+    fold_dirs = sorted(glob.glob(os.path.join(cv_root, "fold_*")))
+    fold_dirs = [d for d in fold_dirs if os.path.isdir(d)]
+    if not fold_dirs:
+        raise FileNotFoundError(f"No fold_* directories under {cv_root}")
+
+    results, summary_metric_order = [], []
+    for fold_dir in fold_dirs:
+        fold_id = os.path.basename(fold_dir).replace("fold_", "")
+
+        best_path = None
+        for tag_dir in sorted(glob.glob(os.path.join(fold_dir, "checkpoints", "*"))):
+            if not os.path.isdir(tag_dir):
+                continue
+            try:
+                run_dir = latest_subdir(tag_dir)
+            except FileNotFoundError:
+                continue
+            candidate = os.path.join(run_dir, "best_model.pt")
+            if os.path.isfile(candidate):
+                best_path = candidate
+        metric_candidates = glob.glob(os.path.join(fold_dir, "metrics", "*", "latest_test_metric.csv"))
+        metric_csv_path = max(metric_candidates, key=os.path.getmtime) if metric_candidates else None
+        if not best_path or not metric_csv_path:
+            print(f"[aggregate] skip fold={fold_id} (missing best_model.pt or latest_test_metric.csv)")
+            continue
+
+        best_epoch, best_metrics = load_best_metrics(best_path)
+        test_metrics = load_metric_csv(metric_csv_path)
+
+        seed = None
+        cfg_path = os.path.join(fold_dir, "config.yaml")
+        if os.path.isfile(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                seed = yaml.safe_load(f).get("experiment", {}).get("seed")
+
+        fold_result = {
+            "fold_id": fold_id,
+            "seed": seed,
+            "best_epoch": best_epoch,
+            "best_val_f1": best_metrics.get("f1"),
+            "checkpoint_dir": os.path.dirname(best_path),
+            "metric_csv_path": metric_csv_path,
+        }
+        for metric_name, metric_value in test_metrics.items():
+            fold_result[metric_name] = metric_value
+            if should_aggregate_metric(metric_name) and metric_name not in summary_metric_order:
+                summary_metric_order.append(metric_name)
+        results.append(fold_result)
+        print(f"[aggregate] fold={fold_id} best_epoch={best_epoch} test_f1={fold_result.get('f1')}")
+
+    per_fold_df, agg_df = summarize_fold_results(results, summary_metric_order)
+    metrics_path = os.path.join(cv_root, f"5fold_metrics{summary_suffix}.csv")
+    summary_path = os.path.join(cv_root, f"5fold_summary{summary_suffix}.csv")
+    aggregate_path = os.path.join(cv_root, f"5fold_aggregate{summary_suffix}.csv")
     per_fold_df.to_csv(metrics_path, index=False)
     agg_df.to_csv(summary_path, index=False)
     agg_df.to_csv(aggregate_path, index=False)
-
-    print(f"[5fold] per-fold metrics saved to {metrics_path}")
-    print(f"[5fold] summary saved to {summary_path}")
-    print(f"[5fold] aggregate saved to {aggregate_path}")
-    print(f"[5fold] total_time={time.perf_counter() - overall_start:.2f}s")
+    print(f"[aggregate] {len(results)} folds -> {summary_path}")
 
 
 if __name__ == "__main__":
