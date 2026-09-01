@@ -90,6 +90,16 @@ class GraphDataset(Dataset):
         missing_columns = [col for col in required_columns if col not in data.columns]
         if missing_columns:
             raise ValueError(f"Missing required columns: {missing_columns}")
+
+        # P0-2 标签严格校验：拒绝非法 token / 长度不匹配 / 空标签，杜绝静默补 0。
+        # strict_label_mode: 'drop'（丢弃坏样本并记录，默认）或 'raise'。
+        strict_mode = _get_config_value(self.config, 'strict_label_mode', 'drop')
+        from .label_validation import validate_label_frame
+        data = validate_label_frame(
+            data,
+            on_error=strict_mode,
+            source_name=os.path.basename(str(self.csv_path)),
+        )
         
         # 过滤过长的序列
         if self.max_seq_len is not None:
@@ -574,11 +584,25 @@ class CachedGraphDataset(GraphDataset):
         torch.save({"meta": meta, "edges": edge_cache}, self.edge_cache_file)
         print(f"Edge cache saved to {self.edge_cache_file}")
     
+    def _csv_fingerprint(self) -> Dict[str, Any]:
+        """CSV 内容指纹：路径 + 行数 + seq/label 列的哈希（不读全文件，秒级完成）。"""
+        import hashlib
+        frame = self.data
+        joined = "\n".join(
+            f"{seq}|{label}" for seq, label in zip(frame['seq'].astype(str), frame['true_multi'].astype(str))
+        )
+        digest = hashlib.sha1(joined.encode("utf-8")).hexdigest()
+        return {"path": str(self.csv_path), "n_rows": int(len(frame)), "sha1": digest[:16]}
+
     def _load_or_build_cache(self):
         """加载或构建缓存"""
         meta = {
-            "version": 4,
+            "version": 5,
             "csv_path": self.csv_path,
+            # P0-4: 缓存内容含 edge_attr/state/env（依赖 feature mask），元数据必须
+            # 记录 mask 与 CSV 内容指纹，否则换数据/换 mask 会静默复用旧缓存，
+            # 把被屏蔽的实测协变量重新泄漏进模型。
+            "csv_fingerprint": self._csv_fingerprint(),
             "graph_strategy": self.graph_strategy,
             "max_seq_len": self.max_seq_len,
             "max_distance": _get_config_value(self.config, "max_distance", 0),
@@ -589,6 +613,10 @@ class CachedGraphDataset(GraphDataset):
             "use_global_node": self.use_global_node,
             "env_feature_name": self.env_feature_name,
             "env_feature_scale": _get_config_value(self.config, 'env_feature_scale', 0.01),
+            "state_feature_mask": list(getattr(self.config, 'state_feature_mask', [True, True, True])),
+            "env_feature_mask": list(getattr(self.config, 'env_feature_mask', [True, True])),
+            "use_state_features": getattr(self.config, 'use_state_features', True),
+            "use_env_features": getattr(self.config, 'use_env_features', True),
         }
         if os.path.exists(self.cache_file) and not self.rebuild_cache:
             try:

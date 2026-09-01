@@ -2,6 +2,7 @@
 """五折交叉验证封装脚本。"""
 
 import argparse
+import hashlib
 import os
 import subprocess
 import sys
@@ -144,6 +145,12 @@ def find_resumable_cv_root(ckpt_base: str) -> Optional[str]:
 
 
 
+def _stable_fold_seed(base_seed: int, fold_id: str) -> int:
+    """fold seed 只依赖 (base_seed, fold_id)，与 fold 的运行顺序无关。"""
+    digest = hashlib.sha1(f"{base_seed}:{fold_id}".encode("utf-8")).hexdigest()
+    return int(digest[:8], 16)
+
+
 def build_command(train_script: str, fold_config_path: str, args, fold_seed: int):
     cmd = [sys.executable, train_script, "--config", fold_config_path, "--seed", str(fold_seed)]
     if args.epochs is not None:
@@ -217,7 +224,9 @@ def main():
     overall_start = time.perf_counter()
 
     for fold_index, fold_id in enumerate(fold_ids):
-        fold_seed = base_seed + fold_index
+        # P0: fold seed 绑定 fold_id（稳定）而非顺序索引——补跑子集或改变
+        # --folds 顺序时，同一 fold 的 seed 不再漂移，保证可复现。
+        fold_seed = _stable_fold_seed(base_seed, fold_id)
         fold_config, run_root, checkpoint_root = make_fold_config(base_config, fold_id, args.fold_data_dir, cv_root, fold_seed)
         checkpoint_search_root, metric_csv_path, pred_csv_path = resolve_fold_runtime_paths(
             fold_config,

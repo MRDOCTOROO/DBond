@@ -595,15 +595,17 @@ def load_config(config_path: str, args: argparse.Namespace) -> Dict[str, Any]:
     with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     
-    # 命令行参数覆盖配置
-    if args.epochs:
+    # 命令行参数覆盖配置（显式 is not None 判断：--seed 0 / --epochs 0 等 falsy 值不再被忽略）
+    if args.epochs is not None:
         config['training']['epochs'] = args.epochs
-    if args.batch_size:
+    if args.batch_size is not None:
         config['training']['batch_size'] = args.batch_size
-    if args.learning_rate:
+    if args.learning_rate is not None:
         config['training']['learning_rate'] = args.learning_rate
     if args.device:
         config['device']['device_type'] = args.device
+        # 显式指定 device 时必须关闭 auto_detect，否则有 CUDA 的机器会忽略 cpu/mps
+        config['device']['auto_detect'] = False
 
     return apply_ablation_config(config)
 
@@ -682,23 +684,54 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
     if data_config.get('val_csv_path'):
         val_dataset = _build(data_config['val_csv_path'], 'val', False)
     else:
-        # 从训练集分割验证集；优先读取 training.validation_split
+        # P0-1 序列分组 train/val 切分：同一 seq 的不同 charge/NCE/scan 观测必须
+        # 落在同一侧，否则验证集被训练集"见过"，val F1 偏乐观并污染模型选择。
+        # 旧实现（train_dataset 上做行级 random_split）已废弃。
         val_split = training_config.get(
             'validation_split',
             data_config.get('validation_split', 0.2),
         )
         if val_split and val_split > 0:
-            train_size = int((1 - val_split) * len(train_dataset))
-            val_size = len(train_dataset) - train_size
-            if train_size <= 0 or val_size <= 0:
-                raise ValueError(
-                    f"Invalid validation_split={val_split} for dataset size {len(train_dataset)}"
-                )
+            full_frame = train_dataset.data
             split_seed = config.get('experiment', {}).get('seed', 42)
-            split_generator = torch.Generator().manual_seed(split_seed)
-            train_dataset, val_dataset = torch.utils.data.random_split(
-                train_dataset, [train_size, val_size], generator=split_generator
+            unique_seqs = pd.Series(full_frame['seq'].astype(str).unique())
+            rng = np.random.default_rng(split_seed)
+            perm = rng.permutation(len(unique_seqs))
+            n_val_seqs = max(1, int(round(val_split * len(unique_seqs))))
+            val_seqs = set(unique_seqs.iloc[perm[:n_val_seqs]])
+
+            is_val = full_frame['seq'].astype(str).isin(val_seqs)
+            train_frame = full_frame[~is_val].reset_index(drop=True)
+            val_frame = full_frame[is_val].reset_index(drop=True)
+
+            overlap = len(set(train_frame['seq'].astype(str)) & set(val_frame['seq'].astype(str)))
+            if overlap != 0:
+                raise RuntimeError(
+                    f"Group split failed: {overlap} sequences appear in both train and val"
+                )
+
+            # 落盘 split CSV，保证可复现、可审计（覆盖写，成本 ~1s）
+            csv_stem = os.path.splitext(os.path.basename(str(data_config['train_csv_path'])))[0]
+            split_dir = os.path.join(
+                data_config.get('cache_dir', 'cache/graph_data'), 'splits',
+                f"{csv_stem}_seed{split_seed}_val{val_split}",
             )
+            os.makedirs(split_dir, exist_ok=True)
+            train_split_csv = os.path.join(split_dir, 'train.csv')
+            val_split_csv = os.path.join(split_dir, 'val.csv')
+            train_frame.to_csv(train_split_csv, index=False)
+            val_frame.to_csv(val_split_csv, index=False)
+
+            logger.info(
+                "Group split (by seq): train %d rows / %d seqs, val %d rows / %d seqs, "
+                "seq overlap=0 (seed=%d, val_frac=%s, split_dir=%s)",
+                len(train_frame), train_frame['seq'].nunique(),
+                len(val_frame), val_frame['seq'].nunique(),
+                split_seed, val_split, split_dir,
+            )
+
+            train_dataset = _build(train_split_csv, 'train', data_config.get('augmentation', False))
+            val_dataset = _build(val_split_csv, 'val', False)
         else:
             val_dataset = None
     
@@ -897,12 +930,16 @@ def main():
     parser.add_argument('--seed', type=int, help='随机种子')
     
     args = parser.parse_args()
-    
+
+    # 容器 /dev/shm 通常极小（64MB），多 worker DataLoader 的默认 shm 共享策略会
+    # "No space left on device" 崩溃；改用文件系统共享绕过 shm 限制。
+    torch.multiprocessing.set_sharing_strategy('file_system')
+
     # 加载配置
     config = load_config(args.config, args)
     
-    # 设置随机种子
-    seed = args.seed or config['experiment'].get('seed', 42)
+    # 设置随机种子（--seed 0 是合法值，不能被 falsy 回退吞掉）
+    seed = args.seed if args.seed is not None else config['experiment'].get('seed', 42)
     config.setdefault('experiment', {})['seed'] = seed
     torch.manual_seed(seed)
     np.random.seed(seed)

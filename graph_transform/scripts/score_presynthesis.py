@@ -172,9 +172,11 @@ def run_inference(
     config["training"]["batch_size"] = batch_size
 
     temp_csv = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, encoding="utf-8", newline="")
+    temp_csv_path = temp_csv.name
+    temp_csv.close()  # 先关闭句柄：Windows 下句柄未关时 to_csv 会 PermissionError
     try:
-        frame.to_csv(temp_csv.name, index=False)
-        data_config["test_csv_path"] = temp_csv.name
+        frame.to_csv(temp_csv_path, index=False)
+        data_config["test_csv_path"] = temp_csv_path
 
         dataset_cls = CachedGraphDataset if data_config.get("cache_graphs", False) else GraphDataset
         kwargs = {
@@ -201,7 +203,7 @@ def run_inference(
         evaluator = Evaluator(model=model, device=device, config=config, logger=logger)
         outputs = evaluator.collect_prediction_outputs(loader, threshold=threshold)
     finally:
-        os.remove(temp_csv.name)
+        os.remove(temp_csv_path)
 
     result = dataset.data.copy()
     result["pred_prob"] = outputs["prob_strings"]
@@ -354,7 +356,26 @@ def main() -> None:
     model_config = build_model_config(config)
     config["_model_config"] = model_config
     model = GraphTransformer(model_config).to(device)
-    CheckpointManager.load_checkpoint(args.checkpoint, model=model, device=device)
+    checkpoint = CheckpointManager.load_checkpoint(args.checkpoint, model=model, device=device)
+    # P0-4 checkpoint 身份校验：mask 是 persistent=False buffer，不随权重保存，
+    # 必须与 checkpoint 内记录的 ModelConfig mask 交叉一致，防止 full 权重被
+    # 误当 gt_pre 推理（同形状即可加载，静默改变输入语义）。
+    ckpt_config = checkpoint.get("config") or {}
+    ckpt_state_mask = list(ckpt_config.get("state_feature_mask", []))
+    ckpt_env_mask = list(ckpt_config.get("env_feature_mask", []))
+    if ckpt_state_mask or ckpt_env_mask:
+        cur_state_mask = list(model_config.state_feature_mask)
+        cur_env_mask = list(model_config.env_feature_mask)
+        if ckpt_state_mask != cur_state_mask or ckpt_env_mask != cur_env_mask:
+            sys.exit(
+                "[score_pre] checkpoint 身份不匹配: "
+                f"ckpt state={ckpt_state_mask} env={ckpt_env_mask}, "
+                f"config state={cur_state_mask} env={cur_env_mask}. "
+                "请使用与该 checkpoint 配套的 gt_pre 配置。"
+            )
+        logger.info("Checkpoint identity OK: state=%s env=%s", ckpt_state_mask, ckpt_env_mask)
+    else:
+        logger.warning("checkpoint 未记录 feature mask（旧格式），无法做身份交叉校验")
     model.eval()
     logger.info("Loaded checkpoint: %s", args.checkpoint)
 

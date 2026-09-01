@@ -3,6 +3,14 @@
 
 本模块包含键级别二分类任务使用的训练指标与指标历史跟踪器，
 并补齐与 dbond_m 横向对齐的多标签指标口径。
+
+P0 口径修复（R-01 审阅）：
+  - 所有 example/label 指标只在真实存在的 bond（valid mask 内）上计算，
+    padding 位置不再计入 TN，消除短序列对 subset/ex/lab 指标的系统性抬高；
+  - ex_f1 改为逐样本 F1 的平均值（旧实现是先平均 precision/recall 再调和，
+    数值上不等价于 macro example-F1）；
+  - update() 显式区分 logits / probabilities（from_logits，默认 True），
+    不再按数值范围猜测输入类型。
 """
 
 from __future__ import annotations
@@ -85,6 +93,7 @@ def metric_display_name(metric_name: str) -> str:
 
 
 def _sigmoid_if_needed(values: np.ndarray) -> np.ndarray:
+    """兼容别名：新代码请使用 update(from_logits=...) 显式语义。"""
     if values.size == 0:
         return values.astype(np.float32)
     if values.max() > 1.0 or values.min() < 0.0:
@@ -95,99 +104,146 @@ def _sigmoid_if_needed(values: np.ndarray) -> np.ndarray:
 logger = logging.getLogger(__name__)
 
 
-def _example_subset_accuracy(gt: np.ndarray, pred: np.ndarray) -> float:
-    return float(np.mean(np.all(np.equal(gt, pred), axis=1).astype(np.float32)))
+def _to_probabilities(values: np.ndarray, from_logits: bool) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float32)
+    if values.size == 0:
+        return values
+    if from_logits:
+        return torch.sigmoid(torch.from_numpy(values)).numpy()
+    return values
 
 
-def _example_accuracy(gt: np.ndarray, pred: np.ndarray) -> float:
-    ex_and = np.sum(np.logical_and(gt, pred), axis=1).astype(np.float32)
-    ex_or = np.sum(np.logical_or(gt, pred), axis=1).astype(np.float32)
-    return float(np.mean(ex_and / (ex_or + EPSILON)))
+# =============================================================================
+# padding-free 指标：所有计算都限制在 valid mask 内
+# =============================================================================
+
+def _example_confusion(gt: np.ndarray, pred: np.ndarray, valid: np.ndarray):
+    """逐样本 (tp, fp, tn, fn)，只统计 valid 位置。"""
+    tp = np.sum((gt == 1) & (pred == 1) & valid, axis=1).astype(np.float64)
+    fp = np.sum((gt == 0) & (pred == 1) & valid, axis=1).astype(np.float64)
+    tn = np.sum((gt == 0) & (pred == 0) & valid, axis=1).astype(np.float64)
+    fn = np.sum((gt == 1) & (pred == 0) & valid, axis=1).astype(np.float64)
+    return tp, fp, tn, fn
 
 
-def _example_precision(gt: np.ndarray, pred: np.ndarray) -> float:
-    ex_and = np.sum(np.logical_and(gt, pred), axis=1).astype(np.float32)
-    ex_pred = np.sum(pred, axis=1).astype(np.float32)
-    return float(np.mean(ex_and / (ex_pred + EPSILON)))
+def _safe_div(num: np.ndarray, den: np.ndarray) -> np.ndarray:
+    return np.where(den > 0, num / np.where(den > 0, den, 1.0), 0.0)
 
 
-def _example_recall(gt: np.ndarray, pred: np.ndarray) -> float:
-    ex_and = np.sum(np.logical_and(gt, pred), axis=1).astype(np.float32)
-    ex_gt = np.sum(gt, axis=1).astype(np.float32)
-    return float(np.mean(ex_and / (ex_gt + EPSILON)))
+def _example_subset_accuracy(gt: np.ndarray, pred: np.ndarray, valid: np.ndarray) -> float:
+    """整肽完全匹配率：所有 valid 位置都相等；无 valid bond 的样本不计入。"""
+    has_bond = valid.any(axis=1)
+    if not has_bond.any():
+        return 0.0
+    all_eq = np.all((gt == pred) | ~valid, axis=1)
+    return float(np.mean(all_eq[has_bond]))
 
 
-def _example_f1(gt: np.ndarray, pred: np.ndarray, beta: float = 1.0) -> float:
-    precision = _example_precision(gt, pred)
-    recall = _example_recall(gt, pred)
-    return float(((1 + beta ** 2) * precision * recall) / ((beta ** 2) * (precision + recall + EPSILON)))
+def _example_accuracy(gt: np.ndarray, pred: np.ndarray, valid: np.ndarray) -> float:
+    tp, fp, tn, fn = _example_confusion(gt, pred, valid)
+    has_bond = valid.any(axis=1)
+    if not has_bond.any():
+        return 0.0
+    jaccard_den = tp + fp + fn  # example accuracy = TP / (TP+FP+FN) 的 Jaccard 口径
+    return float(np.mean(_safe_div(tp, jaccard_den)[has_bond]))
 
 
-def _label_quantity(gt: np.ndarray, pred: np.ndarray) -> np.ndarray:
-    tp = np.sum(np.logical_and(gt, pred), axis=0)
-    fp = np.sum(np.logical_and(1 - gt, pred), axis=0)
-    tn = np.sum(np.logical_and(1 - gt, 1 - pred), axis=0)
-    fn = np.sum(np.logical_and(gt, 1 - pred), axis=0)
+def _example_precision(gt: np.ndarray, pred: np.ndarray, valid: np.ndarray) -> float:
+    tp, fp, _, _ = _example_confusion(gt, pred, valid)
+    has_bond = valid.any(axis=1)
+    if not has_bond.any():
+        return 0.0
+    return float(np.mean(_safe_div(tp, tp + fp)[has_bond]))
+
+
+def _example_recall(gt: np.ndarray, pred: np.ndarray, valid: np.ndarray) -> float:
+    tp, _, _, fn = _example_confusion(gt, pred, valid)
+    has_bond = valid.any(axis=1)
+    if not has_bond.any():
+        return 0.0
+    return float(np.mean(_safe_div(tp, tp + fn)[has_bond]))
+
+
+def _example_f1(gt: np.ndarray, pred: np.ndarray, valid: np.ndarray, beta: float = 1.0) -> float:
+    """逐样本 F1 后取平均（macro example-F1），空样本不计入。"""
+    tp, fp, _, fn = _example_confusion(gt, pred, valid)
+    has_bond = valid.any(axis=1)
+    if not has_bond.any():
+        return 0.0
+    f1_den = (1 + beta ** 2) * tp + beta ** 2 * fn + fp
+    f1 = np.where(f1_den > 0, (1 + beta ** 2) * tp / np.where(f1_den > 0, f1_den, 1.0), 0.0)
+    return float(np.mean(f1[has_bond]))
+
+
+def _label_quantity(gt: np.ndarray, pred: np.ndarray, valid: np.ndarray) -> np.ndarray:
+    """按键位置（列）聚合 tp/fp/tn/fn，只统计 valid 位置。"""
+    tp = np.sum((gt == 1) & (pred == 1) & valid, axis=0)
+    fp = np.sum((gt == 0) & (pred == 1) & valid, axis=0)
+    tn = np.sum((gt == 0) & (pred == 0) & valid, axis=0)
+    fn = np.sum((gt == 1) & (pred == 0) & valid, axis=0)
     return np.stack([tp, fp, tn, fn], axis=0).astype(np.float64)
 
 
-def _label_accuracy_macro(gt: np.ndarray, pred: np.ndarray) -> float:
-    quantity = _label_quantity(gt, pred)
+def _label_accuracy_macro(quantity: np.ndarray) -> float:
     tp_tn = quantity[0] + quantity[2]
     denom = np.sum(quantity, axis=0)
-    return float(np.mean(tp_tn / (denom + EPSILON)))
+    valid_cols = denom > 0
+    if not valid_cols.any():
+        return 0.0
+    return float(np.mean(tp_tn[valid_cols] / denom[valid_cols]))
 
 
-def _label_accuracy_micro(gt: np.ndarray, pred: np.ndarray) -> float:
-    quantity = _label_quantity(gt, pred)
+def _label_accuracy_micro(quantity: np.ndarray) -> float:
     tp, fp, tn, fn = np.sum(quantity, axis=1)
-    return float((tp + tn) / (tp + fp + tn + fn + EPSILON))
+    denom = tp + fp + tn + fn
+    return float((tp + tn) / denom) if denom > 0 else 0.0
 
 
-def _label_precision_macro(gt: np.ndarray, pred: np.ndarray) -> float:
-    quantity = _label_quantity(gt, pred)
-    tp = quantity[0]
-    tp_fp = quantity[0] + quantity[1]
-    return float(np.mean(tp / (tp_fp + EPSILON)))
+def _label_precision_macro(quantity: np.ndarray) -> float:
+    tp, fp = quantity[0], quantity[1]
+    valid_cols = (tp + fp) > 0
+    if not valid_cols.any():
+        return 0.0
+    return float(np.mean(tp[valid_cols] / (tp + fp)[valid_cols]))
 
 
-def _label_precision_micro(gt: np.ndarray, pred: np.ndarray) -> float:
-    quantity = _label_quantity(gt, pred)
-    tp, fp, _, _ = np.sum(quantity, axis=1)
-    return float(tp / (tp + fp + EPSILON))
+def _label_precision_micro(quantity: np.ndarray) -> float:
+    tp, fp = np.sum(quantity[0]), np.sum(quantity[1])
+    return float(tp / (tp + fp)) if (tp + fp) > 0 else 0.0
 
 
-def _label_recall_macro(gt: np.ndarray, pred: np.ndarray) -> float:
-    quantity = _label_quantity(gt, pred)
-    tp = quantity[0]
-    tp_fn = quantity[0] + quantity[3]
-    return float(np.mean(tp / (tp_fn + EPSILON)))
+def _label_recall_macro(quantity: np.ndarray) -> float:
+    tp, fn = quantity[0], quantity[3]
+    valid_cols = (tp + fn) > 0
+    if not valid_cols.any():
+        return 0.0
+    return float(np.mean(tp[valid_cols] / (tp + fn)[valid_cols]))
 
 
-def _label_recall_micro(gt: np.ndarray, pred: np.ndarray) -> float:
-    quantity = _label_quantity(gt, pred)
-    tp, _, _, fn = np.sum(quantity, axis=1)
-    return float(tp / (tp + fn + EPSILON))
+def _label_recall_micro(quantity: np.ndarray) -> float:
+    tp, fn = np.sum(quantity[0]), np.sum(quantity[3])
+    return float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
 
 
-def _label_f1_macro(gt: np.ndarray, pred: np.ndarray, beta: float = 1.0) -> float:
-    quantity = _label_quantity(gt, pred)
-    tp = quantity[0]
-    fp = quantity[1]
-    fn = quantity[3]
-    return float(np.mean((1 + beta ** 2) * tp / ((1 + beta ** 2) * tp + beta ** 2 * fn + fp + EPSILON)))
+def _label_f1_macro(quantity: np.ndarray, beta: float = 1.0) -> float:
+    tp, fp, fn = quantity[0], quantity[1], quantity[3]
+    f1_den = (1 + beta ** 2) * tp + beta ** 2 * fn + fp
+    valid_cols = f1_den > 0
+    if not valid_cols.any():
+        return 0.0
+    return float(np.mean((1 + beta ** 2) * tp[valid_cols] / f1_den[valid_cols]))
 
 
-def _label_f1_micro(gt: np.ndarray, pred: np.ndarray, beta: float = 1.0) -> float:
-    quantity = _label_quantity(gt, pred)
+def _label_f1_micro(quantity: np.ndarray, beta: float = 1.0) -> float:
     tp = np.sum(quantity[0])
     fp = np.sum(quantity[1])
     fn = np.sum(quantity[3])
-    return float((1 + beta ** 2) * tp / ((1 + beta ** 2) * tp + beta ** 2 * fn + fp + EPSILON))
+    f1_den = (1 + beta ** 2) * tp + beta ** 2 * fn + fp
+    return float((1 + beta ** 2) * tp / f1_den) if f1_den > 0 else 0.0
 
 
 class BinaryBondMetrics:
-    """键级别二分类指标，同时输出 dbond_m 同口径指标。"""
+    """键级别二分类指标（padding-free 口径），同时输出 dbond_m 同口径指标。"""
 
     def __init__(self, config: Dict[str, Any], allow_target_aware_threshold: bool = True):
         self.config = config
@@ -201,8 +257,27 @@ class BinaryBondMetrics:
         self.all_valid_targets: List[np.ndarray] = []
         self.sample_predictions: List[np.ndarray] = []
         self.sample_targets: List[np.ndarray] = []
+        # 缓存最近一次 compute() 得到的扁平化概率与标签，供 evaluator 计算校准指标
+        # (ECE/Brier) 和外部诊断使用。每次 compute() 都会覆盖。
+        self.last_probabilities: np.ndarray = np.array([], dtype=np.float32)
+        self.last_targets: np.ndarray = np.array([], dtype=np.int32)
 
-    def update(self, predictions: torch.Tensor, targets: torch.Tensor, label_mask: torch.Tensor | None = None):
+    def update(
+        self,
+        predictions: torch.Tensor,
+        targets: torch.Tensor,
+        label_mask: torch.Tensor | None = None,
+        from_logits: bool = True,
+    ):
+        """累积一个 batch 的预测。
+
+        Args:
+            predictions: 模型输出。``from_logits=True``（默认）时视为未过 sigmoid 的
+                logits；显式传 ``from_logits=False`` 表示已是概率。
+            targets: 与 predictions 同形状的标签。
+            label_mask: 有效 bond 掩码（True=参与统计）。
+            from_logits: 输入是否为 logits。
+        """
         if isinstance(predictions, torch.Tensor):
             predictions = predictions.detach().cpu().numpy()
         if isinstance(targets, torch.Tensor):
@@ -245,22 +320,29 @@ class BinaryBondMetrics:
         if valid_predictions.size == 0:
             return {}
 
-        valid_probabilities = _sigmoid_if_needed(valid_predictions)
+        valid_probabilities = _to_probabilities(valid_predictions, from_logits=True)
         threshold = self._get_threshold(valid_probabilities, valid_targets)
         binary_valid_predictions = (valid_probabilities > threshold).astype(np.int32)
 
-        sample_probabilities = [_sigmoid_if_needed(sample.astype(np.float32)) for sample in self.sample_predictions]
-        max_len = max((sample.size for sample in sample_probabilities), default=0)
-        pred_matrix = np.zeros((len(sample_probabilities), max_len), dtype=np.int32)
-        target_matrix = np.zeros((len(self.sample_targets), max_len), dtype=np.int32)
+        # 缓存扁平化概率/标签，供 evaluator 计算校准指标（ECE/Brier）使用
+        self.last_probabilities = valid_probabilities
+        self.last_targets = valid_targets
 
-        for idx, (prob_row, target_row) in enumerate(zip(sample_probabilities, self.sample_targets)):
+        # padding-free 矩阵：每个样本只在其真实键数内参与统计
+        max_len = max((sample.size for sample in self.sample_predictions), default=0)
+        n_samples = len(self.sample_predictions)
+        pred_matrix = np.zeros((n_samples, max_len), dtype=np.int32)
+        target_matrix = np.zeros((n_samples, max_len), dtype=np.int32)
+        valid_matrix = np.zeros((n_samples, max_len), dtype=bool)
+        for idx, (prob_row, target_row) in enumerate(zip(self.sample_predictions, self.sample_targets)):
             row_len = prob_row.size
             if row_len == 0:
                 continue
             pred_matrix[idx, :row_len] = (prob_row > threshold).astype(np.int32)
             target_matrix[idx, :row_len] = target_row.astype(np.int32)
+            valid_matrix[idx, :row_len] = True
 
+        quantity = _label_quantity(target_matrix, pred_matrix, valid_matrix)
         metrics = {
             "accuracy": accuracy_score(valid_targets, binary_valid_predictions),
             "precision": precision_score(valid_targets, binary_valid_predictions, zero_division=0),
@@ -272,19 +354,19 @@ class BinaryBondMetrics:
             "hamming_loss": hamming_loss(valid_targets, binary_valid_predictions),
             "positive_rate": float(np.mean(valid_targets)),
             "pred_positive_rate": float(np.mean(binary_valid_predictions)),
-            "subset_acc": _example_subset_accuracy(target_matrix, pred_matrix),
-            "ex_acc": _example_accuracy(target_matrix, pred_matrix),
-            "ex_precision": _example_precision(target_matrix, pred_matrix),
-            "ex_recall": _example_recall(target_matrix, pred_matrix),
-            "ex_f1": _example_f1(target_matrix, pred_matrix),
-            "lab_acc_ma": _label_accuracy_macro(target_matrix, pred_matrix),
-            "lab_acc_mi": _label_accuracy_micro(target_matrix, pred_matrix),
-            "lab_precision_ma": _label_precision_macro(target_matrix, pred_matrix),
-            "lab_precision_mi": _label_precision_micro(target_matrix, pred_matrix),
-            "lab_recall_ma": _label_recall_macro(target_matrix, pred_matrix),
-            "lab_recall_mi": _label_recall_micro(target_matrix, pred_matrix),
-            "lab_f1_ma": _label_f1_macro(target_matrix, pred_matrix),
-            "lab_f1_mi": _label_f1_micro(target_matrix, pred_matrix),
+            "subset_acc": _example_subset_accuracy(target_matrix, pred_matrix, valid_matrix),
+            "ex_acc": _example_accuracy(target_matrix, pred_matrix, valid_matrix),
+            "ex_precision": _example_precision(target_matrix, pred_matrix, valid_matrix),
+            "ex_recall": _example_recall(target_matrix, pred_matrix, valid_matrix),
+            "ex_f1": _example_f1(target_matrix, pred_matrix, valid_matrix),
+            "lab_acc_ma": _label_accuracy_macro(quantity),
+            "lab_acc_mi": _label_accuracy_micro(quantity),
+            "lab_precision_ma": _label_precision_macro(quantity),
+            "lab_precision_mi": _label_precision_micro(quantity),
+            "lab_recall_ma": _label_recall_macro(quantity),
+            "lab_recall_mi": _label_recall_micro(quantity),
+            "lab_f1_ma": _label_f1_macro(quantity),
+            "lab_f1_mi": _label_f1_micro(quantity),
         }
 
         if len(np.unique(valid_targets)) > 1:
@@ -341,6 +423,8 @@ class BinaryBondMetrics:
         self.all_valid_targets = []
         self.sample_predictions = []
         self.sample_targets = []
+        self.last_probabilities = np.array([], dtype=np.float32)
+        self.last_targets = np.array([], dtype=np.int32)
 
 
 class MetricTracker:
