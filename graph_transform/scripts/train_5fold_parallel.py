@@ -18,15 +18,30 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import os
+import re
 import subprocess
 import sys
+import threading
 import time
 
 FOLDS = ["1222", "2252", "3514", "6072", "9075"]
 
+# 终端只转发关键行（epoch 汇总/最佳模型/测试结果/异常），完整输出仍写日志文件；
+# tqdm 的逐刷新进度条太密，4 折交错会刷屏。
+_TERMINAL_LINE_RE = re.compile(
+    r"(Epoch \d+ Training - Loss|Epoch \d+ Validation - Loss|Saved best"
+    r"|Test - Loss|Early stopping|Training completed"
+    r"|Group split|Error|Traceback|RuntimeError|OutOfMemoryError)"
+)
+_PRINT_LOCK = threading.Lock()
+
 
 def run_fold(gpu: int, fold_id: str, config_path: str, cv_root: str, work_root: str) -> None:
-    """在指定 GPU 上跑单个 fold，产物落入共享 cv_root（标准结构）。"""
+    """在指定 GPU 上跑单个 fold，产物落入共享 cv_root（标准结构）。
+
+    子进程输出实时流式转发：关键行（epoch 汇总/异常）带 [f<折>] 前缀打到
+    终端，全部输出写入日志文件。
+    """
     log_path = os.path.join(work_root, f"fold{fold_id}_gpu{gpu}.log")
     env = dict(os.environ)
     env["CUDA_VISIBLE_DEVICES"] = str(gpu)
@@ -37,13 +52,26 @@ def run_fold(gpu: int, fold_id: str, config_path: str, cv_root: str, work_root: 
         "--cv_root", cv_root,
         "--summary_suffix", f".fold_{fold_id}",
     ]
-    print(f"[parallel] gpu={gpu} fold={fold_id} start {time.strftime('%H:%M:%S')}", flush=True)
-    with open(log_path, "w", encoding="utf-8") as f:
-        proc = subprocess.run(cmd, env=env, stdout=f, stderr=subprocess.STDOUT)
-    status = "OK" if proc.returncode == 0 else f"FAIL({proc.returncode})"
-    print(f"[parallel] gpu={gpu} fold={fold_id} {status} end {time.strftime('%H:%M:%S')} log={log_path}", flush=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"fold {fold_id} failed rc={proc.returncode}, see {log_path}")
+    with _PRINT_LOCK:
+        print(f"[parallel] gpu={gpu} fold={fold_id} start {time.strftime('%H:%M:%S')} log={log_path}", flush=True)
+    with open(log_path, "w", encoding="utf-8") as log_f, \
+            subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, bufsize=1) as proc:
+        for line in proc.stdout:
+            line = line.rstrip("\r\n")
+            if not line:
+                continue
+            log_f.write(line + "\n")
+            log_f.flush()
+            if _TERMINAL_LINE_RE.search(line):
+                with _PRINT_LOCK:
+                    print(f"[f{fold_id}] {line}", flush=True)
+        rc = proc.wait()
+    status = "OK" if rc == 0 else f"FAIL({rc})"
+    with _PRINT_LOCK:
+        print(f"[parallel] gpu={gpu} fold={fold_id} {status} end {time.strftime('%H:%M:%S')}", flush=True)
+    if rc != 0:
+        raise RuntimeError(f"fold {fold_id} failed rc={rc}, see {log_path}")
 
 
 def aggregate(config_path: str, cv_root: str, work_root: str) -> None:
