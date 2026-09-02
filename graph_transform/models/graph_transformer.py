@@ -676,7 +676,7 @@ class GraphTransformer(nn.Module):
                 # 理论键离子特征：[B, max_bonds, D] 按 valid_bond_mask 展平，
                 # 行序与 bond_src/bond_dst 的行主序展开一致
                 theory_flat = batch_data['bond_theory'][valid_bond_mask]
-                bond_feature_parts.append(self.bond_theory_proj(theory_flat.to(bond_features.dtype)))
+                bond_feature_parts.append(self.bond_theory_proj(theory_flat.to(h_src.dtype)))
             bond_features = torch.cat(bond_feature_parts, dim=-1)
             bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
             # AMP 下 bond_head 输出为 half，predictions 容器为 float32，需对齐 dtype 后赋值。
