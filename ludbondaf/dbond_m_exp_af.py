@@ -295,11 +295,12 @@ class Predictor(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, 1)
         )
-        # 序列衍生理论键离子特征：投影到 hidden_dim 后与 bond 表示相加
+        # 序列衍生理论键离子特征：投影到 hidden_dim*2（与相邻拼接后的
+        # bond 表示同宽）后相加
         self.use_theory_features = use_theory_features
         if use_theory_features:
             from bond_theory_torch import BOND_THEORY_DIM
-            self.theory_proj = nn.Linear(BOND_THEORY_DIM, hidden_dim)
+            self.theory_proj = nn.Linear(BOND_THEORY_DIM, hidden_dim * 2)
 
     def forward(self, bond_features: torch.Tensor, theory_raw: torch.Tensor = None) -> torch.Tensor:
         # bond_features: [batch, seq-1, hidden_dim * 2]
