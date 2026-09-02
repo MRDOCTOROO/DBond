@@ -40,6 +40,11 @@ EXPERIMENTS = {
     "dbond_m_pre": ("ludbond/train_dbond_m_pre_5fold.py", "ludbond/dbond_m_config/pre.yaml"),
     "dbond_af_pre": ("ludbondaf/train_dbond_af_pre_5fold.py", "ludbondaf/dbond_m_exp_af_config/af_pre.yaml"),
     "dbond_af_opt_pre": ("ludbondaf/train_dbond_af_opt_pre_5fold.py", "ludbondaf/dbond_m_exp_af_config/af_opt_pre.yaml"),
+    # pre + 序列衍生理论键离子特征（与同名 pre 单变量对照）
+    "dbond_s_pre_theory": ("ludbond/train_dbond_s_pre_theory_5fold.py", "ludbond/dbond_s_config/pre_theory.yaml"),
+    "dbond_m_pre_theory": ("ludbond/train_dbond_m_pre_theory_5fold.py", "ludbond/dbond_m_config/pre_theory.yaml"),
+    "dbond_af_pre_theory": ("ludbondaf/train_dbond_af_pre_theory_5fold.py", "ludbondaf/dbond_m_exp_af_config/af_pre_theory.yaml"),
+    "dbond_af_opt_pre_theory": ("ludbondaf/train_dbond_af_opt_pre_theory_5fold.py", "ludbondaf/dbond_m_exp_af_config/af_opt_pre_theory.yaml"),
 }
 EXPERIMENT_ORDER = list(EXPERIMENTS.keys())
 

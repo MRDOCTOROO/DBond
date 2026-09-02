@@ -165,7 +165,7 @@ class BondSeqEnvEncoder(nn.Module):
         return attn_output_batch,attn_weight_batch_list   
     
 class Encoder(nn.Module):
-    def __init__(self,aa_type_count,pad_index,state_dim,bond_dim,env_dim,hidden_dim,num_heads, dropout, forward_expansion,attention_layer_num):
+    def __init__(self,aa_type_count,pad_index,state_dim,bond_dim,env_dim,hidden_dim,num_heads, dropout, forward_expansion,attention_layer_num, theory_slots:int=0):
         super(Encoder, self).__init__()
         self.embedding_layer = nn.Embedding(aa_type_count,hidden_dim,padding_idx=pad_index)
         self.pos_encoder = Summer(PositionalEncoding1D(hidden_dim))
@@ -173,7 +173,9 @@ class Encoder(nn.Module):
         self.bond_encoder = BondEncoder(bond_dim,hidden_dim,dropout)
         self.state_encoder = StateEncoder(state_dim,hidden_dim,dropout)
         self.env_encoder = EnvEncoder(env_dim,hidden_dim,dropout)
-        
+        # 理论键离子特征槽位（use_theory_features 时为 1，追加一个 [B,1,H] token）
+        self.theory_slots = theory_slots
+
     def masked_mean(self,input:torch.Tensor,mask:torch.Tensor):
         # input: [batch,seq_len,hidden]
         # mask: [batch,seq_len], bool ,true is valid
@@ -189,15 +191,15 @@ class Encoder(nn.Module):
                 bond_index_batch:List[int],
                 state_vec_batch:torch.Tensor,
                 bond_vec_batch:torch.Tensor,
-                env_vec_batch:torch.Tensor)->torch.Tensor:
+                env_vec_batch:torch.Tensor,
+                theory_vec_batch:torch.Tensor=None)->torch.Tensor:
         # seq_index_batch : [batch_len,max_seq_len]
         # seq_padding_mask_batch : [batch_len,max_seq_len]
         # bond_index_batch : [batch_len,]
         # bond_vec_batch: [batch_len,bond_dim]
         # state_vec_batch: [batch_len,state_dim]
         # env_vec_batch: [batch_len,ENV_DIM]
-  
-        # seq_embedding_batch : [batch_len,max_seq_len,HIDDEN_DIM]
+        # theory_vec_batch: [batch_len,1,HIDDEN_DIM] 可选（理论键离子特征槽位）
         seq_embedding_batch:torch.Tensor = self.embedding_layer(seq_index_batch)
         seq_embedding_batch              = self.pos_encoder(seq_embedding_batch)
         # bond_embedding_batch : [batch_len,2,HIDDEN_DIM]
@@ -213,19 +215,22 @@ class Encoder(nn.Module):
         env_vec_batch = self.env_encoder.forward(env_vec_batch)
         state_vec_batch = self.state_encoder.forward(state_vec_batch)
         bond_vec_batch = self.bond_encoder.forward(bond_vec_batch)
-        # latent_vec_batch : [batch_len,1+state_dim+bond_dim+env_dim,HIDDEN_DIM]
-        
-        latent_vec_batch = torch.concat((seq_vec_batch,state_vec_batch,bond_vec_batch,env_vec_batch),dim=1)
-        # latent_vec_batch : [batch_len,(1+state_dim+bond_dim+env_dim)*HIDDEN_DIM]
+        # latent_vec_batch : [batch_len,1+state_dim+bond_dim+theory+env_dim,HIDDEN_DIM]
+
+        if theory_vec_batch is not None:
+            latent_vec_batch = torch.concat((seq_vec_batch,state_vec_batch,bond_vec_batch,theory_vec_batch,env_vec_batch),dim=1)
+        else:
+            latent_vec_batch = torch.concat((seq_vec_batch,state_vec_batch,bond_vec_batch,env_vec_batch),dim=1)
+        # latent_vec_batch : [batch_len,(1+state_dim+bond_dim+theory+env_dim)*HIDDEN_DIM]
         latent_vec_batch = latent_vec_batch.flatten(start_dim=1)
 
       
         return latent_vec_batch
 
 class Decoder(nn.Module):
-    def __init__(self,state_dim,bond_dim,env_dim,hidden_dim,output_dim, dropout,):
+    def __init__(self,state_dim,bond_dim,env_dim,hidden_dim,output_dim, dropout, theory_slots:int=0):
         super(Decoder, self).__init__()
-        self.input_dim = (1+state_dim+bond_dim+env_dim)* hidden_dim
+        self.input_dim = (1+state_dim+bond_dim+env_dim+theory_slots)* hidden_dim
         self.ffn_1 = nn.Sequential(
             nn.Linear(self.input_dim,hidden_dim),
             nn.BatchNorm1d(hidden_dim),
@@ -257,6 +262,18 @@ class Model(nn.Module):
         env_dim = len(config['csv']['env_var_col_name'])
         bond_dim = len(config['csv']['bond_var_col_name'])
         state_dim = len(config['csv']['state_var_col_name'])
+        # 序列衍生理论键离子特征（use_theory_features 开关，默认关闭）：
+        # 每行样本按 bond_pos 取对应键的 15 维理论特征，投影为一个 [B,1,H] 槽位
+        self.use_theory_features = bool(config.get('model', {}).get('use_theory_features', False))
+        theory_slots = 0
+        if self.use_theory_features:
+            from bond_theory_torch import BondTheoryEncoder
+            self.bond_theory = BondTheoryEncoder(
+                alphabet=str(config['seq']['alphabet']),
+                pad_char=str(config['seq']['pad_char']),
+                out_dim=config['model']['hidden_dim'],
+            )
+            theory_slots = 1
         self.state_norm = nn.BatchNorm1d(state_dim)
         self.bond_norm = nn.BatchNorm1d(bond_dim)
         self.env_norm = nn.BatchNorm1d(env_dim)
@@ -270,7 +287,8 @@ class Model(nn.Module):
                                 num_heads=config['model']['num_heads'],
                                 dropout=config['model']['dropout'],
                                 forward_expansion=config['model']['forward_expansion'],
-                                attention_layer_num=config['model']['attention_layer_num'],)
+                                attention_layer_num=config['model']['attention_layer_num'],
+                                theory_slots=theory_slots,)
         self.decoder = Decoder(
                                 state_dim=state_dim,
                                 env_dim=env_dim,
@@ -278,6 +296,7 @@ class Model(nn.Module):
                                 output_dim=2,
                                 hidden_dim=config['model']['hidden_dim'],
                                 dropout=config['model']['dropout'],
+                                theory_slots=theory_slots,
                                 )
 
         self.param_dict: dict = config
@@ -304,6 +323,15 @@ class Model(nn.Module):
         state_vec_batch = self.state_norm.forward(state_vec_batch)
         bond_vec_batch = self.bond_norm.forward(bond_vec_batch)
         env_vec_batch = self.env_norm.forward(env_vec_batch)
+        # 理论键离子特征：[B,L-1,15] 按 bond_pos（0-based）取该行样本对应键，
+        # 投影为 [B,1,H] 槽位传给 Encoder
+        theory_vec_batch = None
+        if self.use_theory_features:
+            theory_raw = self.bond_theory.raw_features(seq_index_batch, seq_padding_mask_batch)
+            bond_idx = bond_index_batch.to(device=theory_raw.device, dtype=torch.long)
+            bond_idx = bond_idx.clamp(min=0, max=theory_raw.size(1) - 1)
+            row_idx = torch.arange(theory_raw.size(0), device=theory_raw.device)
+            theory_vec_batch = self.bond_theory.proj(theory_raw[row_idx, bond_idx]).unsqueeze(1)  # [B,1,H]
         # latent_vec_batch : [batch_len,HIDDEN_DIM]
         # attn_weight_dict : dict
         latent_vec_batch = self.encoder.forward(
@@ -312,7 +340,8 @@ class Model(nn.Module):
                                                 bond_index_batch=bond_index_batch,
                                                 state_vec_batch=state_vec_batch,
                                                 bond_vec_batch=bond_vec_batch,
-                                                env_vec_batch=env_vec_batch)
+                                                env_vec_batch=env_vec_batch,
+                                                theory_vec_batch=theory_vec_batch)
         out = self.decoder.forward(latent_vec_batch)
         # out : [batch,2]
         return out

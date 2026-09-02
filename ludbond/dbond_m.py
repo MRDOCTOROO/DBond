@@ -216,6 +216,18 @@ class Model(nn.Module):
                                 hidden_dim=config['model']['hidden_dim'],
                                 dropout=config['model']['dropout'],)
 
+        # 序列衍生理论键离子特征（use_theory_features 开关，默认关闭）：
+        # [B,L-1,15] → 投影 [B,L-1,H] → 逐键加性 logit，与 decoder 输出相加
+        self.use_theory_features = bool(config.get('model', {}).get('use_theory_features', False))
+        if self.use_theory_features:
+            from bond_theory_torch import BondTheoryEncoder
+            self.bond_theory = BondTheoryEncoder(
+                alphabet=str(config['seq']['alphabet']),
+                pad_char=str(config['seq']['pad_char']),
+                out_dim=config['model']['hidden_dim'],
+            )
+            self.theory_logit = nn.Linear(config['model']['hidden_dim'], 1)
+
         self.param_dict: dict = config
         self.param_dict['model']['aa_type_count'] = aa_type_count
         self.param_dict['model']['env_dim'] = env_dim
@@ -244,6 +256,10 @@ class Model(nn.Module):
                                                 state_vec_batch=state_vec_batch,
                                                 env_vec_batch=env_vec_batch)
         out = self.decoder.forward(latent_vec_batch)
+        if self.use_theory_features:
+            # 逐键理论特征以加性 logit 融合（padding 位置随后被 masked_fill 覆盖）
+            theory = self.bond_theory.forward(seq_index_batch, seq_padding_mask_batch)  # [B,L-1,H]
+            out = out + self.theory_logit(theory).squeeze(-1)
         out = out.masked_fill(seq_padding_mask_batch[:,1:],-1e9)
         # out = out.masked_fill(seq_padding_mask_batch[:,1:],float("-inf"))
         # out : [batch,2]

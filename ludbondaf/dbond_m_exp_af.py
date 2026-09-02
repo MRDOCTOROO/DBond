@@ -285,7 +285,7 @@ class FeatureFusionLayer(nn.Module):
         return bond_features
 
 class Predictor(nn.Module):
-    def __init__(self, hidden_dim: int, dropout: float):
+    def __init__(self, hidden_dim: int, dropout: float, use_theory_features: bool = False):
         super(Predictor, self).__init__()
         # MLP for predicting bond cleavage (combines adjacent positions)
         self.bond_mlp = nn.Sequential(
@@ -295,8 +295,17 @@ class Predictor(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, 1)
         )
-    def forward(self, bond_features: torch.Tensor) -> torch.Tensor:
+        # 序列衍生理论键离子特征：投影到 hidden_dim 后与 bond 表示相加
+        self.use_theory_features = use_theory_features
+        if use_theory_features:
+            from bond_theory_torch import BOND_THEORY_DIM
+            self.theory_proj = nn.Linear(BOND_THEORY_DIM, hidden_dim)
+
+    def forward(self, bond_features: torch.Tensor, theory_raw: torch.Tensor = None) -> torch.Tensor:
         # bond_features: [batch, seq-1, hidden_dim * 2]
+        if self.use_theory_features and theory_raw is not None:
+            # theory_raw: [batch, seq-1, 15] → [batch, seq-1, hidden_dim]
+            bond_features = bond_features + self.theory_proj(theory_raw)
         logits = self.bond_mlp(bond_features).squeeze(-1)  # [batch, seq-1]
         return logits
 
@@ -332,9 +341,19 @@ class Model(nn.Module):
             forward_expansion=config["model"]["forward_expansion"],
             attention_layer_num=config["model"].get("decoder_attention_layer_num", 2),
         )
+        # 序列衍生理论键离子特征（use_theory_features 开关，默认关闭）
+        self.use_theory_features = bool(config.get("model", {}).get("use_theory_features", False))
+        if self.use_theory_features:
+            from bond_theory_torch import BondTheoryEncoder
+            self.bond_theory = BondTheoryEncoder(
+                alphabet=str(config["seq"]["alphabet"]),
+                pad_char=str(config["seq"]["pad_char"]),
+                out_dim=config["model"]["hidden_dim"],
+            )
         self.predictor = Predictor(
             hidden_dim=config["model"]["hidden_dim"],
-            dropout=config["model"]["dropout"])
+            dropout=config["model"]["dropout"],
+            use_theory_features=self.use_theory_features)
         
         self.param_dict: dict = config
         self.param_dict["model"]["aa_type_count"] = aa_type_count
@@ -367,7 +386,11 @@ class Model(nn.Module):
         # bond_features : [batch_len,max_seq_len-1,2*HIDDEN_DIM]
         bond_features = self.feature_fusion_layer.forward(latent_vec_batch, padding_mask=seq_padding_mask_batch)
         # out : [batch_len,max_seq_len-1]
-        out = self.predictor.forward(bond_features)
+        if self.use_theory_features:
+            theory_raw = self.bond_theory.raw_features(seq_index_batch, seq_padding_mask_batch)
+            out = self.predictor.forward(bond_features, theory_raw)
+        else:
+            out = self.predictor.forward(bond_features)
         out = out.masked_fill(seq_padding_mask_batch[:, 1:], -1e9)
         # out = out.masked_fill(seq_padding_mask_batch[:,1:],float("-inf"))
         # out : [batch,2]
