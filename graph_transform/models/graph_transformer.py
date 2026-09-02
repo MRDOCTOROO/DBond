@@ -488,6 +488,8 @@ class GraphTransformer(nn.Module):
             bond_feature_dim += self.hidden_dim
         if self.bond_use_product_feature:
             bond_feature_dim += self.hidden_dim
+        if self.use_theory_features:
+            bond_feature_dim += self.hidden_dim  # bond_theory_proj 输出拼接一路
         
         # 键级别断裂预测头（相邻残基对）
         self.bond_head = nn.Sequential(
