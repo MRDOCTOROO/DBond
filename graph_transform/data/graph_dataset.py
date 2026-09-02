@@ -132,10 +132,16 @@ class GraphDataset(Dataset):
         
         # 构建图
         graph_data = self.graph_builder.build_graph(sequence, sample_features, self.graph_strategy)
-        
+
         # 准备标签
         label_tensor = self._prepare_labels(labels, len(sequence))
-        
+
+        # 序列衍生理论键离子特征（use_theory_features 开关控制，默认关闭）
+        bond_theory = None
+        if _get_config_value(self.config, 'use_theory_features', False):
+            from .theory_features import compute_bond_theory
+            bond_theory = compute_bond_theory(sequence)
+
         # 组合数据
         sample = {
             'sequence': sequence,
@@ -158,7 +164,9 @@ class GraphDataset(Dataset):
         }
         if 'scan_num' in sample_features:
             sample['scan_num'] = sample_features['scan_num']
-        
+        if bond_theory is not None:
+            sample['bond_theory'] = bond_theory
+
         return sample
 
     def _extract_sample_features(self, row: pd.Series) -> Tuple[Dict[str, float], float]:
@@ -345,6 +353,18 @@ class GraphDataLoader:
         else:
             batch_labels = torch.zeros((batch_size, 0), dtype=torch.float32)
             batch_label_masks = torch.zeros((batch_size, 0), dtype=torch.float32)
+
+        # 理论键离子特征（use_theory_features 时存在）：[B, max_bonds, D]，
+        # 与 labels/label_mask 的键位对齐
+        theory_list = [item['bond_theory'] for item in batch if 'bond_theory' in item]
+        batch_bond_theory = None
+        if theory_list and max_bonds > 0:
+            theory_dim = theory_list[0].size(1)
+            batch_bond_theory = torch.zeros((batch_size, max_bonds, theory_dim), dtype=torch.float32)
+            for i, t in enumerate(theory_list):
+                n = min(t.size(0), max_bonds)
+                if n > 0:
+                    batch_bond_theory[i, :n] = t[:n]
         
         # 创建批次数据
         batch_data = {
@@ -356,8 +376,7 @@ class GraphDataLoader:
             'bond_edge_map': batch_bond_edge_map,
             'labels': batch_labels,
             'label_mask': batch_label_masks,
-            'charges': charges,
-            'pep_masses': pep_masses,
+            'charges': charges,            'pep_masses': pep_masses,
             'intensities': intensities,
             'nces': nces,
             'rts': rts,
@@ -370,7 +389,9 @@ class GraphDataLoader:
             'max_bonds': max_bonds,
             'batch_size': batch_size
         }
-        
+        if batch_bond_theory is not None:
+            batch_data['bond_theory'] = batch_bond_theory
+
         return batch_data
     
     def __iter__(self):

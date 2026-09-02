@@ -454,6 +454,13 @@ class GraphTransformer(nn.Module):
         self.edge_encoder = EdgeEncoder(config)
 
         self.use_global_node = getattr(config, 'use_global_node', False)
+        self.use_theory_features = getattr(config, 'use_theory_features', False)
+        if self.use_theory_features:
+            from data.theory_features import BOND_THEORY_DIM
+            # 序列衍生理论键离子特征（prefix/suffix mass、b/y 理论 m/z、相对位置、
+            # 两侧残基质量、H2O/NH3-loss 标记、Pro 上下文），投影到 hidden_dim 后
+            # 与 bond 表示拼接。
+            self.bond_theory_proj = nn.Linear(BOND_THEORY_DIM, config.hidden_dim)
         if self.use_global_node:
             state_out_dim = self.node_encoder.state_encoder[-1].out_features
             env_out_dim = self.node_encoder.env_encoder[-1].out_features
@@ -665,6 +672,11 @@ class GraphTransformer(nn.Module):
                 bond_feature_parts.append(h_src - h_dst)
             if self.bond_use_product_feature:
                 bond_feature_parts.append(h_src * h_dst)
+            if self.use_theory_features:
+                # 理论键离子特征：[B, max_bonds, D] 按 valid_bond_mask 展平，
+                # 行序与 bond_src/bond_dst 的行主序展开一致
+                theory_flat = batch_data['bond_theory'][valid_bond_mask]
+                bond_feature_parts.append(self.bond_theory_proj(theory_flat.to(bond_features.dtype)))
             bond_features = torch.cat(bond_feature_parts, dim=-1)
             bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
             # AMP 下 bond_head 输出为 half，predictions 容器为 float32，需对齐 dtype 后赋值。

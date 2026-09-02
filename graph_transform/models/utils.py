@@ -51,6 +51,9 @@ class ModelConfig:
         self.use_physicochemical_features = True
         self.use_state_features = True
         self.use_env_features = True
+        # 序列衍生理论键离子特征（prefix/suffix mass、b/y 理论 m/z、H2O/NH3-loss、
+        # Pro 上下文等，见 data/theory_features.py）；开启后 bond head 多一路投影
+        self.use_theory_features = False
         # Feature-group progressive addition 的 per-feature mask（True=保留，False=屏蔽）。
         # 维度固定对齐 state=[charge, pep_mass, intensity]、env=[nce, scan_num]。
         # 在 NodeEncoder._encode_state/_encode_environmental 与 GraphBuilder._create_edge_features
