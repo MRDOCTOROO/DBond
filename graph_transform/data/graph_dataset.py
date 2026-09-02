@@ -680,10 +680,16 @@ class CachedGraphDataset(GraphDataset):
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         """获取缓存样本"""
         row = self.data.iloc[idx]
-        
+
         # 提取序列（始终需要，用于模型中氨基酸嵌入）
         sequence = str(row['seq'])
-        
+
+        # 序列衍生理论键离子特征（只依赖 seq，与缓存无关，两个分支统一在此计算）
+        bond_theory = None
+        if _get_config_value(self.config, 'use_theory_features', False):
+            from .theory_features import compute_bond_theory
+            bond_theory = compute_bond_theory(sequence)
+
         if self.cached_data is not None:
             # 完整图缓存命中：直接返回缓存数据，无需重复计算
             cached = self.cached_data[idx]
@@ -708,6 +714,8 @@ class CachedGraphDataset(GraphDataset):
             }
             if 'scan_num' in row.index:
                 sample['scan_num'] = float(row['scan_num'])
+            if bond_theory is not None:
+                sample['bond_theory'] = bond_theory
             return sample
         
         # 无完整图缓存：使用边缓存 + 实时计算 edge_attr
@@ -741,5 +749,7 @@ class CachedGraphDataset(GraphDataset):
         }
         if 'scan_num' in sample_features:
             sample['scan_num'] = sample_features['scan_num']
+        if bond_theory is not None:
+            sample['bond_theory'] = bond_theory
 
         return sample
