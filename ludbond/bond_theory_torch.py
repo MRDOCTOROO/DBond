@@ -61,16 +61,18 @@ class BondTheoryEncoder(torch.nn.Module):
         h2o = torch.zeros(vocab)
         nh3 = torch.zeros(vocab)
         pro = torch.zeros(vocab)
+        # 注意：ludbond 的 seq2index 用 enumerate 原始索引（alphabet[0]=pad_char
+        # → 0，'A'=1...），与 GT 的 char_to_idx(+1) 约定不同，查表必须按 i 填充
         for i, ch in enumerate(alphabet):
             if ch == pad_char:
                 continue
             m = RESIDUE_MONO_MASS.get(ch)
             if m is None:
                 raise ValueError(f"Unknown residue {ch!r} in alphabet {alphabet!r}")
-            mass[i + 1] = m
-            h2o[i + 1] = 1.0 if ch in 'STED' else 0.0
-            nh3[i + 1] = 1.0 if ch in 'NQKR' else 0.0
-            pro[i + 1] = 1.0 if ch == 'P' else 0.0
+            mass[i] = m
+            h2o[i] = 1.0 if ch in 'STED' else 0.0
+            nh3[i] = 1.0 if ch in 'NQKR' else 0.0
+            pro[i] = 1.0 if ch == 'P' else 0.0
         # 1-D 查找表 [vocab]：mass_lut[seq_index] → [B,L]，索引 < vocab 安全
         self.register_buffer('mass_lut', mass)
         self.register_buffer('h2o_lut', h2o)
