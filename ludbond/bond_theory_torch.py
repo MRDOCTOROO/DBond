@@ -71,10 +71,11 @@ class BondTheoryEncoder(torch.nn.Module):
             h2o[i + 1] = 1.0 if ch in 'STED' else 0.0
             nh3[i + 1] = 1.0 if ch in 'NQKR' else 0.0
             pro[i + 1] = 1.0 if ch == 'P' else 0.0
-        self.register_buffer('mass_lut', mass.view(1, vocab))
-        self.register_buffer('h2o_lut', h2o.view(1, vocab))
-        self.register_buffer('nh3_lut', nh3.view(1, vocab))
-        self.register_buffer('pro_lut', pro.view(1, vocab))
+        # 1-D 查找表 [vocab]：mass_lut[seq_index] → [B,L]，索引 < vocab 安全
+        self.register_buffer('mass_lut', mass)
+        self.register_buffer('h2o_lut', h2o)
+        self.register_buffer('nh3_lut', nh3)
+        self.register_buffer('pro_lut', pro)
         self.proj = torch.nn.Linear(BOND_THEORY_DIM, out_dim)
 
     def raw_features(self, seq_index_batch: torch.Tensor, seq_padding_mask_batch: torch.Tensor) -> torch.Tensor:
