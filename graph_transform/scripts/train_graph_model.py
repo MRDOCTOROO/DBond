@@ -242,8 +242,11 @@ def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
         total_depth = int(model_config.get('num_gcn_layers', 0)) + int(model_config.get('num_gat_layers', 0))
         model_config['num_gcn_layers'] = max(total_depth, 1)
         model_config['num_gat_layers'] = 0
-    # 注：gat_only 在 5×GAT 基线下退化为基线本身（num_gcn 已为 0），无需特殊处理，保留标志语义
+    # 与 gcn_only 对称：保持总深度不变（如 3GCN+2GAT → 5GAT），避免层数学不对等的假对比；
+    # 若配置本身已是全 GAT（num_gcn=0）则退化为原样，兼容历史 5×GAT 基线语义。
     elif ablation_config.get('gat_only', False):
+        total_depth = int(model_config.get('num_gcn_layers', 0)) + int(model_config.get('num_gat_layers', 0))
+        model_config['num_gat_layers'] = max(total_depth, 1)
         model_config['num_gcn_layers'] = 0
 
     # (1) w/o Message Passing：双零层，bond head 直接吃 NodeEncoder 输出
