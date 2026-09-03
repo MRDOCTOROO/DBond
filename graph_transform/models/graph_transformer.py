@@ -481,6 +481,39 @@ class GraphTransformer(nn.Module):
             GraphAttentionLayer(config) for _ in range(config.num_gat_layers)
         ])
 
+        # 辅助头（deep supervision / 肽级）：仅训练前向计算并暂存于 last_aux_outputs，
+        # 由 Trainer 取走加辅助损失；eval/inference 路径完全不经过这些分支。
+        self.use_deep_supervision = getattr(config, 'use_deep_supervision', False)
+        self.deep_supervision_layers = list(getattr(config, 'deep_supervision_layers', [1, 3]))
+        self.use_peptide_aux_head = getattr(config, 'use_peptide_aux_head', False)
+        self.last_aux_outputs = None
+        self.aux_layer_set = set(self.deep_supervision_layers) if self.use_deep_supervision else set()
+        if self.use_deep_supervision:
+            invalid = sorted(i for i in self.aux_layer_set if not 0 <= i < config.num_gat_layers)
+            if invalid:
+                raise ValueError(
+                    f"deep_supervision_layers {invalid} 超出 GAT 层索引范围 [0, {config.num_gat_layers})"
+                )
+            # 轻量辅助头：[h_src, h_dst, e_ij] -> 半宽隐层 -> 1 logit（不带 theory/diff/product，保持轻量）
+            self.aux_bond_heads = nn.ModuleDict({
+                str(i): nn.Sequential(
+                    nn.Linear(self.hidden_dim * 3, self.hidden_dim // 2),
+                    nn.ReLU(),
+                    nn.Dropout(config.dropout),
+                    nn.Linear(self.hidden_dim // 2, 1),
+                )
+                for i in sorted(self.aux_layer_set)
+            })
+        if self.use_peptide_aux_head:
+            if not self.use_global_node:
+                raise ValueError("use_peptide_aux_head 依赖 use_global_node=True（肽级表示来自 global node）")
+            self.peptide_head = nn.Sequential(
+                nn.Linear(self.hidden_dim, self.hidden_dim // 2),
+                nn.ReLU(),
+                nn.Dropout(config.dropout),
+                nn.Linear(self.hidden_dim // 2, 1),
+            )
+
         bond_feature_dim = self.hidden_dim * 2
         if self.bond_use_edge_repr:
             bond_feature_dim += self.hidden_dim
@@ -599,7 +632,45 @@ class GraphTransformer(nn.Module):
         if timing_enabled:
             _maybe_sync(node_features.device, True)
             trim_end = time.perf_counter()
-        
+
+        # 键位簿记提前计算：deep supervision 需要在中间层取 bond 特征，主预测头复用
+        # 同一份（bond_src/bond_dst/valid_bond_mask/e_ij 与后文预测块完全一致）。
+        bond_counts = torch.clamp(seq_lens_tensor - 1, min=0)
+        # 优先用 collate 阶段算好的 Python int，避免在 GPU 张量上 .max().item() 同步；
+        # 兼容旧调用路径（未注入该键时回退到逐次同步计算）。
+        precomputed_max_bonds = batch_data.get('max_bonds')
+        if precomputed_max_bonds is not None:
+            max_bonds = int(precomputed_max_bonds)
+        else:
+            max_bonds = int(bond_counts.max().item()) if batch_size > 0 else 0
+        node_offsets = torch.cumsum(
+            torch.cat([node_lens_tensor.new_zeros(1), node_lens_tensor[:-1]], dim=0),
+            dim=0,
+        )
+        bond_src = bond_dst = valid_bond_mask = e_ij = None
+        if max_bonds > 0:
+            bond_positions = torch.arange(max_bonds, device=node_features.device)
+            valid_bond_mask = bond_positions.unsqueeze(0) < bond_counts.unsqueeze(1)
+            bond_src = (node_offsets.unsqueeze(1) + bond_positions.unsqueeze(0))[valid_bond_mask]
+            bond_dst = bond_src + 1
+            if self.bond_use_edge_repr or self.use_deep_supervision:
+                bond_edge_map = batch_data.get('bond_edge_map')
+                if bond_edge_map is not None:
+                    e_ij = edge_features[bond_edge_map.to(device=edge_features.device, dtype=torch.long)]
+                else:
+                    e_ij = self._lookup_edge_features(
+                        batch_data['edge_index'],
+                        edge_features,
+                        bond_src,
+                        bond_dst,
+                        num_nodes=node_features.size(0),
+                    )
+
+        # 辅助头仅在训练前向激活；eval 路径零开销、last_aux_outputs 保持 None
+        aux_active = (self.use_deep_supervision or self.use_peptide_aux_head) and self.training
+        aux_bond_logits = {}
+        self.last_aux_outputs = None
+
         # 图卷积层
         gcn_timings = {}
         for i, gcn_layer in enumerate(self.gcn_layers):
@@ -622,6 +693,12 @@ class GraphTransformer(nn.Module):
                 batch_data['edge_index'],
                 edge_features,
             )
+            if aux_active and i in self.aux_layer_set and bond_src is not None and bond_src.numel() > 0:
+                # deep supervision：该中间层的 bond 特征过轻量辅助头；[N_valid, 1] 的
+                # 行主序展开与 label_mask 展开后的 targets 逐行对齐（两 mask 语义一致）
+                aux_bond_logits[str(i)] = self.aux_bond_heads[str(i)](
+                    torch.cat([node_features[bond_src], node_features[bond_dst], e_ij], dim=-1)
+                )
             if timing_enabled:
                 _maybe_sync(node_features.device, True)
                 gat_timings[f'gat_layer_{i}_total'] = time.perf_counter() - layer_start
@@ -632,41 +709,28 @@ class GraphTransformer(nn.Module):
                     gat_timings[f'gat_layer_{i}_{key}'] = float(value)
         if timing_enabled:
             gat_end = time.perf_counter()
-        
-        # 构建相邻键的特征并预测断裂
-        bond_counts = torch.clamp(seq_lens_tensor - 1, min=0)
-        # 优先用 collate 阶段算好的 Python int，避免在 GPU 张量上 .max().item() 同步；
-        # 兼容旧调用路径（未注入该键时回退到逐次同步计算）。
-        precomputed_max_bonds = batch_data.get('max_bonds')
-        if precomputed_max_bonds is not None:
-            max_bonds = int(precomputed_max_bonds)
-        else:
-            max_bonds = int(bond_counts.max().item()) if batch_size > 0 else 0
+
+        # 肽级辅助头：global node 是每个样本 packed 序列的最后一个有效节点，
+        # 经全部消息传递层后其表示聚合了整肽信息，回归该肽可观测断裂比例
+        peptide_logits = None
+        if aux_active and self.use_peptide_aux_head and batch_size > 0:
+            global_indices = node_offsets + node_lens_tensor - 1
+            peptide_logits = self.peptide_head(node_features[global_indices]).squeeze(-1)
+        if aux_active:
+            aux_out = {}
+            if aux_bond_logits:
+                aux_out['bond_logits'] = aux_bond_logits
+            if peptide_logits is not None:
+                aux_out['peptide_logits'] = peptide_logits
+            self.last_aux_outputs = aux_out
+
+        # 构建相邻键的特征并预测断裂（簿记已在层前计算，直接复用）
         # predictions 容器固定 float32；AMP 下 bond_logits 在赋值处用 .to() 对齐。
         predictions = torch.zeros(batch_size, max_bonds, device=node_features.device)
 
         if max_bonds > 0:
-            bond_positions = torch.arange(max_bonds, device=node_features.device)
-            valid_bond_mask = bond_positions.unsqueeze(0) < bond_counts.unsqueeze(1)
-            node_offsets = torch.cumsum(
-                torch.cat([node_lens_tensor.new_zeros(1), node_lens_tensor[:-1]], dim=0),
-                dim=0,
-            )
-            bond_src = (node_offsets.unsqueeze(1) + bond_positions.unsqueeze(0))[valid_bond_mask]
-            bond_dst = bond_src + 1
             h_src = node_features[bond_src]
             h_dst = node_features[bond_dst]
-            bond_edge_map = batch_data.get('bond_edge_map')
-            if bond_edge_map is not None:
-                e_ij = edge_features[bond_edge_map.to(device=edge_features.device, dtype=torch.long)]
-            else:
-                e_ij = self._lookup_edge_features(
-                    batch_data['edge_index'],
-                    edge_features,
-                    bond_src,
-                    bond_dst,
-                    num_nodes=node_features.size(0),
-                )
             bond_feature_parts = [h_src, h_dst]
             if self.bond_use_edge_repr:
                 bond_feature_parts.append(e_ij)

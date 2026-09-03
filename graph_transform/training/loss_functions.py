@@ -33,6 +33,8 @@ class BinaryBondLoss(nn.Module):
             self.criterion = FocalLoss(config)
         elif self.main_loss == 'dice':
             self.criterion = DiceLoss(config)
+        elif self.main_loss == 'asymmetric':
+            self.criterion = AsymmetricLoss(config)
         else:
             raise ValueError(f"Unknown main loss type: {self.main_loss}")
         
@@ -140,6 +142,37 @@ class FocalLoss(nn.Module):
             return torch.sum(F_loss)
         else:
             return F_loss
+
+
+class AsymmetricLoss(nn.Module):
+    """Asymmetric Loss（ASL, ICCV 2021）用于不平衡多标签二分类。
+
+    正负样本 focusing 参数解耦（gamma_neg > gamma_pos 削弱易负例梯度主导），
+    并对负样本概率做 margin 平移（完全忽略极容易的负例）。
+    对应本任务"0=未观测（弱负标签，可能漏标）"的噪声特性：
+    被压掉的正是那些模型已确信为负的未观测键，训练信号集中于困难负例与正例。
+
+    配置（loss 段）：asl_gamma_pos（默认 0）、asl_gamma_neg（默认 2）、
+    asl_margin（默认 0.05）。
+    """
+
+    def __init__(self, config: Dict[str, Any]):
+        super(AsymmetricLoss, self).__init__()
+        self.gamma_pos = float(config.get('asl_gamma_pos', 0.0))
+        self.gamma_neg = float(config.get('asl_gamma_neg', 2.0))
+        self.margin = float(config.get('asl_margin', 0.05))
+        self.eps = float(config.get('asl_eps', 1e-6))
+
+    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # AMP half 下 pow/log 数值精度不足，统一 float32 计算
+        inputs = inputs.float()
+        targets = targets.float()
+        probs = torch.sigmoid(inputs)
+        # 负样本概率平移：sigmoid(x) - m 后截断到 0，低于 margin 的负例不贡献损失
+        probs_neg = (probs - self.margin).clamp(min=0.0)
+        los_pos = targets * (1.0 - probs).pow(self.gamma_pos) * torch.log(probs.clamp(min=self.eps))
+        los_neg = (1.0 - targets) * probs_neg.pow(self.gamma_neg) * torch.log((1.0 - probs_neg).clamp(min=self.eps))
+        return -(los_pos + los_neg).mean()
 
 
 class DiceLoss(nn.Module):

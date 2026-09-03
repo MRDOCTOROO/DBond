@@ -110,6 +110,8 @@ class Trainer:
         total_weighted_loss = 0.0
         total_valid_bonds = 0
         total_dbond_style_loss = 0.0
+        total_aux_bond_loss = 0.0
+        total_peptide_aux_loss = 0.0
         total_samples = 0
         num_batches = 0
         total_fetch_wait_time = 0.0
@@ -157,6 +159,8 @@ class Trainer:
             total_weighted_loss += loss.item() * valid_bond_count
             total_valid_bonds += valid_bond_count
             total_dbond_style_loss += loss_stats['dbond_style_loss'] * sample_count
+            total_aux_bond_loss += loss_stats.get('aux_bond_loss', 0.0) * sample_count
+            total_peptide_aux_loss += loss_stats.get('peptide_aux_loss', 0.0) * sample_count
             total_samples += sample_count
             num_batches += 1
             total_move_time += move_time
@@ -235,6 +239,8 @@ class Trainer:
         metrics = self.metrics_calculator.compute()
         metrics['loss'] = avg_loss
         metrics['dbond_style_loss'] = total_dbond_style_loss / total_samples if total_samples > 0 else 0.0
+        metrics['aux_bond_loss'] = total_aux_bond_loss / total_samples if total_samples > 0 else 0.0
+        metrics['peptide_aux_loss'] = total_peptide_aux_loss / total_samples if total_samples > 0 else 0.0
         if num_batches > 0:
             metrics['avg_fetch_wait_time'] = total_fetch_wait_time / num_batches
             metrics['avg_move_time'] = total_move_time / num_batches
@@ -403,23 +409,75 @@ class Trainer:
             self._ensure_finite_tensor(predictions, "predictions", batch_data)
             loss = self.criterion(predictions, targets)
 
+        # 辅助头损失（deep supervision + 肽级回归）：模型仅在 train 模式暂存输出
+        loss, aux_stats = self._apply_auxiliary_head_losses(loss, batch_data, targets)
+
         self._ensure_finite_tensor(loss, "loss", batch_data)
         with torch.no_grad():
             dbond_style_loss = self._compute_dbond_style_loss(batch_data, predictions_full, targets_full)
         self._ensure_finite_tensor(dbond_style_loss, "dbond_style_loss", batch_data)
-        
+
         # 更新训练指标
         self.metrics_calculator.update(
             predictions_full,
             targets_full,
             label_mask=batch_data.get('label_mask'),
         )
-        
+
         return loss, {
             'valid_bond_count': int(targets.numel()),
             'sample_count': int(targets_full.shape[0]),
             'dbond_style_loss': float(dbond_style_loss.item()),
+            'aux_bond_loss': aux_stats.get('aux_bond_loss', 0.0),
+            'peptide_aux_loss': aux_stats.get('peptide_aux_loss', 0.0),
         }
+
+    def _apply_auxiliary_head_losses(self,
+                                     loss: torch.Tensor,
+                                     batch_data: Dict[str, Any],
+                                     targets: torch.Tensor) -> tuple[torch.Tensor, Dict[str, float]]:
+        """辅助头损失：中间层 bond 辅助头（复用主 criterion）+ 肽级断裂比例回归头。
+
+        模型仅在 train 模式 forward 时暂存 last_aux_outputs；eval/推理路径为 None，
+        直接返回原 loss（val loss 口径与无辅助头基线严格可比）。
+        """
+        aux = getattr(self.model, 'last_aux_outputs', None)
+        if not aux:
+            return loss, {}
+        loss_config = self.config.get('loss', {})
+        stats: Dict[str, float] = {}
+
+        bond_logits = aux.get('bond_logits') or {}
+        if bond_logits and batch_data.get('label_mask') is not None and targets.numel() > 0:
+            # 辅助头按 valid bond 行主序展平，与 _apply_label_mask 展开的 targets 逐行对齐
+            weight = float(loss_config.get('deep_supervision_weight', 0.25))
+            head_losses = [self.criterion(head_logits.float(), targets) for head_logits in bond_logits.values()]
+            aux_bond_loss = torch.stack(head_losses).mean()
+            loss = loss + weight * aux_bond_loss
+            stats['aux_bond_loss'] = float(aux_bond_loss.item())
+
+        peptide_logits = aux.get('peptide_logits')
+        if peptide_logits is not None and peptide_logits.numel() > 0:
+            weight = float(loss_config.get('peptide_aux_weight', 0.2))
+            ratio_target = self._peptide_cleavage_ratio(batch_data)
+            peptide_pred = torch.sigmoid(peptide_logits.float())
+            peptide_loss = F.mse_loss(peptide_pred, ratio_target)
+            loss = loss + weight * peptide_loss
+            stats['peptide_aux_loss'] = float(peptide_loss.item())
+
+        return loss, stats
+
+    @staticmethod
+    def _peptide_cleavage_ratio(batch_data: Dict[str, Any]) -> torch.Tensor:
+        """每肽可观测断裂比例：有效键标签均值（肽级辅助头的回归目标）。"""
+        labels = batch_data['labels'].float()
+        if labels.size(1) == 0:
+            return labels.new_zeros(labels.size(0))
+        mask = batch_data.get('label_mask')
+        if mask is None:
+            return labels.mean(dim=1)
+        mask = mask.float()
+        return (labels * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
     
     def _backward_pass(self, loss: torch.Tensor):
         """反向传播"""

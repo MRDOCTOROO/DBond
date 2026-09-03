@@ -54,6 +54,13 @@ class ModelConfig:
         # 序列衍生理论键离子特征（prefix/suffix mass、b/y 理论 m/z、H2O/NH3-loss、
         # Pro 上下文等，见 data/theory_features.py）；开启后 bond head 多一路投影
         self.use_theory_features = False
+        # Deep supervision 辅助头：指定 GAT 层索引（0-based）的输出各接一个轻量
+        # bond 预测头，仅训练期参与损失（eval/inference 不计算，不影响推理路径）。
+        self.use_deep_supervision = False
+        self.deep_supervision_layers = [1, 3]
+        # 肽级辅助头：global node 表示回归该肽可观测断裂比例（需 use_global_node=True），
+        # 与 Spearman/Top-K 排序指标对齐，起正则作用；同样仅训练期计算。
+        self.use_peptide_aux_head = False
         # Feature-group progressive addition 的 per-feature mask（True=保留，False=屏蔽）。
         # 维度固定对齐 state=[charge, pep_mass, intensity]、env=[nce, scan_num]。
         # 在 NodeEncoder._encode_state/_encode_environmental 与 GraphBuilder._create_edge_features
