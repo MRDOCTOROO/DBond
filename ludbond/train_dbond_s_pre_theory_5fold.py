@@ -4,7 +4,7 @@
 (zero_fill intensity/scan_num), 结果写到 result/cv/dbond_s_pre_theory/, 不与 dbond_s 混。
 
 用法(云端):
-  python ludbond/train_dbond_s_pre_5fold.py --config ludbond/dbond_s_config/pre.yaml \
+  python ludbond/train_dbond_s_pre_theory_5fold.py --config ludbond/dbond_s_config/pre.yaml \
       --fold_data_dir dataset/5fold
   python ludbond/train_dbond_s_pre_5fold.py --folds 1222   # 调试单 fold
 
@@ -21,7 +21,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 # DBond-s 单标签 fold 文件后缀(与 dbond_s 相同数据)
 TRAIN_SUFFIX = '.train.shuffle.csv'
 TEST_SUFFIX  = '.test.csv'
-MODEL_NAME   = 'dbond_s_pre'
+MODEL_NAME   = 'dbond_s_pre_theory'
 # 默认配置相对本脚本目录解析(CWD 无关; run_5fold 按 CWD 打开相对路径会踩坑)
 DEFAULT_CONFIG = os.path.join(_THIS_DIR, 'dbond_s_config', 'pre_theory.yaml')
 
