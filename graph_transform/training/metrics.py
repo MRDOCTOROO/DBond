@@ -324,7 +324,10 @@ class BinaryBondMetrics:
             else:
                 label_mask = np.asarray(label_mask).astype(bool)
 
-        for pred_row, target_row, mask_row in zip(predictions, targets, label_mask):
+        soft_rows = None
+        if soft_targets is not None and np.asarray(soft_targets).shape == targets.shape:
+            soft_rows = np.asarray(soft_targets, dtype=np.float32)
+        for row_idx, (pred_row, target_row, mask_row) in enumerate(zip(predictions, targets, label_mask)):
             mask_row = mask_row.astype(bool)
             valid_pred = pred_row[mask_row].reshape(-1)
             valid_target = target_row[mask_row].reshape(-1).astype(np.int32)
@@ -334,8 +337,8 @@ class BinaryBondMetrics:
                 self.all_valid_predictions.append(valid_pred)
                 self.all_valid_targets.append(valid_target)
             # q 软目标与 realized 同一 mask 展开（逐行对齐）；缺失记 None
-            if soft_targets is not None and soft_targets.shape == targets.shape:
-                valid_soft = np.asarray(soft_targets, dtype=np.float32)[mask_row].reshape(-1)
+            if soft_rows is not None:
+                valid_soft = soft_rows[row_idx][mask_row].reshape(-1)
                 self.sample_soft_targets.append(valid_soft)
                 if valid_pred.size > 0:
                     self.all_valid_soft.append(valid_soft)
