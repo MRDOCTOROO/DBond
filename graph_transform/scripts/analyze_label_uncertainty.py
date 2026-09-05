@@ -180,9 +180,9 @@ def main() -> None:
                 sub = mat[idxs]
                 kg = sub.sum(axis=0)
                 loo_cond[np.asarray(idxs)] = (kg[None, :] - sub) / (m - 1.0)
-        y_chunks.append(mat)
-        p_chunks.append(loo)
-        pc_chunks.append(loo_cond)
+        y_chunks.append(mat.ravel())
+        p_chunks.append(loo.ravel())
+        pc_chunks.append(loo_cond.ravel())
 
     within_vars = np.concatenate(within_vars)
     entropies = np.concatenate(entropies)
