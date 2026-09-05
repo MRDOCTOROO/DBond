@@ -43,9 +43,12 @@ def load_rows(paths):
     frames = [pd.read_csv(p, usecols=["seq", "charge", "nce", "true_multi"]) for p in paths]
     frame = pd.concat(frames, ignore_index=True)
     frame["label_vec"] = frame["true_multi"].map(parse_labels)
-    bad = frame["label_vec"].map(lambda v: v.size != max(len(str(s)) - 1, 0))
-    if bad.any():
-        raise ValueError(f"{int(bad.sum())} rows with |true_multi| != len(seq)-1")
+    bad = sum(
+        1 for lv, seq in zip(frame["label_vec"], frame["seq"])
+        if lv.size != max(len(str(seq)) - 1, 0)
+    )
+    if bad:
+        raise ValueError(f"{bad} rows with |true_multi| != len(seq)-1")
     return frame
 
 
