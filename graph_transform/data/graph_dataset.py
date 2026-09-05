@@ -63,9 +63,22 @@ class GraphDataset(Dataset):
         self.augmentation = augmentation
         self.split = split
         self.env_feature_name = _get_config_value(config, 'env_feature_name', 'rt')
-        
+
+        # q 软标签：读取 soft_multi 列（precompute_soft_labels.py 预计算的条件均值）。
+        # 增强会重排/修改序列与标签，软标签无法对齐，二者互斥。
+        self.use_soft_labels = bool(_get_config_value(config, 'use_soft_labels', False))
+        if self.use_soft_labels and self.augmentation and split == 'train':
+            raise ValueError("use_soft_labels 与数据增强互斥（增强后软标签无法对齐）")
+
         # 加载数据
         self.data = self._load_data()
+
+        if self.use_soft_labels:
+            if 'soft_multi' not in self.data.columns:
+                # 未预计算的 CSV（如 test 文件）自动回退 realized 标签：评估口径不变
+                print(f"[soft] {os.path.basename(str(csv_path))} 无 soft_multi 列，"
+                      f"soft_labels 回退为 realized 标签")
+                self.use_soft_labels = False
         
         # 初始化组件
         self.graph_builder = SequenceGraphBuilder(config)
@@ -136,6 +149,13 @@ class GraphDataset(Dataset):
         # 准备标签
         label_tensor = self._prepare_labels(labels, len(sequence))
 
+        # q 软标签（条件均值，precompute_soft_labels.py 预计算）
+        soft_tensor = None
+        if self.use_soft_labels and 'soft_multi' in row.index and not pd.isna(row['soft_multi']):
+            soft = self._parse_soft_labels(str(row['soft_multi']))
+            if soft:
+                soft_tensor = self._prepare_labels(soft, len(sequence))
+
         # 序列衍生理论键离子特征（use_theory_features 开关控制，默认关闭）
         bond_theory = None
         if _get_config_value(self.config, 'use_theory_features', False):
@@ -166,6 +186,8 @@ class GraphDataset(Dataset):
             sample['scan_num'] = sample_features['scan_num']
         if bond_theory is not None:
             sample['bond_theory'] = bond_theory
+        if soft_tensor is not None:
+            sample['soft_labels'] = soft_tensor
 
         return sample
 
@@ -189,10 +211,23 @@ class GraphDataset(Dataset):
         """解析多标签字符串"""
         if pd.isna(label_str) or label_str == '':
             return []
-        
+
         # 解析分号分隔的多标签
         labels = [int(x.strip()) for x in str(label_str).split(';') if x.strip().isdigit()]
         return labels
+
+    def _parse_soft_labels(self, label_str: str) -> List[float]:
+        """解析 q 软标签字符串（分号分隔的 [0,1] 浮点，条件均值）。
+
+        与 _parse_labels 不同：不做 isdigit 过滤（0.13 这类浮点 token 合法）。
+        """
+        if pd.isna(label_str) or label_str == '':
+            return []
+        toks = [x.strip() for x in str(label_str).split(';') if x.strip() != '']
+        try:
+            return [float(x) for x in toks]
+        except ValueError:
+            return []
     
     def _prepare_labels(self, labels: List[int], seq_len: int) -> torch.Tensor:
         """准备断裂位置标签张量（序列相邻键）"""
@@ -354,6 +389,17 @@ class GraphDataLoader:
             batch_labels = torch.zeros((batch_size, 0), dtype=torch.float32)
             batch_label_masks = torch.zeros((batch_size, 0), dtype=torch.float32)
 
+        # q 软标签（use_soft_labels 且样本带 soft_labels 时）：与 labels 同键位零填充。
+        # 混合批（部分有部分无）视为数据错误，直接报错。
+        soft_list = [item.get('soft_labels') for item in batch]
+        has_soft = [s is not None for s in soft_list]
+        batch_soft_labels = None
+        if any(has_soft):
+            if not all(has_soft):
+                raise ValueError("batch 内 soft_labels 缺失不一致（检查 CSV 的 soft_multi 列是否完整）")
+            if max_bonds > 0:
+                batch_soft_labels = pad_sequence(soft_list, batch_first=True, padding_value=0.0)
+
         # 理论键离子特征（use_theory_features 时存在）：[B, max_bonds, D]，
         # 与 labels/label_mask 的键位对齐
         theory_list = [item['bond_theory'] for item in batch if 'bond_theory' in item]
@@ -391,6 +437,8 @@ class GraphDataLoader:
         }
         if batch_bond_theory is not None:
             batch_data['bond_theory'] = batch_bond_theory
+        if batch_soft_labels is not None:
+            batch_data['soft_labels'] = batch_soft_labels
 
         return batch_data
     
@@ -609,9 +657,16 @@ class CachedGraphDataset(GraphDataset):
         """CSV 内容指纹：路径 + 行数 + seq/label 列的哈希（不读全文件，秒级完成）。"""
         import hashlib
         frame = self.data
-        joined = "\n".join(
-            f"{seq}|{label}" for seq, label in zip(frame['seq'].astype(str), frame['true_multi'].astype(str))
-        )
+        # soft 列参与指纹：软标签 CSV 与原 CSV 必须生成不同缓存
+        if 'soft_multi' in frame.columns:
+            joined = "\n".join(
+                f"{seq}|{label}|{soft}" for seq, label, soft in zip(
+                    frame['seq'].astype(str), frame['true_multi'].astype(str), frame['soft_multi'].astype(str))
+            )
+        else:
+            joined = "\n".join(
+                f"{seq}|{label}" for seq, label in zip(frame['seq'].astype(str), frame['true_multi'].astype(str))
+            )
         digest = hashlib.sha1(joined.encode("utf-8")).hexdigest()
         return {"path": str(self.csv_path), "n_rows": int(len(frame)), "sha1": digest[:16]}
 
@@ -664,6 +719,7 @@ class CachedGraphDataset(GraphDataset):
                 'edge_distances': sample['edge_distances'],
                 'bond_edge_map': sample['bond_edge_map'],
                 'labels': sample['labels'],
+                'soft_labels': sample.get('soft_labels'),
                 'state_vars': sample['state_vars'],
                 'env_vars': sample['env_vars'],
                 'seq_len': sample['seq_len'],
@@ -716,15 +772,25 @@ class CachedGraphDataset(GraphDataset):
                 sample['scan_num'] = float(row['scan_num'])
             if bond_theory is not None:
                 sample['bond_theory'] = bond_theory
+            cached_soft = cached.get('soft_labels')
+            if self.use_soft_labels and cached_soft is not None:
+                sample['soft_labels'] = cached_soft
             return sample
         
         # 无完整图缓存：使用边缓存 + 实时计算 edge_attr
         labels = self._parse_labels(str(row['true_multi']))
         sample_features, secondary_env_value = self._extract_sample_features(row)
-        
+
         graph_data = self.graph_builder.build_graph(sequence, sample_features, self.graph_strategy)
         label_tensor = self._prepare_labels(labels, len(sequence))
-        
+
+        # q 软标签（与 GraphDataset 主路径同逻辑）
+        soft_tensor = None
+        if self.use_soft_labels and 'soft_multi' in row.index and not pd.isna(row['soft_multi']):
+            soft = self._parse_soft_labels(str(row['soft_multi']))
+            if soft:
+                soft_tensor = self._prepare_labels(soft, len(sequence))
+
         sample = {
             'sequence': sequence,
             'edge_index': graph_data['edge_index'],
@@ -751,5 +817,7 @@ class CachedGraphDataset(GraphDataset):
             sample['scan_num'] = sample_features['scan_num']
         if bond_theory is not None:
             sample['bond_theory'] = bond_theory
+        if soft_tensor is not None:
+            sample['soft_labels'] = soft_tensor
 
         return sample

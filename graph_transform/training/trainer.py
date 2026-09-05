@@ -401,16 +401,17 @@ class Trainer:
                 targets_full = batch_data['labels']
                 targets, predictions = self._apply_label_mask(batch_data, targets_full, predictions_full)
                 self._ensure_finite_tensor(predictions, "predictions", batch_data)
-                loss = self.criterion(predictions, targets)
+                loss = self.criterion(predictions, self._soft_targets(batch_data, targets))
         else:
             predictions_full = self.model(batch_data)
             targets_full = batch_data['labels']
             targets, predictions = self._apply_label_mask(batch_data, targets_full, predictions_full)
             self._ensure_finite_tensor(predictions, "predictions", batch_data)
-            loss = self.criterion(predictions, targets)
+            loss = self.criterion(predictions, self._soft_targets(batch_data, targets))
 
-        # 辅助头损失（deep supervision + 肽级回归）：模型仅在 train 模式暂存输出
-        loss, aux_stats = self._apply_auxiliary_head_losses(loss, batch_data, targets)
+        # 辅助头损失（deep supervision + 肽级回归）：模型仅在 train 模式暂存输出；
+        # bond 辅助头同样吃软目标（BCE/Focal/ASL 逐元素项天然支持 [0,1] 目标）
+        loss, aux_stats = self._apply_auxiliary_head_losses(loss, batch_data, self._soft_targets(batch_data, targets))
 
         self._ensure_finite_tensor(loss, "loss", batch_data)
         with torch.no_grad():
@@ -431,6 +432,18 @@ class Trainer:
             'aux_bond_loss': aux_stats.get('aux_bond_loss', 0.0),
             'peptide_aux_loss': aux_stats.get('peptide_aux_loss', 0.0),
         }
+
+    def _soft_targets(self, batch_data: Dict[str, Any], targets: torch.Tensor) -> torch.Tensor:
+        """q 软标签存在时返回掩码后的软目标（同 label_mask 口径），否则原 realized 目标。
+
+        软标签来自 (seq,charge,nce) 组内谱图均值（precompute_soft_labels.py），
+        只影响训练损失；验证/评估仍用 realized 标签，口径与历史 run 可比。
+        """
+        soft = batch_data.get('soft_labels')
+        if soft is None:
+            return targets
+        soft_masked, _ = self._apply_label_mask(batch_data, soft, soft)
+        return soft_masked if soft_masked is not None else targets
 
     def _apply_auxiliary_head_losses(self,
                                      loss: torch.Tensor,
@@ -469,8 +482,11 @@ class Trainer:
 
     @staticmethod
     def _peptide_cleavage_ratio(batch_data: Dict[str, Any]) -> torch.Tensor:
-        """每肽可观测断裂比例：有效键标签均值（肽级辅助头的回归目标）。"""
-        labels = batch_data['labels'].float()
+        """每肽可观测断裂比例：有效键标签均值（肽级辅助头的回归目标）。
+
+        优先用软标签（组内均值的均值，比单谱 realized 的方差更小）。
+        """
+        labels = batch_data.get('soft_labels', batch_data['labels']).float()
         if labels.size(1) == 0:
             return labels.new_zeros(labels.size(0))
         mask = batch_data.get('label_mask')

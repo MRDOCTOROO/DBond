@@ -36,7 +36,8 @@ _TERMINAL_LINE_RE = re.compile(
 _PRINT_LOCK = threading.Lock()
 
 
-def run_fold(gpu: int, fold_id: str, config_path: str, cv_root: str, work_root: str) -> None:
+def run_fold(gpu: int, fold_id: str, config_path: str, cv_root: str, work_root: str,
+             fold_data_dir: str = "") -> None:
     """在指定 GPU 上跑单个 fold，产物落入共享 cv_root（标准结构）。
 
     子进程输出实时流式转发：关键行（epoch 汇总/异常）带 [f<折>] 前缀打到
@@ -52,6 +53,9 @@ def run_fold(gpu: int, fold_id: str, config_path: str, cv_root: str, work_root: 
         "--cv_root", cv_root,
         "--summary_suffix", f".fold_{fold_id}",
     ]
+    if fold_data_dir:
+        # 软标签等变体数据目录（precompute_soft_labels.py 生成）
+        cmd += ["--fold_data_dir", fold_data_dir]
     with _PRINT_LOCK:
         print(f"[parallel] gpu={gpu} fold={fold_id} start {time.strftime('%H:%M:%S')} log={log_path}", flush=True)
     with open(log_path, "w", encoding="utf-8") as log_f, \
@@ -95,6 +99,7 @@ def main() -> None:
     ap.add_argument("--config", required=True)
     ap.add_argument("--gpus", default="0,1,2,3", help="逗号分隔 GPU 列表")
     ap.add_argument("--folds", default=",".join(FOLDS), help="逗号分隔 fold 列表（默认 5 折）")
+    ap.add_argument("--fold_data_dir", default="", help="折数据目录变体（如 dataset/5fold_soft，软标签版）")
     args = ap.parse_args()
 
     gpus = [int(x) for x in args.gpus.split(",") if x.strip()]
@@ -124,7 +129,7 @@ def main() -> None:
         batch, pending = pending[: len(gpus)], pending[len(gpus):]
         # 每轮并行启动（每卡一折，线程池仅做调度，实际训练是独立子进程）
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(batch)) as ex:
-            futures = {ex.submit(run_fold, gpu, fold, args.config, cv_root, work_root): fold
+            futures = {ex.submit(run_fold, gpu, fold, args.config, cv_root, work_root, args.fold_data_dir): fold
                        for gpu, fold in zip(gpus, batch)}
             for fut in concurrent.futures.as_completed(futures):
                 fold = futures[fut]
