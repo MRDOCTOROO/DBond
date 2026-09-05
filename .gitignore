@@ -123,3 +123,7 @@ ludbondaf/checkpoint/*
 state/
 
 docs/*
+
+# agent 入口文件仅本地使用，不入库
+/CLAUDE.md
+/AGENTS.md

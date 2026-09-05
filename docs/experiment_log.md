@@ -182,3 +182,80 @@ delta 对比需先补跑 `python run_models_parallel.py -m dbond_s_pre dbond_m_p
 4. GATv2 / bond-centric graph（结构侧候选，单变量逐个来）
 5. 5 折 ensemble 推理（5 个 best_model 概率平均，零训练成本）
 6. 补跑 4 个 ludbond pre 基线（与 pre_theory 配对算 delta）
+
+## 12. 运行手册（pod 项目根目录，.venv/bin/python）
+
+> `scripts/run_ablation_queue.sh`（旧单卡消融编排）已删除。它做的事：读
+> `graph_transform/config/default.yaml` → 内嵌 python 在内存重置 ablation 段只开
+> 一个开关 → 写 /tmp 临时 YAML → `CUDA_VISIBLE_DEVICES=<N> python
+> graph_transform/scripts/train_5fold.py --config /tmp/xxx.yaml` 单卡顺序跑五折 →
+> cat 最新 `checkpoints/graph_transform/5fold/*/5fold_summary.csv`。以下 A/B 是现行替代。
+
+### A. 单配置五折（现行标准，替代旧编排的核心路径）
+
+1. **写配置**：复制最接近的基线 YAML（如 `graph_transform/config/pre_synthesis_5fold_md6.yaml`），
+   改三处——`ablation` 段只开目标开关（互斥校验一次只许一个）、输出目录加后缀
+   （`training.checkpoint_dir` / `evaluation.output_*_dir` / `logging.*_dir`）、
+   `experiment.name`。消融模板参考 `graph_transform/config/archive/ablation_*.yaml`。
+2. **跑**（折级并行，每卡一折，4 卡两轮；终端实时流式带 [f折] 前缀）：
+   ```bash
+   .venv/bin/python graph_transform/scripts/train_5fold_parallel.py \
+       --config graph_transform/config/<你的>.yaml --gpus 0,1,2,3
+   ```
+   数据目录变体（如 q 软标签）加 `--fold_data_dir dataset/5fold_soft`。
+3. **看结果**：`<checkpoint_dir>/<tag>/5fold/<时间戳>/5fold_summary.csv`
+   （标准三件套 metrics/summary/aggregate）。
+4. 图缓存：配置里 `ablation.rebuild_cache: true`（默认开）即等价于旧脚本的清缓存逻辑；
+   手动清理删 `cache/graph_data/*.pt`。
+
+### B. 多配置并行（模型级，一卡一任务）
+
+```bash
+.venv/bin/python graph_transform/scripts/run_experiments_parallel.py \
+    --jobs "名字1:config/一.yaml;名字2:config/二.yaml" --gpus 0,1,2,3
+```
+
+### C. ludbond 四基线矩阵（1D 模型）
+
+```bash
+.venv/bin/python run_models_parallel.py -m dbond_s_pre dbond_m_pre dbond_af_pre dbond_af_opt_pre --gpus 0,1,2,3
+# 理论特征版把 _pre 换成 _pre_theory
+```
+
+### D. q 软标签全流程
+
+```bash
+.venv/bin/python graph_transform/scripts/precompute_soft_labels.py \
+    --fold_dir dataset/5fold --out_fold_dir dataset/5fold_soft
+.venv/bin/python graph_transform/scripts/train_5fold_parallel.py \
+    --config graph_transform/config/pre_synthesis_5fold_md6_theory_gat_aux_soft.yaml \
+    --fold_data_dir dataset/5fold_soft --gpus 0,1,2,3
+```
+
+### E. 断点续跑 / 只重建汇总
+
+- 中断后续跑：原命令重跑即可，train_5fold 自动跳过已完成折
+  （判定 `best_model.pt` + `latest_test_metric.csv` 同时存在）。
+- 只重汇总：`--cv_root <目录> --aggregate_only`。
+
+### F. 评估与推理
+
+- 加载权重补评估（如给旧 run 在 5fold_soft test 上补 q 口径基线）：
+  `.venv/bin/python graph_transform/scripts/evaluate_graph_model.py --config <yaml> --model_path <best_model.pt>`
+- 合成前候选序列打分（R-01 应用入口）：
+  `.venv/bin/python graph_transform/scripts/score_presynthesis.py --config <yaml> --checkpoint <best_model.pt> --sequences cand.txt --output_dir result/presynthesis`
+  （可设 `--charges` / `--nces` 预设条件网格）
+- 标签不确定性分析：
+  `.venv/bin/python graph_transform/scripts/analyze_label_uncertainty.py --inputs dataset/5fold/1222.train.fbr.shuffle.multi.csv dataset/5fold/1222.test.fbr.multi.csv`
+
+## 13. 仓库整理记录（2026-09-05，commit 9f59081+）
+
+- 删除：`mini_ghtrans/`（41 文件最小验证原型）、`arc_dbond/`（13 文件，ludbond 子集）、
+  `mgf_cover.py`、`train_5fold copy.py`、`default copy.yaml`、`train_with_preprocessed.py`、
+  `test_preprocessing.py`、7 个旧默认输出 CSV、`scripts/run_ablation_queue.sh`（功能并入 §12 手册）。
+- 归档：`plans/` → `docs/plans/`；历史 config 4 个 → `graph_transform/config/archive/`。
+- 图件：顶层 12 个 PNG/drawio/svg → `figures/`（drawio 受 `*.drawio` ignore 的保持本地未跟踪）。
+- 仅取消跟踪（本地保留）：`.claude/`、`.kilo/`、`.zcode/` 会话文件、`CLAUDE.md`、`AGENTS.md`
+  （后两者加入 .gitignore；pod 侧 pull 后会从工作区移除，不影响训练）。
+- 保留待议：6 个孤立分析脚本（cross_validation_analysis 等）、`graph_transform/outputs/graph_viz/`
+  （visualize_sample_graph.py 的可视化产物）、`.drawio-tmp/`（图表生成中间产物）。
