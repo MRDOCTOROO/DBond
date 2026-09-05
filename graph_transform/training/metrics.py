@@ -64,6 +64,17 @@ TASK_EXTRA_METRIC_ORDER = (
     "class_0_precision",
     "class_0_recall",
     "class_0_f1",
+    # expected-behavior 口径（vs q 软标签，仅当 soft targets 可得时输出）：
+    # q 软标签的价值在候选序列排序能力，而非复现单张谱图的随机 0/1。
+    "q_brier",
+    "q_mae",
+    "q_rmse",
+    "q_pearson",
+    "q_spearman",
+    "q_spearman_pep",
+    "q_ndcg",
+    "q_top10_enrichment",
+    "q_top20_enrichment",
     "avg_fetch_wait_time",
     "avg_move_time",
     "avg_forward_time",
@@ -261,6 +272,9 @@ class BinaryBondMetrics:
         self.all_valid_targets: List[np.ndarray] = []
         self.sample_predictions: List[np.ndarray] = []
         self.sample_targets: List[np.ndarray] = []
+        # q 软目标（expected-behavior 口径）：逐样本与扁平化累积，与 realized 同一 valid 展开序
+        self.sample_soft_targets: List[np.ndarray] = []
+        self.all_valid_soft: List[np.ndarray] = []
         # 缓存最近一次 compute() 得到的扁平化概率与标签，供 evaluator 计算校准指标
         # (ECE/Brier) 和外部诊断使用。每次 compute() 都会覆盖。
         self.last_probabilities: np.ndarray = np.array([], dtype=np.float32)
@@ -272,6 +286,7 @@ class BinaryBondMetrics:
         targets: torch.Tensor,
         label_mask: torch.Tensor | None = None,
         from_logits: bool = True,
+        soft_targets: torch.Tensor | None = None,
     ):
         """累积一个 batch 的预测。
 
@@ -281,6 +296,8 @@ class BinaryBondMetrics:
             targets: 与 predictions 同形状的标签。
             label_mask: 有效 bond 掩码（True=参与统计）。
             from_logits: 输入是否为 logits。
+            soft_targets: 可选的 q 软标签（同形状，[0,1] 条件均值）。提供时
+                compute() 额外输出 expected-behavior 口径指标（q_*）。
         """
         if isinstance(predictions, torch.Tensor):
             predictions = predictions.detach().cpu().numpy()
@@ -288,6 +305,8 @@ class BinaryBondMetrics:
             targets = targets.detach().cpu().numpy()
         if isinstance(label_mask, torch.Tensor):
             label_mask = label_mask.detach().cpu().numpy()
+        if isinstance(soft_targets, torch.Tensor):
+            soft_targets = soft_targets.detach().cpu().numpy()
 
         predictions = np.asarray(predictions)
         targets = np.asarray(targets)
@@ -314,6 +333,14 @@ class BinaryBondMetrics:
             if valid_pred.size > 0:
                 self.all_valid_predictions.append(valid_pred)
                 self.all_valid_targets.append(valid_target)
+            # q 软目标与 realized 同一 mask 展开（逐行对齐）；缺失记 None
+            if soft_targets is not None and soft_targets.shape == targets.shape:
+                valid_soft = np.asarray(soft_targets, dtype=np.float32)[mask_row].reshape(-1)
+                self.sample_soft_targets.append(valid_soft)
+                if valid_pred.size > 0:
+                    self.all_valid_soft.append(valid_soft)
+            else:
+                self.sample_soft_targets.append(None)
 
     def compute(self) -> Dict[str, float]:
         if not self.sample_predictions or not self.sample_targets:
@@ -390,10 +417,83 @@ class BinaryBondMetrics:
         metrics["auc_micro"] = auc
         metrics["auc_weighted"] = auc
         metrics.update(self._compute_peptide_ranking_metrics())
+        metrics.update(self._compute_expected_behavior_metrics(valid_probabilities))
         metrics["class_0_precision"] = metrics["precision"]
         metrics["class_0_recall"] = metrics["recall"]
         metrics["class_0_f1"] = metrics["f1"]
         return order_binary_bond_metric_dict(metrics)
+
+    def _compute_expected_behavior_metrics(self, flat_probabilities: np.ndarray) -> Dict[str, float]:
+        """expected-behavior 口径：模型概率 vs q 软标签（条件均值）。
+
+        q 来自 (seq,charge,nce) 组内谱图平均（precompute_soft_labels.py），
+        代表"期望断裂行为"；该口径衡量候选序列排序/筛选能力，而非复现
+        单张谱图的随机 0/1 实现。仅在 update 提供过 soft_targets 时输出。
+
+        bond 级：q_brier / q_mae / q_rmse / q_pearson / q_spearman；
+        肽级（每肽概率均值 vs q 均值）：q_spearman_pep / q_ndcg /
+        q_top10/20_enrichment（前 K% 预测肽的真实 q 均值 / 全体 q 均值）。
+        """
+        if not self.all_valid_soft:
+            return {}
+        flat_q = np.concatenate(self.all_valid_soft, axis=0).astype(np.float64)
+        if flat_q.size != flat_probabilities.size:
+            logger.warning("q soft targets 尺寸与预测不一致（%d vs %d），跳过 q 口径",
+                           flat_q.size, flat_probabilities.size)
+            return {}
+        p = flat_probabilities.astype(np.float64)
+        result: Dict[str, float] = {}
+        diff = p - flat_q
+        result["q_brier"] = float(np.mean(diff ** 2))
+        result["q_mae"] = float(np.mean(np.abs(diff)))
+        result["q_rmse"] = float(np.sqrt(result["q_brier"]))
+        if np.std(p) > EPSILON and np.std(flat_q) > EPSILON:
+            result["q_pearson"] = float(np.corrcoef(p, flat_q)[0, 1])
+            try:
+                from scipy.stats import spearmanr
+                rho = float(spearmanr(p, flat_q).statistic)
+                result["q_spearman"] = rho if np.isfinite(rho) else 0.0
+            except Exception:
+                result["q_spearman"] = 0.0
+        else:
+            result["q_pearson"] = 0.0
+            result["q_spearman"] = 0.0
+
+        # 肽级：样本 = 一张谱图（一个 (seq,charge,nce) 条件行），分数 = 概率均值 vs q 均值
+        pred_ratios, true_ratios = [], []
+        for logit_row, soft_row in zip(self.sample_predictions, self.sample_soft_targets):
+            if soft_row is None or logit_row.size == 0:
+                continue
+            pred_ratios.append(float(_to_probabilities(logit_row.astype(np.float32), from_logits=True).mean()))
+            true_ratios.append(float(np.mean(soft_row)))
+        n = len(pred_ratios)
+        defaults = {"q_spearman_pep": 0.0, "q_ndcg": 0.0,
+                    "q_top10_enrichment": 0.0, "q_top20_enrichment": 0.0}
+        if n < 2:
+            result.update(defaults)
+            return result
+        pred_arr = np.asarray(pred_ratios, dtype=np.float64)
+        true_arr = np.asarray(true_ratios, dtype=np.float64)
+        try:
+            from scipy.stats import spearmanr
+            rho = float(spearmanr(pred_arr, true_arr).statistic)
+            result["q_spearman_pep"] = rho if np.isfinite(rho) else 0.0
+        except Exception:
+            result["q_spearman_pep"] = 0.0
+        # NDCG（graded gain = 每肽 q 均值，按预测分数降序）
+        order_pred = np.argsort(-pred_arr, kind="mergesort")
+        gains = true_arr[order_pred]
+        dcg = float(np.sum(gains / np.log2(np.arange(2, n + 2))))
+        ideal = np.sort(true_arr)[::-1]
+        idcg = float(np.sum(ideal / np.log2(np.arange(2, n + 2))))
+        result["q_ndcg"] = dcg / idcg if idcg > 0 else 0.0
+        # Top-K% enrichment：前 K% 预测肽的平均真实 q / 全体平均 q（>1 即有富集）
+        overall = float(np.mean(true_arr))
+        for k_pct in (10, 20):
+            n_k = max(1, int(round(k_pct / 100.0 * n)))
+            topk_mean = float(np.mean(true_arr[order_pred[:n_k]]))
+            result[f"q_top{k_pct}_enrichment"] = topk_mean / overall if overall > EPSILON else 0.0
+        return result
 
     def _compute_peptide_ranking_metrics(self) -> Dict[str, float]:
         """肽级排名指标（对齐 R-01 pre-synthesis 用法，阈值无关）。
@@ -468,6 +568,8 @@ class BinaryBondMetrics:
         self.all_valid_targets = []
         self.sample_predictions = []
         self.sample_targets = []
+        self.sample_soft_targets = []
+        self.all_valid_soft = []
         self.last_probabilities = np.array([], dtype=np.float32)
         self.last_targets = np.array([], dtype=np.int32)
 

@@ -346,11 +346,12 @@ class Trainer:
                 # 计算损失
                 loss = self.criterion(predictions, targets)
                 
-                # 更新指标
+                # 更新指标（提供 q 软目标时同步输出 expected-behavior 口径）
                 self.metrics_calculator.update(
                     predictions_full,
                     targets_full,
                     label_mask=batch_data.get('label_mask'),
+                    soft_targets=batch_data.get('soft_labels'),
                 )
                 total_loss += loss.item()
                 num_batches += 1
@@ -418,11 +419,12 @@ class Trainer:
             dbond_style_loss = self._compute_dbond_style_loss(batch_data, predictions_full, targets_full)
         self._ensure_finite_tensor(dbond_style_loss, "dbond_style_loss", batch_data)
 
-        # 更新训练指标
+        # 更新训练指标（提供 q 软目标时同步输出 expected-behavior 口径）
         self.metrics_calculator.update(
             predictions_full,
             targets_full,
             label_mask=batch_data.get('label_mask'),
+            soft_targets=batch_data.get('soft_labels'),
         )
 
         return loss, {

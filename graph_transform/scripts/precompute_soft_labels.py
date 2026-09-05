@@ -7,8 +7,10 @@ P(y | seq, charge, nce) 的一次含噪实现；直接拿它训练会让梯度�
 软标签 q_{s,c,i} = 同 (seq,charge,nce) 组内第 i 键的平均断裂率，正是 pre 特征集
 （序列+charge+nce）下的贝叶斯最优回归目标。
 
-防泄漏：q 只从每折自己的 train 文件计算；test 文件原样复制（评估口径不变，
-仍用 realized 标签）。组内只有 1 张谱图时退化为 realized 标签本身。
+防泄漏：q 只从每折自己的 train 文件计算（训练侧）；test 文件同样写入
+soft_multi（q 由 test 折自身谱图聚合，纯评估侧的期望行为真值，不参与
+训练），供 expected-behavior 口径指标（q_*）使用。realized 标签列
+true_multi 全程不动。组内只有 1 张谱图时退化为 realized 标签本身。
 
 用法（pod，项目根目录）：
     .venv/bin/python graph_transform/scripts/precompute_soft_labels.py \
@@ -20,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import sys
 
 import numpy as np
@@ -74,32 +75,32 @@ def main() -> None:
     folds = args.folds.split(",") if args.folds else discover_folds(args.fold_dir)
 
     for fold in folds:
-        train_path = os.path.join(args.fold_dir, f"{fold}{TRAIN_SUFFIX}")
-        test_path = os.path.join(args.fold_dir, f"{fold}{TEST_SUFFIX}")
-        out_train = os.path.join(args.out_fold_dir, f"{fold}{TRAIN_SUFFIX}")
-        out_test = os.path.join(args.out_fold_dir, f"{fold}{TEST_SUFFIX}")
+        for path, out_path in (
+            (os.path.join(args.fold_dir, f"{fold}{TRAIN_SUFFIX}"),
+             os.path.join(args.out_fold_dir, f"{fold}{TRAIN_SUFFIX}")),
+            (os.path.join(args.fold_dir, f"{fold}{TEST_SUFFIX}"),
+             os.path.join(args.out_fold_dir, f"{fold}{TEST_SUFFIX}")),
+        ):
+            frame = pd.read_csv(path)
+            bad = sum(
+                1 for lv, seq in zip(frame["true_multi"], frame["seq"])
+                if len(str(lv).strip().split(";")) != max(len(str(seq)) - 1, 0)
+            )
+            if bad:
+                raise ValueError(f"fold {fold} {os.path.basename(path)}: {bad} rows |true_multi| != len(seq)-1")
 
-        frame = pd.read_csv(train_path)
-        bad = sum(
-            1 for lv, seq in zip(frame["true_multi"], frame["seq"])
-            if len(str(lv).strip().split(";")) != max(len(str(seq)) - 1, 0)
-        )
-        if bad:
-            raise ValueError(f"fold {fold}: {bad} rows with |true_multi| != len(seq)-1")
+            frame, stats = compute_group_soft(frame, group_keys)
+            frame.to_csv(out_path, index=False)
 
-        frame, stats = compute_group_soft(frame, group_keys)
-        frame.to_csv(out_train, index=False)
-        shutil.copyfile(test_path, out_test)  # test 原样：评估仍用 realized 标签
-
-        # 软标签与 realized 的平均差异 ≈ 标签被平滑掉的噪声量
-        diffs = [
-            np.abs(parse_labels(s) - parse_labels(y)).mean()
-            for s, y in zip(frame["soft_multi"], frame["true_multi"])
-        ]
-        print(f"fold {fold}: rows={len(frame)} groups={stats['n_groups']} "
-              f"group_size mean/min/max = {stats['group_size_mean']:.1f}"
-              f"/{stats['group_size_min']}/{stats['group_size_max']} "
-              f"mean|q-y|={float(np.mean(diffs)):.4f}")
+            diffs = [
+                np.abs(parse_labels(s) - parse_labels(y)).mean()
+                for s, y in zip(frame["soft_multi"], frame["true_multi"])
+            ]
+            role = "train" if path.endswith(TRAIN_SUFFIX) else "test"
+            print(f"fold {fold} [{role}]: rows={len(frame)} groups={stats['n_groups']} "
+                  f"group_size mean/min/max = {stats['group_size_mean']:.1f}"
+                  f"/{stats['group_size_min']}/{stats['group_size_max']} "
+                  f"mean|q-y|={float(np.mean(diffs)):.4f}")
     print(f"\nsoft fold dir ready: {args.out_fold_dir} (group_keys={list(group_keys)})")
 
 
