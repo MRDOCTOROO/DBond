@@ -1,7 +1,10 @@
 scikit-learn
 pandas
+numpy
+scipy
 pyteomics
 matplotlib
 positional-encodings[pytorch]
 tensorboard
 pandarallel
+tqdm

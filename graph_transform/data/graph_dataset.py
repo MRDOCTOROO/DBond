@@ -83,7 +83,33 @@ class GraphDataset(Dataset):
             # 反向保险丝：数据带 soft 列但开关没开——多半是 config 传递链断了
             print(f"[soft] 注意：{os.path.basename(str(csv_path))} 含 soft_multi 列但 "
                   f"use_soft_labels=False（若非有意，检查 config 传入的是否为完整配置 dict）")
-        
+
+        # 条件组折叠权重（fold_condition_groups.py 生成的折叠 CSV 带 group_n 列）：
+        # spectrum=按组内谱图数加权（期望上复现行级 hard BCE，实现自检用）；
+        # group_uniform=每个 (seq,charge,nce) 条件等权；
+        # sequence_balanced=每序列等权（序列内条件平分，贴合候选肽筛选分布）
+        self.weighting_scheme = str(_get_config_value(config, 'weighting_scheme', 'none')).lower()
+        self.sample_weights = None
+        if self.weighting_scheme != 'none':
+            if 'group_n' not in self.data.columns:
+                raise ValueError(
+                    f"weighting_scheme={self.weighting_scheme} 需要折叠 CSV（group_n 列），"
+                    f"{os.path.basename(str(csv_path))} 缺该列；请先跑 fold_condition_groups.py")
+            group_n = self.data['group_n'].to_numpy(dtype=np.float64)
+            if self.weighting_scheme == 'spectrum':
+                weights = group_n
+            elif self.weighting_scheme == 'group_uniform':
+                weights = np.ones_like(group_n)
+            elif self.weighting_scheme == 'sequence_balanced':
+                # 折叠 CSV 一行=一个条件组，序列行数即该序列的条件组数 K_s
+                seq_group_counts = (
+                    self.data.groupby('seq')['seq'].transform('size').to_numpy(dtype=np.float64))
+                weights = 1.0 / seq_group_counts
+            else:
+                raise ValueError(f"未知 weighting_scheme: {self.weighting_scheme}（可选 "
+                                 f"spectrum/group_uniform/sequence_balanced/none）")
+            self.sample_weights = weights.astype(np.float32)
+
         # 初始化组件
         self.graph_builder = SequenceGraphBuilder(config)
         self.preprocessor = SequencePreprocessor(config)
@@ -192,6 +218,8 @@ class GraphDataset(Dataset):
             sample['bond_theory'] = bond_theory
         if soft_tensor is not None:
             sample['soft_labels'] = soft_tensor
+        if self.sample_weights is not None:
+            sample['sample_weight'] = float(self.sample_weights[idx])
 
         return sample
 
@@ -443,6 +471,14 @@ class GraphDataLoader:
             batch_data['bond_theory'] = batch_bond_theory
         if batch_soft_labels is not None:
             batch_data['soft_labels'] = batch_soft_labels
+
+        # 条件组权重（weighting_scheme 激活时逐行携带）；混合批视为数据错误
+        weight_list = [item.get('sample_weight') for item in batch]
+        has_weight = [w is not None for w in weight_list]
+        if any(has_weight):
+            if not all(has_weight):
+                raise ValueError("batch 内 sample_weight 缺失不一致（检查 weighting_scheme 与 CSV group_n 列）")
+            batch_data['sample_weights'] = torch.tensor(weight_list, dtype=torch.float32)
 
         return batch_data
     
@@ -779,6 +815,8 @@ class CachedGraphDataset(GraphDataset):
             cached_soft = cached.get('soft_labels')
             if self.use_soft_labels and cached_soft is not None:
                 sample['soft_labels'] = cached_soft
+            if self.sample_weights is not None:
+                sample['sample_weight'] = float(self.sample_weights[idx])
             return sample
         
         # 无完整图缓存：使用边缓存 + 实时计算 edge_attr
@@ -823,5 +861,7 @@ class CachedGraphDataset(GraphDataset):
             sample['bond_theory'] = bond_theory
         if soft_tensor is not None:
             sample['soft_labels'] = soft_tensor
+        if self.sample_weights is not None:
+            sample['sample_weight'] = float(self.sample_weights[idx])
 
         return sample

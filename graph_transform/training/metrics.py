@@ -75,6 +75,18 @@ TASK_EXTRA_METRIC_ORDER = (
     "q_ndcg",
     "q_top10_enrichment",
     "q_top20_enrichment",
+    # 条件级/序列级 q 排序口径（需 update 提供 group_keys）：
+    # 行级肽级指标把一张谱图当一个 ranking 样本，被采集频率加权；
+    # _cond 先去重到唯一 (seq,charge,nce) 条件组，_seq 再按序列对其条件
+    # 均匀聚合——后者才是"合成前候选肽筛选"的主指标。
+    "q_spearman_pep_cond",
+    "q_ndcg_cond",
+    "q_top10_enrichment_cond",
+    "q_top20_enrichment_cond",
+    "q_spearman_pep_seq",
+    "q_ndcg_seq",
+    "q_top10_enrichment_seq",
+    "q_top20_enrichment_seq",
     "avg_fetch_wait_time",
     "avg_move_time",
     "avg_forward_time",
@@ -257,6 +269,64 @@ def _label_f1_micro(quantity: np.ndarray, beta: float = 1.0) -> float:
     return float((1 + beta ** 2) * tp / f1_den) if f1_den > 0 else 0.0
 
 
+def batch_group_keys(batch_data: Dict[str, Any]) -> List[str] | None:
+    """从 batch_data 构造每行的条件组键 "seq|charge|nce"（字段缺失/长度不齐返回 None）。
+
+    供 BinaryBondMetrics.update 的 group_keys 参数使用；trainer/evaluator 共用，
+    保证训练与评估两侧组键口径一致。
+    """
+    sequences = batch_data.get('sequences')
+    charges = batch_data.get('charges')
+    nces = batch_data.get('nces')
+    if not sequences or charges is None or nces is None:
+        return None
+    try:
+        charges_list = charges.detach().cpu().tolist() if torch.is_tensor(charges) else list(charges)
+        nces_list = nces.detach().cpu().tolist() if torch.is_tensor(nces) else list(nces)
+    except Exception:
+        return None
+    if len(sequences) != len(charges_list) or len(sequences) != len(nces_list):
+        return None
+    return [f"{s}|{float(c):g}|{float(n):g}" for s, c, n in zip(sequences, charges_list, nces_list)]
+
+
+def _peptide_ranking_metrics(pred_arr: np.ndarray, true_arr: np.ndarray, suffix: str = "") -> Dict[str, float]:
+    """肽级排序指标（Spearman / NDCG / Top-K enrichment），suffix 区分口径。
+
+    suffix=""（行级，键名保持历史 q_spearman_pep/q_ndcg/q_top{k}_enrichment 不变）、
+    "_cond"（条件组去重）、"_seq"（序列级聚合）。
+    """
+    n = int(pred_arr.size)
+    result = {
+        f"q_spearman_pep{suffix}": 0.0,
+        f"q_ndcg{suffix}": 0.0,
+        f"q_top10_enrichment{suffix}": 0.0,
+        f"q_top20_enrichment{suffix}": 0.0,
+    }
+    if n < 2:
+        return result
+    try:
+        from scipy.stats import spearmanr
+        rho = float(spearmanr(pred_arr, true_arr).statistic)
+        result[f"q_spearman_pep{suffix}"] = rho if np.isfinite(rho) else 0.0
+    except Exception:
+        result[f"q_spearman_pep{suffix}"] = 0.0
+    # NDCG（graded gain = 每肽 q 均值，按预测分数降序）
+    order_pred = np.argsort(-pred_arr, kind="mergesort")
+    gains = true_arr[order_pred]
+    dcg = float(np.sum(gains / np.log2(np.arange(2, n + 2))))
+    ideal = np.sort(true_arr)[::-1]
+    idcg = float(np.sum(ideal / np.log2(np.arange(2, n + 2))))
+    result[f"q_ndcg{suffix}"] = dcg / idcg if idcg > 0 else 0.0
+    # Top-K% enrichment：前 K% 预测肽的平均真实 q / 全体平均 q（>1 即有富集）
+    overall = float(np.mean(true_arr))
+    for k_pct in (10, 20):
+        n_k = max(1, int(round(k_pct / 100.0 * n)))
+        topk_mean = float(np.mean(true_arr[order_pred[:n_k]]))
+        result[f"q_top{k_pct}_enrichment{suffix}"] = topk_mean / overall if overall > EPSILON else 0.0
+    return result
+
+
 class BinaryBondMetrics:
     """键级别二分类指标（padding-free 口径），同时输出 dbond_m 同口径指标。"""
 
@@ -275,6 +345,10 @@ class BinaryBondMetrics:
         # q 软目标（expected-behavior 口径）：逐样本与扁平化累积，与 realized 同一 valid 展开序
         self.sample_soft_targets: List[np.ndarray] = []
         self.all_valid_soft: List[np.ndarray] = []
+        # 条件组键 / 序列键（update 提供 group_keys/sequences 时逐行累积）：
+        # 用于条件级去重与序列级聚合的 q 排序指标（q_*_cond / q_*_seq）
+        self.row_group_keys: List = []
+        self.row_seq_keys: List = []
         # 缓存最近一次 compute() 得到的扁平化概率与标签，供 evaluator 计算校准指标
         # (ECE/Brier) 和外部诊断使用。每次 compute() 都会覆盖。
         self.last_probabilities: np.ndarray = np.array([], dtype=np.float32)
@@ -287,6 +361,8 @@ class BinaryBondMetrics:
         label_mask: torch.Tensor | None = None,
         from_logits: bool = True,
         soft_targets: torch.Tensor | None = None,
+        sequences: List[str] | None = None,
+        group_keys: List[str] | None = None,
     ):
         """累积一个 batch 的预测。
 
@@ -298,6 +374,9 @@ class BinaryBondMetrics:
             from_logits: 输入是否为 logits。
             soft_targets: 可选的 q 软标签（同形状，[0,1] 条件均值）。提供时
                 compute() 额外输出 expected-behavior 口径指标（q_*）。
+            sequences: 可选的每行序列（与 batch 行数一致），供序列级 q 指标。
+            group_keys: 可选的每行条件组键（batch_group_keys 生成，"seq|charge|nce"）。
+                提供时 compute() 额外输出条件级/序列级 q 排序指标（q_*_cond / q_*_seq）。
         """
         if isinstance(predictions, torch.Tensor):
             predictions = predictions.detach().cpu().numpy()
@@ -344,6 +423,16 @@ class BinaryBondMetrics:
                     self.all_valid_soft.append(valid_soft)
             else:
                 self.sample_soft_targets.append(None)
+
+        # 条件组键/序列键逐行累积；长度不齐时视为未提供（保持向后兼容）
+        n_rows = predictions.shape[0]
+        if group_keys is not None and sequences is not None \
+                and len(group_keys) == n_rows and len(sequences) == n_rows:
+            self.row_group_keys.extend(group_keys)
+            self.row_seq_keys.extend(sequences)
+        else:
+            self.row_group_keys.extend([None] * n_rows)
+            self.row_seq_keys.extend([None] * n_rows)
 
     def compute(self) -> Dict[str, float]:
         if not self.sample_predictions or not self.sample_targets:
@@ -421,6 +510,7 @@ class BinaryBondMetrics:
         metrics["auc_weighted"] = auc
         metrics.update(self._compute_peptide_ranking_metrics())
         metrics.update(self._compute_expected_behavior_metrics(valid_probabilities))
+        metrics.update(self._compute_group_level_q_metrics())
         metrics["class_0_precision"] = metrics["precision"]
         metrics["class_0_recall"] = metrics["recall"]
         metrics["class_0_f1"] = metrics["f1"]
@@ -463,39 +553,73 @@ class BinaryBondMetrics:
             result["q_spearman"] = 0.0
 
         # 肽级：样本 = 一张谱图（一个 (seq,charge,nce) 条件行），分数 = 概率均值 vs q 均值
+        pred_arr, true_arr = self._peptide_score_arrays()
+        result.update(_peptide_ranking_metrics(pred_arr, true_arr, suffix=""))
+        return result
+
+    def _peptide_score_arrays(self) -> tuple[np.ndarray, np.ndarray]:
+        """行级肽级分数：每行（谱图）概率均值 vs q 均值。"""
         pred_ratios, true_ratios = [], []
         for logit_row, soft_row in zip(self.sample_predictions, self.sample_soft_targets):
             if soft_row is None or logit_row.size == 0:
                 continue
             pred_ratios.append(float(_to_probabilities(logit_row.astype(np.float32), from_logits=True).mean()))
             true_ratios.append(float(np.mean(soft_row)))
-        n = len(pred_ratios)
-        defaults = {"q_spearman_pep": 0.0, "q_ndcg": 0.0,
-                    "q_top10_enrichment": 0.0, "q_top20_enrichment": 0.0}
-        if n < 2:
-            result.update(defaults)
-            return result
-        pred_arr = np.asarray(pred_ratios, dtype=np.float64)
-        true_arr = np.asarray(true_ratios, dtype=np.float64)
-        try:
-            from scipy.stats import spearmanr
-            rho = float(spearmanr(pred_arr, true_arr).statistic)
-            result["q_spearman_pep"] = rho if np.isfinite(rho) else 0.0
-        except Exception:
-            result["q_spearman_pep"] = 0.0
-        # NDCG（graded gain = 每肽 q 均值，按预测分数降序）
-        order_pred = np.argsort(-pred_arr, kind="mergesort")
-        gains = true_arr[order_pred]
-        dcg = float(np.sum(gains / np.log2(np.arange(2, n + 2))))
-        ideal = np.sort(true_arr)[::-1]
-        idcg = float(np.sum(ideal / np.log2(np.arange(2, n + 2))))
-        result["q_ndcg"] = dcg / idcg if idcg > 0 else 0.0
-        # Top-K% enrichment：前 K% 预测肽的平均真实 q / 全体平均 q（>1 即有富集）
-        overall = float(np.mean(true_arr))
-        for k_pct in (10, 20):
-            n_k = max(1, int(round(k_pct / 100.0 * n)))
-            topk_mean = float(np.mean(true_arr[order_pred[:n_k]]))
-            result[f"q_top{k_pct}_enrichment"] = topk_mean / overall if overall > EPSILON else 0.0
+        return np.asarray(pred_ratios, dtype=np.float64), np.asarray(true_ratios, dtype=np.float64)
+
+    def _compute_group_level_q_metrics(self) -> Dict[str, float]:
+        """条件级/序列级 q 排序指标（需 update 提供 group_keys/sequences）。
+
+        行级肽级指标把一张谱图当一个 ranking 样本，谱图多的条件组/序列权重
+        被采集频率放大。这里：
+          - _cond：去重到唯一 (seq,charge,nce) 条件组（eval 确定性下同组预测
+            相同，取首行即可），衡量"条件级期望断裂排序"；
+          - _seq：序列内对其各条件组均匀平均，衡量"候选肽序列排序"——
+            合成前筛选的主指标口径。
+        """
+        if not self.row_group_keys or not self.sample_soft_targets:
+            return {}
+        if len(self.row_group_keys) != len(self.sample_soft_targets) or \
+                len(self.row_seq_keys) != len(self.sample_soft_targets):
+            return {}
+        if all(gk is None for gk in self.row_group_keys):
+            return {}
+
+        pred_arr, true_arr = self._peptide_score_arrays()
+        # _peptide_score_arrays 跳过 soft 为 None / 空行，需要同步过滤行键
+        keep = [i for i, (logit_row, soft_row) in enumerate(zip(self.sample_predictions, self.sample_soft_targets))
+                if soft_row is not None and logit_row.size > 0]
+        group_keys = [self.row_group_keys[i] for i in keep]
+        seq_keys = [self.row_seq_keys[i] for i in keep]
+
+        result: Dict[str, float] = {}
+
+        # 条件级：每组取首行（同组预测相同），保持首现顺序
+        first_idx: Dict[str, int] = {}
+        cond_rows: List[int] = []
+        for i, gk in enumerate(group_keys):
+            if gk is not None and gk not in first_idx:
+                first_idx[gk] = i
+                cond_rows.append(i)
+        if len(cond_rows) >= 2:
+            cond_pred = pred_arr[cond_rows]
+            cond_true = true_arr[cond_rows]
+            result.update(_peptide_ranking_metrics(cond_pred, cond_true, suffix="_cond"))
+
+        # 序列级：每个序列对其各条件组均匀平均（先按序列收集条件级首现行，再求均值）
+        if len(cond_rows) >= 2:
+            seq_preds: Dict[str, List[float]] = {}
+            seq_trues: Dict[str, List[float]] = {}
+            for i in cond_rows:
+                sk = seq_keys[i]
+                if sk is None:
+                    continue
+                seq_preds.setdefault(sk, []).append(float(pred_arr[i]))
+                seq_trues.setdefault(sk, []).append(float(true_arr[i]))
+            if len(seq_preds) >= 2:
+                seq_pred = np.asarray([np.mean(v) for v in seq_preds.values()], dtype=np.float64)
+                seq_true = np.asarray([np.mean(v) for v in seq_trues.values()], dtype=np.float64)
+                result.update(_peptide_ranking_metrics(seq_pred, seq_true, suffix="_seq"))
         return result
 
     def _compute_peptide_ranking_metrics(self) -> Dict[str, float]:
@@ -573,6 +697,8 @@ class BinaryBondMetrics:
         self.sample_targets = []
         self.sample_soft_targets = []
         self.all_valid_soft = []
+        self.row_group_keys = []
+        self.row_seq_keys = []
         self.last_probabilities = np.array([], dtype=np.float32)
         self.last_targets = np.array([], dtype=np.int32)
 

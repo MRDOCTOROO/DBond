@@ -1031,6 +1031,7 @@ def main():
     patience = training_config.get('patience', 10)
     min_delta = training_config.get('min_delta', 0.0)
     best_metric = best_metric if args.resume else float('-inf')
+    best_q_metric = float('-inf')  # q 口径第二 checkpoint（best_model_q.pt）的选择分
     best_epoch = start_epoch
     no_improve_epochs = 0
     if args.resume:
@@ -1135,6 +1136,28 @@ def main():
             else:
                 no_improve_epochs += 1
                 logger.info(f"No improvement for {no_improve_epochs} epoch(s)")
+
+            # q 口径第二 checkpoint：val 的条件级 q 排序指标另存 best_model_q.pt。
+            # 早停/最终测试仍用 realized F1 选的 best_model.pt（口径与历史 run 严格
+            # 可比）；q 选中的模型由 evaluate_graph_model.py --checkpoint 单独评测，
+            # 避免改动 5fold 汇总管线。选择只依赖 val，不触碰 test。
+            q_metric_name = training_config.get('q_checkpoint_metric', 'q_spearman_pep_cond')
+            current_q = val_metrics.get(q_metric_name)
+            if current_q is not None:
+                if current_q > best_q_metric:
+                    best_q_metric = current_q
+                    q_checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints/graph_transform')
+                    os.makedirs(q_checkpoint_dir, exist_ok=True)
+                    CheckpointManager.save_checkpoint(
+                        model=model,
+                        optimizer=optimizer,
+                        epoch=epoch,
+                        loss=val_metrics['loss'],
+                        metrics=val_metrics,
+                        filepath=os.path.join(q_checkpoint_dir, 'best_model_q.pt'),
+                        is_best=False
+                    )
+                    logger.info(f"Saved best-q model ({q_metric_name}): {best_q_metric:.4f}")
 
             if early_stopping_enabled and no_improve_epochs >= patience:
                 logger.info(

@@ -44,17 +44,32 @@ class BinaryBondLoss(nn.Module):
             self.focal_loss = FocalLoss(config)
             self.dice_loss = DiceLoss(config)
     
-    def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def forward(self, predictions: torch.Tensor, targets: torch.Tensor,
+                weights: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         计算损失
-        
+
         Args:
             predictions: 模型预测 [num_bonds] 或 [num_bonds, 1]
             targets: 真实标签 [num_bonds] 或 [num_bonds, 1]
-            
+            weights: 可选逐元素权重（条件组折叠训练：与展平 targets 同序，
+                [num_bonds] 或可 reshape 到 predictions 形状）。提供时走
+                加权 BCE（按权重归一），仅支持纯 BCE 主损失。
+
         Returns:
             torch.Tensor: 损失值
         """
+        # 加权路径：逐元素 BCE × 权重 / 权重和。仅支持无 pos_weight/辅助项的
+        # 纯 BCE——spectrum 权重下与行级 hard BCE 期望等价（实现自检不变量）。
+        if weights is not None:
+            if self.main_loss != 'binary_cross_entropy' or self.handle_imbalance or self.use_auxiliary_losses:
+                raise ValueError("sample weights 仅支持纯 binary_cross_entropy 主损失"
+                                 "（handle_imbalance / use_auxiliary_losses 需关闭）")
+            elem = F.binary_cross_entropy_with_logits(predictions.float(), targets.float(),
+                                                      reduction='none')
+            weights = weights.float().reshape(elem.shape)
+            return (elem * weights).sum() / weights.sum().clamp_min(1e-8)
+
         # 主要损失
         if self.handle_imbalance and self.imbalance_strategy == 'focal':
             loss = self.criterion_focal(predictions, targets)

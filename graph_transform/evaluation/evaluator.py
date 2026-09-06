@@ -22,8 +22,10 @@ from .metrics import (
 
 try:
     from training import BinaryBondLoss
+    from training.metrics import batch_group_keys
 except ImportError:
     from graph_transform.training import BinaryBondLoss
+    from graph_transform.training.metrics import batch_group_keys
 
 
 class Evaluator:
@@ -136,12 +138,15 @@ class Evaluator:
                 dbond_style_loss = self._compute_dbond_style_loss(criterion, batch_data, predictions_full, targets_full)
                 self._ensure_finite_tensor(dbond_style_loss, "dbond_style_loss")
                 
-                # 更新指标（提供 q 软目标时同步输出 expected-behavior 口径）
+                # 更新指标（提供 q 软目标时同步输出 expected-behavior 口径；
+                # 组键用于条件级/序列级 q 排序指标与 q-checkpoint 选择）
                 self.metrics_calculator.update(
                     predictions_full,
                     targets_full,
                     label_mask=batch_data.get('label_mask'),
                     soft_targets=batch_data.get('soft_labels'),
+                    sequences=batch_data.get('sequences'),
+                    group_keys=batch_group_keys(batch_data),
                 )
                 valid_bond_count = int(targets.numel())
                 sample_count = int(targets_full.shape[0])

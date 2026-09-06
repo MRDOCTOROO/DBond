@@ -16,7 +16,7 @@ import gc
 from typing import Dict, Any, Optional
 from tqdm import tqdm
 
-from .metrics import BinaryBondMetrics, MetricTracker, order_binary_bond_metric_dict
+from .metrics import BinaryBondMetrics, MetricTracker, order_binary_bond_metric_dict, batch_group_keys
 
 
 class Trainer:
@@ -346,12 +346,15 @@ class Trainer:
                 # 计算损失
                 loss = self.criterion(predictions, targets)
                 
-                # 更新指标（提供 q 软目标时同步输出 expected-behavior 口径）
+                # 更新指标（提供 q 软目标时同步输出 expected-behavior 口径；
+                # 组键用于条件级/序列级 q 排序指标与 q-checkpoint 选择）
                 self.metrics_calculator.update(
                     predictions_full,
                     targets_full,
                     label_mask=batch_data.get('label_mask'),
                     soft_targets=batch_data.get('soft_labels'),
+                    sequences=batch_data.get('sequences'),
+                    group_keys=batch_group_keys(batch_data),
                 )
                 total_loss += loss.item()
                 num_batches += 1
@@ -396,23 +399,27 @@ class Trainer:
     
     def _forward_pass(self, batch_data: Dict[str, torch.Tensor]) -> tuple[torch.Tensor, Dict[str, float]]:
         """前向传播"""
+        # 行级条件组权重（weighting_scheme）：按 label_mask 行主序展平后与 targets 对齐
+        row_weights = self._masked_row_weights(batch_data)
         if self.use_amp:
             with torch.amp.autocast(self.amp_device_type, enabled=True):
                 predictions_full = self.model(batch_data)
                 targets_full = batch_data['labels']
                 targets, predictions = self._apply_label_mask(batch_data, targets_full, predictions_full)
                 self._ensure_finite_tensor(predictions, "predictions", batch_data)
-                loss = self.criterion(predictions, self._soft_targets(batch_data, targets))
+                loss = self.criterion(predictions, self._soft_targets(batch_data, targets), weights=row_weights)
         else:
             predictions_full = self.model(batch_data)
             targets_full = batch_data['labels']
             targets, predictions = self._apply_label_mask(batch_data, targets_full, predictions_full)
             self._ensure_finite_tensor(predictions, "predictions", batch_data)
-            loss = self.criterion(predictions, self._soft_targets(batch_data, targets))
+            loss = self.criterion(predictions, self._soft_targets(batch_data, targets), weights=row_weights)
 
         # 辅助头损失（deep supervision + 肽级回归）：模型仅在 train 模式暂存输出；
-        # bond 辅助头同样吃软目标（BCE/Focal/ASL 逐元素项天然支持 [0,1] 目标）
-        loss, aux_stats = self._apply_auxiliary_head_losses(loss, batch_data, self._soft_targets(batch_data, targets))
+        # bond 辅助头同样吃软目标（BCE/Focal/ASL 逐元素项天然支持 [0,1] 目标），
+        # 加权训练时 bond 辅助头用同一份行级权重（与主损失同序展平）
+        loss, aux_stats = self._apply_auxiliary_head_losses(
+            loss, batch_data, self._soft_targets(batch_data, targets), row_weights)
 
         self._ensure_finite_tensor(loss, "loss", batch_data)
         with torch.no_grad():
@@ -425,6 +432,8 @@ class Trainer:
             targets_full,
             label_mask=batch_data.get('label_mask'),
             soft_targets=batch_data.get('soft_labels'),
+            sequences=batch_data.get('sequences'),
+            group_keys=batch_group_keys(batch_data),
         )
 
         return loss, {
@@ -447,10 +456,22 @@ class Trainer:
         soft_masked, _ = self._apply_label_mask(batch_data, soft, soft)
         return soft_masked if soft_masked is not None else targets
 
+    def _masked_row_weights(self, batch_data: Dict[str, Any]) -> Optional[torch.Tensor]:
+        """条件组权重按 label_mask 行主序展平（与 _apply_label_mask 的 targets 同序）。"""
+        weights = batch_data.get('sample_weights')
+        if weights is None:
+            return None
+        mask = batch_data.get('label_mask')
+        if mask is None:
+            return weights
+        weights_2d = weights.unsqueeze(1).expand(-1, mask.size(1))
+        return weights_2d[mask.bool()]
+
     def _apply_auxiliary_head_losses(self,
                                      loss: torch.Tensor,
                                      batch_data: Dict[str, Any],
-                                     targets: torch.Tensor) -> tuple[torch.Tensor, Dict[str, float]]:
+                                     targets: torch.Tensor,
+                                     row_weights: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, Dict[str, float]]:
         """辅助头损失：中间层 bond 辅助头（复用主 criterion）+ 肽级断裂比例回归头。
 
         模型仅在 train 模式 forward 时暂存 last_aux_outputs；eval/推理路径为 None，
@@ -466,7 +487,10 @@ class Trainer:
         if bond_logits and batch_data.get('label_mask') is not None and targets.numel() > 0:
             # 辅助头按 valid bond 行主序展平，与 _apply_label_mask 展开的 targets 逐行对齐
             weight = float(loss_config.get('deep_supervision_weight', 0.25))
-            head_losses = [self.criterion(head_logits.float(), targets) for head_logits in bond_logits.values()]
+            head_losses = [
+                self.criterion(head_logits.float(), targets, weights=row_weights)
+                for head_logits in bond_logits.values()
+            ]
             aux_bond_loss = torch.stack(head_losses).mean()
             loss = loss + weight * aux_bond_loss
             stats['aux_bond_loss'] = float(aux_bond_loss.item())
@@ -476,7 +500,14 @@ class Trainer:
             weight = float(loss_config.get('peptide_aux_weight', 0.2))
             ratio_target = self._peptide_cleavage_ratio(batch_data)
             peptide_pred = torch.sigmoid(peptide_logits.float())
-            peptide_loss = F.mse_loss(peptide_pred, ratio_target)
+            sample_weights = batch_data.get('sample_weights')
+            if sample_weights is not None:
+                # 肽级头按行对齐，直接用行权重（非展平版）
+                elem = F.mse_loss(peptide_pred, ratio_target, reduction='none')
+                w = sample_weights.float().reshape(elem.shape)
+                peptide_loss = (elem * w).sum() / w.sum().clamp_min(1e-8)
+            else:
+                peptide_loss = F.mse_loss(peptide_pred, ratio_target)
             loss = loss + weight * peptide_loss
             stats['peptide_aux_loss'] = float(peptide_loss.item())
 

@@ -21,9 +21,10 @@
 | 全 GAT + 理论特征 | `pre_synthesis_gat/5fold/20260903_091047` | 3G+2A → 5GAT（等深等参） | 0.7946±0.0056 | 0.7965 | 0.7060 |
 | 全 GAT + 辅助头 | `pre_synthesis_gat_aux/5fold/20260903_112113` | +中间层 bond 头 + 肽级比例头 | **0.7972**±0.0062 | 0.7982 | 0.7096 |
 | ~~软标签(gat_aux底座)~~ | `pre_synthesis_gat_aux_soft/5fold/20260905_094058` | **无效 run**：use_soft_labels 因 config 传递 bug 未生效（ceafc5f 修复），实为 gat_aux 非确定性重跑（F1 0.7954±0.0086） | — | — | — |
-| （待跑）+ ASL 主损失 | 配置 `..._gat_aux_asl.yaml` | BCE → ASL | — | — | — |
-| （待跑）q 软标签·gat_aux 底座 | `..._gat_aux_soft.yaml` + `dataset/5fold_soft`（修复后重跑） | 训练标签 → 条件均值 q | — | — | — |
-| （待跑）q 软标签·theory 底座 | `pre_synthesis_5fold_md6_theory_soft.yaml` | 同上，底座换混合骨干 | — | — | — |
+| ~~q 软标签(gat_aux底座)·真软标签~~ | `pre_synthesis_gat_aux_soft/5fold/20260906_040542` | 修复后重跑，q 确认生效；**等价性审计证明重复行 q ≡ hard BCE**（§7.2），F1 0.7956±0.0061 与 hard 0.7972 种子噪声内，作为等价性实证对照归档 | 0.7956±0.0061 | 0.7957 | 0.7077 |
+| （在跑）q 软标签·theory 底座 | `pre_synthesis_5fold_md6_theory_soft.yaml`（20260906_134418） | 同一恒等式 ⇒ 预计 ≈ theory 底座种子复跑（F1≈0.795） | — | — | — |
+| （待跑）条件组折叠试点 ×3 臂 | `pre_synthesis_fold1222_theory_folded_{spectrum,uniform,seqbal}.yaml`，fold 1222 单折 | **真正改变训练目标**：383k 谱图行 → 7,643 条件组 + 显式权重（§14） | — | — | — |
+| （待跑）+ ASL 主损失 | 配置 `..._gat_aux_asl.yaml` | BCE → ASL（正率 0.48，预计收益有限，降级） | — | — | — |
 
 补充指标（3G+2A 时代记录）：
 
@@ -60,9 +61,15 @@ md3 对照：pre md3 F1 0.7921±0.0054（低于 md6 0.7940，主线定为 md6）
 | | acc | F1 | AUC |
 |---|---|---|---|
 | 序列-only q | 0.718 | 0.694 | 0.805 |
-| **条件匹配 q（seq+charge+nce）= pre 特征集 Bayes 上限** | **0.888** | **0.883** | **0.962** |
+| **条件匹配 q（seq+charge+nce）= 重复测量一致性上限** | **0.888** | **0.883** | **0.962** |
 | 当前 pre 模型 | 0.800 | 0.795 | 0.882 |
 | 当前 full 模型 | 0.847 | 0.841 | ~0.93 |
+
+命名修正（20260906 审计）：条件匹配 oracle 利用了同一条测试肽的其他谱图历史，
+应称**同序列重复测量条件下的可重复性上限**（repeated-spectrum ceiling），不是
+严格意义的"pre 特征集 Bayes 上限"——部署时面对新候选序列没有历史谱图可查。
+它仍是任何模型在这些测试行上的精度的上界（若能从特征完美估计 q 即达到），
+但 pre 特征能否把未见序列的 q 学到这个水平，是泛化问题，不由此表保证。
 
 结论：pre 模型距自身特征集上限还有 ~9 个点；换骨干无用（方差不在结构侧），
 治法是把条件均值 q 学好（→ q 软标签，§7）。full 模型强是因为 intensity/scan
@@ -166,6 +173,41 @@ evaluate 支持 `--out_pred_csv /dev/null` 跳过预测输出（批量补评曾�
 q_spearman_pep 与 enrichment；④top10 enrichment ~1.7：按模型排序取前 10% 肽的
 真实断裂比例比平均高 71%，直接对应存储筛选价值。
 
+### 7.2 等价性定理：重复行 q 软标签是无效操作（2026-09-06 审计 + 实证）
+
+**定理**：设条件组 g 有 n 张谱图、标签 y_1..y_n，q = mean(y)。pre 特征集下同组
+所有行的模型输入完全相同（seq+charge+pep_mass+nce；intensity/scan 被屏蔽），
+则对 BCEWithLogits：
+`Σ_j BCE(z, y_j) = n·BCE(z, q)` —— 把 q 逐行复制 n 次再平均，与原 hard 标签的
+损失函数**完全相同**（非仅期望相同；仅差 4 位小数舍入与 batch 组成的 RNG）。
+推论：mixed hard/soft 目标同样无效（组内平均后回到 q）；§7 的软标签路径只改变
+了 q 指标的"可见性"，没有改变训练目标。
+
+**实证**（修复 config bug 后真软标签 run `20260906_040542` vs hard gat_aux）：
+
+| 指标 | gat_aux (hard) | gat_aux_soft（真 q） |
+|---|---|---|
+| lab_f1_mi | 0.7972±0.0062 | 0.7956±0.0061 |
+| q_spearman | 0.8064（补评） | 0.8011±0.0114 |
+| q_spearman_pep | 0.8891（补评） | 0.8822±0.0149 |
+| q_top10_enrichment | 1.710（补评） | 1.689±0.027 |
+
+全部落在种子噪声内 ⇒ 定理成立。正在跑的 theory_soft（20260906_134418）按同一
+恒等式预计 ≈ theory 底座种子复跑。**结论：要真正改变训练目标，必须折叠条件组
+并显式选权重（§14）。**
+
+### 7.3 行级肽级 q 指标的口径缺陷（已修复，2026-09-06）
+
+旧行级 q_spearman_pep/q_ndcg/enrichment 把一张谱图当一个 ranking 样本——同组
+谱图预测完全相同却被重复计数，指标被**采集频率**加权（组大小中位 61、最大 128）。
+单测示例（2 序列/3 组/8 行合成数据）：同一份数据 enrichment 行级 1.714 /
+条件级 1.588 / 序列级 1.385——行级虚高来自重复计数。
+新增两套口径（metrics.py，trainer/evaluator 均已接入组键透传）：
+- `q_*_cond`：去重到唯一 (seq,charge,nce) 条件组；
+- `q_*_seq`：序列内对其条件组均匀平均——**合成前候选肽筛选的主指标**。
+行级旧口径保留（与 §7.1 基线可比）；§7.1 的补评基线后续需用新口径重算一遍
+（重跑 evaluate 即可，便宜）。
+
 ---
 
 ## 8. ludbond 1D 基线（pre + theory，2026-09-02）
@@ -208,15 +250,19 @@ delta 对比需先补跑 `python run_models_parallel.py -m dbond_s_pre dbond_m_p
 | lab_f1_ma | 0.7440±0.0144 | 0.7449±0.0173 | **0.7982**±0.0154 | 0.7500±0.0222 | 0.7562±0.0199 |
 | lab_f1_mi | 0.7940±0.0070 | 0.7950±0.0053 | **0.8411**±0.0049 | 0.7946±0.0056 | 0.7972±0.0062 |
 
-## 11. 下一步优先级（按证据排序）
+## 11. 下一步优先级（按证据排序，2026-09-06 审计后修订）
 
-1. q 软标签五折（在跑）→ 看排序口径（q_spearman_pep/q_ndcg/enrichment）
-2. q 有效后：sequence-level cleavage-ratio ranking loss（margin ranking）
-3. FiLM 条件调制（use_condition_film，~33K 参数，单变量）——charge×nce 占方差大头，
-   现有三条注入路全是加性；FiLM 显式参数化乘性交互
-4. GATv2 / bond-centric graph（结构侧候选，单变量逐个来）
-5. 5 折 ensemble 推理（5 个 best_model 概率平均，零训练成本）
-6. 补跑 4 个 ludbond pre 基线（与 pre_theory 配对算 delta）
+1. **条件组折叠试点**（§14，三臂 fold-1222 单折）→ 主看 q_spearman_pep_seq /
+   q_spearman_pep_cond / enrichment_cond 与 sanity 臂自检
+2. 试点胜出臂扩到五折；q 目标加 Beta-Binomial 收缩（singleton/低重复组 q=y 退化为
+   单谱噪声，均匀加权后影响放大——收缩与折叠有交互，故分两步归因）
+3. sequence-level ranking loss（pairwise/listwise，替代再加普通辅助头）
+4. FiLM 条件调制（use_condition_film，~33K 参数，单变量）——charge×nce 占方差大头，
+   现有三条注入路全是加性；折叠训练稳定后再动结构
+5. GATv2 / bond-centric graph（论文扩展位，排目标修正之后）
+6. 5 折 ensemble 推理（5 个 best_model 概率平均，零训练成本，最后增强）
+7. 补跑 4 个 ludbond pre 基线（与 pre_theory 配对算 delta）
+8. ~~ASL~~（降级：全局正率 0.48，无类别不平衡可治；配置保留备用）
 
 ## 12. 运行手册（pod 项目根目录，.venv/bin/python）
 
@@ -257,7 +303,7 @@ delta 对比需先补跑 `python run_models_parallel.py -m dbond_s_pre dbond_m_p
 # 理论特征版把 _pre 换成 _pre_theory
 ```
 
-### D. q 软标签全流程
+### D. q 软标签全流程（已证 ≡ hard BCE，见 §7.2；保留作等价性对照）
 
 ```bash
 .venv/bin/python graph_transform/scripts/precompute_soft_labels.py \
@@ -265,6 +311,32 @@ delta 对比需先补跑 `python run_models_parallel.py -m dbond_s_pre dbond_m_p
 .venv/bin/python graph_transform/scripts/train_5fold_parallel.py \
     --config graph_transform/config/pre_synthesis_5fold_md6_theory_gat_aux_soft.yaml \
     --fold_data_dir dataset/5fold_soft --gpus 0,1,2,3
+```
+
+### D2. 条件组折叠试点（§14，现行主推）
+
+```bash
+# 1) 生成折叠数据（依赖 D 步的 5fold_soft；test 文件符号链接不折叠）
+.venv/bin/python graph_transform/scripts/fold_condition_groups.py \
+    --fold_dir dataset/5fold_soft --out_fold_dir dataset/5fold_folded
+
+# 2) 等价性/正确性单测（纯 CPU，秒级）
+.venv/bin/python graph_transform/scripts/test_folded_equivalence.py
+
+# 3) smoke（可选但建议：校验 batch 携带 soft_labels + sample_weights）
+CUDA_VISIBLE_DEVICES= .venv/bin/python graph_transform/scripts/smoke_test_pipeline.py \
+    --config graph_transform/config/pre_synthesis_fold1222_theory_folded_uniform.yaml
+
+# 4) 三臂并行（一卡一臂，fold 1222 单折）
+for arm in spectrum uniform seqbal; do
+  CUDA_VISIBLE_DEVICES=$([ $arm = spectrum ] && echo 0 || ([ $arm = uniform ] && echo 1 || echo 2)) \
+  nohup .venv/bin/python graph_transform/scripts/train_5fold.py \
+      --config graph_transform/config/pre_synthesis_fold1222_theory_folded_${arm}.yaml \
+      --folds 1222 --fold_data_dir dataset/5fold_folded \
+      > logs/folded_${arm}.log 2>&1 &
+done
+
+# 5) q-checkpoint（best_model_q.pt）单独评测：F 步 evaluate --checkpoint <path>
 ```
 
 ### E. 断点续跑 / 只重建汇总
@@ -276,7 +348,7 @@ delta 对比需先补跑 `python run_models_parallel.py -m dbond_s_pre dbond_m_p
 ### F. 评估与推理
 
 - 加载权重补评估（如给旧 run 在 5fold_soft test 上补 q 口径基线）：
-  `.venv/bin/python graph_transform/scripts/evaluate_graph_model.py --config <yaml> --model_path <best_model.pt>`
+  `.venv/bin/python graph_transform/scripts/evaluate_graph_model.py --config <yaml> --checkpoint <best_model.pt> --test_csv <csv> --out_metric_csv <csv> --out_pred_csv /dev/null`
 - 合成前候选序列打分（R-01 应用入口）：
   `.venv/bin/python graph_transform/scripts/score_presynthesis.py --config <yaml> --checkpoint <best_model.pt> --sequences cand.txt --output_dir result/presynthesis`
   （可设 `--charges` / `--nces` 预设条件网格）
@@ -294,3 +366,49 @@ delta 对比需先补跑 `python run_models_parallel.py -m dbond_s_pre dbond_m_p
   （后两者加入 .gitignore；pod 侧 pull 后会从工作区移除，不影响训练）。
 - 保留待议：6 个孤立分析脚本（cross_validation_analysis 等）、`graph_transform/outputs/graph_viz/`
   （visualize_sample_graph.py 的可视化产物）、`.drawio-tmp/`（图表生成中间产物）。
+
+## 14. 条件组折叠训练（2026-09-06 实现，待跑）
+
+动机与定理见 §7.2：重复行 q 软标签 ≡ hard BCE，唯一出路是把训练样本真正压缩为
+唯一条件组并显式定义权重。数据画像（fold 1222 train）：383,295 谱图行 /
+7,643 条件组 / 410 序列（每序列 18.6 个条件，组大小中位 61、P10=11、max 128、
+singleton 组 76 个占 1%）。
+
+**三种权重语义**（`data.weighting_scheme`，loss 侧逐键展开）：
+
+| scheme | 每组权重 w_g | 训练分布 | 用途 |
+|---|---|---|---|
+| spectrum | n_g | 谱图事件复现 | **实现自检**：期望 ≡ 行级 hard theory 训练；若 fold-1222 指标显著偏离其 hard 对应值 ⇒ 折叠/加权有 bug |
+| group_uniform | 1 | 条件均匀 | 每个候选 (seq,charge,nce) 等权 |
+| sequence_balanced | 1/K_s | 序列均衡 | 每条序列等权（410 序列不被采集频率加权），最贴合候选肽筛选 |
+
+**实现清单**（全部本地验证：compileall + 单测 3 项通过）：
+- `scripts/fold_condition_groups.py`：5fold_soft → 5fold_folded（每组 first() 行 +
+  group_n 列；行数==组数断言；test 符号链接不折叠）。
+- `data/graph_dataset.py`：weighting_scheme 解析（缺 group_n 直接报错）；
+  sample_weight 注入 3 个 __getitem__（GraphDataset 主路径/缓存完整图/缓存边）；
+  collate 汇 sample_weights（混合批报错）。
+- `training/loss_functions.py`：BinaryBondLoss(weights=) 加权 BCE 路径
+  （仅纯 BCE 可用，handle_imbalance/辅助项开着则报错）。
+- `training/trainer.py`：_masked_row_weights（行主序展平对齐 targets）接主损失 +
+  bond 辅助头；肽级辅助头按行权重加权 MSE；train/val metrics update 传组键。
+- `training/metrics.py`：batch_group_keys()（"seq|charge|nce" 稳定键）；
+  q_*_cond（组去重）/ q_*_seq（序列内条件均匀聚合）两套新指标；
+  行级旧口径保留（键名不变，与 §7.1 可比）。
+- `scripts/train_graph_model.py`：第二 checkpoint **best_model_q.pt**（默认选择
+  指标 training.q_checkpoint_metric = q_spearman_pep_cond，仅用 val；早停与最终
+  测试仍走 best_model.pt，5fold 汇总管线不动；q 模型用 evaluate --checkpoint 补评）。
+- `scripts/test_folded_equivalence.py`：①行级 hard ≡ 折叠+spectrum 权重（1e-6）；
+  ②加权归一语义（权重整体缩放不变）；③cond/seq 指标手工值对账 + 行级口径
+  重复计数演示（1.714/1.588/1.385）。
+- 三个试点配置 `pre_synthesis_fold1222_theory_folded_{spectrum,uniform,seqbal}.yaml`：
+  theory 混合骨干（3G+2A，无辅助头）+ 折叠数据 + 各臂权重；训练动力学重标定
+  （batch 1024→128、epochs 100→300、patience 10→25、warmup 10→40、t_max 300，
+  折叠后 ~48 步/epoch，总优化步数与行级 run 同量级）。
+
+**判读标准**：
+1. sanity 臂（spectrum）fold-1222 realized 指标 ≈ theory run 的 fold-1222 值（种子噪声内）→ 实现正确；
+2. uniform/seqbal 主看 q_spearman_pep_seq / _cond / top10_enrichment_seq 相对
+   theory 基线（需用新口径重补评，D2/§7.3）是否提升；
+3. realized F1 允许小幅波动（训练分布变了），不作为本试点的主终点；
+4. best_model_q.pt vs best_model.pt 的测试 q 指标差 = 选择口径的净效应。

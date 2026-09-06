@@ -98,6 +98,18 @@ def run_smoke(config: dict, csv_path: str, batch_size: int, device: torch.device
         )
         logger.info("[soft] batch 携带 soft_labels: shape=%s, 均值=%.4f",
                     tuple(probe["soft_labels"].shape), float(probe["soft_labels"].sum()))
+    # 条件组权重断言：weighting_scheme 请求时 batch 必须携带 sample_weights
+    scheme = config.get("data", {}).get("weighting_scheme", "none")
+    if scheme and scheme != "none":
+        probe = batches[0]
+        assert probe.get("sample_weights") is not None, (
+            f"weighting_scheme={scheme} 但 batch 无 sample_weights："
+            "CSV 缺 group_n 列（需 fold_condition_groups.py 折叠）或 config 传递链断裂"
+        )
+        assert probe["sample_weights"].shape[0] == probe["labels"].shape[0], "sample_weights 与 batch 行数不齐"
+        logger.info("[weight] batch 携带 sample_weights: scheme=%s, min=%.4g max=%.4g sum=%.4g",
+                    scheme, float(probe["sample_weights"].min()),
+                    float(probe["sample_weights"].max()), float(probe["sample_weights"].sum()))
     model = GraphTransformer(model_config).to(device)
     criterion = BinaryBondLoss(config.get("loss", {}))
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
