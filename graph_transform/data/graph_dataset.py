@@ -79,6 +79,10 @@ class GraphDataset(Dataset):
                 print(f"[soft] {os.path.basename(str(csv_path))} 无 soft_multi 列，"
                       f"soft_labels 回退为 realized 标签")
                 self.use_soft_labels = False
+        elif 'soft_multi' in self.data.columns:
+            # 反向保险丝：数据带 soft 列但开关没开——多半是 config 传递链断了
+            print(f"[soft] 注意：{os.path.basename(str(csv_path))} 含 soft_multi 列但 "
+                  f"use_soft_labels=False（若非有意，检查 config 传入的是否为完整配置 dict）")
         
         # 初始化组件
         self.graph_builder = SequenceGraphBuilder(config)

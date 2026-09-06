@@ -9,7 +9,7 @@ import argparse
 import logging
 import os
 import re
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -86,32 +86,38 @@ def append_eval_id_to_path(filepath: str, evaluation_id: str) -> str:
 def save_evaluation_outputs(
     *,
     metrics: Dict[str, Any],
-    output_df: pd.DataFrame,
+    output_df: Optional[pd.DataFrame],
     metric_csv_path: str,
     pred_csv_path: str,
     evaluation_id: str,
     logger: logging.Logger,
 ) -> Tuple[str, str, str, str]:
+    """保存评估产物。output_df 为 None 时跳过预测输出（省磁盘/时间，如批量补评场景）。"""
+    save_preds = output_df is not None
     metric_dir = os.path.dirname(metric_csv_path)
     pred_dir = os.path.dirname(pred_csv_path)
     if metric_dir:
         os.makedirs(metric_dir, exist_ok=True)
-    if pred_dir:
+    if save_preds and pred_dir:
         os.makedirs(pred_dir, exist_ok=True)
 
     metric_df = pd.DataFrame(metric_rows(metrics))
     metric_df.to_csv(metric_csv_path, index=False)
-    output_df.to_csv(pred_csv_path, index=False)
-
     archive_metric_path = append_eval_id_to_path(metric_csv_path, evaluation_id)
-    archive_pred_path = append_eval_id_to_path(pred_csv_path, evaluation_id)
     metric_df.to_csv(archive_metric_path, index=False)
-    output_df.to_csv(archive_pred_path, index=False)
-
     logger.info(f"Saved latest metrics to {metric_csv_path}")
-    logger.info(f"Saved latest predictions to {pred_csv_path}")
     logger.info(f"Archived metrics to {archive_metric_path}")
-    logger.info(f"Archived predictions to {archive_pred_path}")
+
+    if save_preds:
+        output_df.to_csv(pred_csv_path, index=False)
+        archive_pred_path = append_eval_id_to_path(pred_csv_path, evaluation_id)
+        output_df.to_csv(archive_pred_path, index=False)
+        logger.info(f"Saved latest predictions to {pred_csv_path}")
+        logger.info(f"Archived predictions to {archive_pred_path}")
+    else:
+        pred_csv_path = ""
+        archive_pred_path = ""
+        logger.info("Skipped prediction outputs (output_df=None)")
     return metric_csv_path, pred_csv_path, archive_metric_path, archive_pred_path
 
 
@@ -179,7 +185,8 @@ def main():
     dataset_cls = CachedGraphDataset if data_config.get("cache_graphs", False) else GraphDataset
     test_kwargs = {
         "csv_path": data_config["test_csv_path"],
-        "config": model_config,
+        # 完整 config dict（非 model_config）：data 段键（use_soft_labels 等）需要可被检索到
+        "config": config,
         "max_seq_len": data_config["max_seq_len"],
         "graph_strategy": data_config["graph_strategy"],
         "augmentation": False,
@@ -203,7 +210,11 @@ def main():
 
     evaluator = Evaluator(model=model, device=device, config=config, logger=logger)
     metrics = evaluator.evaluate(test_loader)
-    prediction_outputs = evaluator.collect_prediction_outputs(test_loader, threshold=threshold)
+    # /dev/null 显式跳过预测收集与写出（省一遍前向 + 大文件，批量补评场景）
+    save_preds = args.out_pred_csv != "/dev/null"
+    prediction_outputs = (
+        evaluator.collect_prediction_outputs(test_loader, threshold=threshold) if save_preds else None
+    )
     evaluation_id = build_evaluation_id(args.checkpoint, "test")
     out_metric_csv = args.out_metric_csv or os.path.join(
         evaluation_config.get("output_metric_dir", "result/metric/graph_transform"),
@@ -213,13 +224,16 @@ def main():
         evaluation_config.get("output_pred_dir", "result/pred/graph_transform"),
         "latest.pred.csv",
     )
-    output_df = test_dataset.data.copy()
-    output_df["evaluation_id"] = evaluation_id
-    output_df["checkpoint_path"] = os.path.abspath(args.checkpoint)
-    output_df["threshold"] = prediction_outputs["threshold"]
-    output_df["true"] = prediction_outputs["true_strings"]
-    output_df["pred"] = prediction_outputs["pred_strings"]
-    output_df["pred_prob"] = prediction_outputs["prob_strings"]
+    if save_preds:
+        output_df = test_dataset.data.copy()
+        output_df["evaluation_id"] = evaluation_id
+        output_df["checkpoint_path"] = os.path.abspath(args.checkpoint)
+        output_df["threshold"] = prediction_outputs["threshold"]
+        output_df["true"] = prediction_outputs["true_strings"]
+        output_df["pred"] = prediction_outputs["pred_strings"]
+        output_df["pred_prob"] = prediction_outputs["prob_strings"]
+    else:
+        output_df = None
     save_evaluation_outputs(
         metrics=metrics,
         output_df=output_df,

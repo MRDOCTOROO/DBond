@@ -66,7 +66,8 @@ def build_batch(config: dict, csv_path: str, batch_size: int, device: torch.devi
     config["_model_config"] = model_config
     dataset = GraphDataset(
         csv_path=csv_path,
-        config=model_config,
+        # 完整 config dict（非 model_config）：data 段键（use_soft_labels 等）需可被检索
+        config=config,
         max_seq_len=config["data"]["max_seq_len"],
         graph_strategy=config["data"]["graph_strategy"],
         augmentation=False,
@@ -88,6 +89,15 @@ def build_batch(config: dict, csv_path: str, batch_size: int, device: torch.devi
 
 def run_smoke(config: dict, csv_path: str, batch_size: int, device: torch.device) -> None:
     model_config, batches = build_batch(config, csv_path, batch_size, device)
+    # 软标签断言：use_soft_labels 请求时 batch 必须真的携带 soft_labels（防止
+    # config 传递链断裂导致的静默回退——历史上 model_config 传入曾把该键吞掉）
+    if config.get("data", {}).get("use_soft_labels"):
+        probe = batches[0]
+        assert probe.get("soft_labels") is not None, (
+            "use_soft_labels=True 但 batch 无 soft_labels：config 传递链断裂或 CSV 缺 soft_multi 列"
+        )
+        logger.info("[soft] batch 携带 soft_labels: shape=%s, 均值=%.4f",
+                    tuple(probe["soft_labels"].shape), float(probe["soft_labels"].sum()))
     model = GraphTransformer(model_config).to(device)
     criterion = BinaryBondLoss(config.get("loss", {}))
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)

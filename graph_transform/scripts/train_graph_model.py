@@ -666,7 +666,10 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
             )
         kwargs = {
             'csv_path': csv_path,
-            'config': model_config,
+            # 必须传完整 config dict（而非 model_config）：GraphDataset 经 _get_config_value
+            # 按 根→data→model 搜索键，data 段键（如 use_soft_labels/strict_label_mode）
+            # 在 ModelConfig 对象上不存在，会被静默回退默认值
+            'config': config,
             'max_seq_len': data_config['max_seq_len'],
             'graph_strategy': data_config['graph_strategy'],
             'augmentation': augmentation,
