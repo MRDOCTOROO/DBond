@@ -20,8 +20,10 @@
 | full md6（含 intensity/scan，参考上限） | `pre_synthesis/5fold/20260901_113451` | 解除特征屏蔽 | **0.8411**±0.0049 | 0.8470 | 0.7504 |
 | 全 GAT + 理论特征 | `pre_synthesis_gat/5fold/20260903_091047` | 3G+2A → 5GAT（等深等参） | 0.7946±0.0056 | 0.7965 | 0.7060 |
 | 全 GAT + 辅助头 | `pre_synthesis_gat_aux/5fold/20260903_112113` | +中间层 bond 头 + 肽级比例头 | **0.7972**±0.0062 | 0.7982 | 0.7096 |
+| ~~软标签(gat_aux底座)~~ | `pre_synthesis_gat_aux_soft/5fold/20260905_094058` | **无效 run**：use_soft_labels 因 config 传递 bug 未生效（ceafc5f 修复），实为 gat_aux 非确定性重跑（F1 0.7954±0.0086） | — | — | — |
 | （待跑）+ ASL 主损失 | 配置 `..._gat_aux_asl.yaml` | BCE → ASL | — | — | — |
-| （在跑/待评）+ q 软标签 | 配置 `..._gat_aux_soft.yaml` + `dataset/5fold_soft` | 训练标签 → 条件均值 q | — | — | — |
+| （待跑）q 软标签·gat_aux 底座 | `..._gat_aux_soft.yaml` + `dataset/5fold_soft`（修复后重跑） | 训练标签 → 条件均值 q | — | — | — |
+| （待跑）q 软标签·theory 底座 | `pre_synthesis_5fold_md6_theory_soft.yaml` | 同上，底座换混合骨干 | — | — | — |
 
 补充指标（3G+2A 时代记录）：
 
@@ -130,6 +132,39 @@ Spearman +0.006、Top10% +0.008、Top20% +0.020。方向全部为正、幅度受
 - **看点**：q 软标签的主价值在候选序列排序——主看 q_spearman_pep / q_ndcg /
   enrichment；realized 口径 lab_f1_mi 受噪声地板约束（锚点 gat_aux 0.7972）。
 - 合成数据单元验证全部通过（含一处行索引 bug 修复）。
+
+**事故记录（2026-09-06，ceafc5f 修复）**：run 20260905_094058 的软标签**未生效**——
+train/evaluate/smoke 三处把 ModelConfig（仅 model 段属性）而非完整 config dict 传给
+GraphDataset，data 段键 `use_soft_labels` 检索不到被静默回退 False，该 run 实为
+gat_aux 非确定性重跑。修复：三处改传完整 dict；smoke 增加"batch 必须携带
+soft_labels"断言；dataset 增加反向保险丝（有 soft 列但开关未开会打印警告）；
+evaluate 支持 `--out_pred_csv /dev/null` 跳过预测输出（批量补评曾因预测归档写满
+磁盘配额报 No space left）。
+
+### 7.1 q 口径基线（2026-09-06 补评，4 run × 5 折 best_model 在 5fold_soft test 上）
+
+用 `evaluate_graph_model.py --config <run配置+use_soft_labels> --test_csv dataset/5fold_soft/<fold>.test... 
+--out_metric_csv result/metric/q_reeval/<run>_fold<f>.csv --out_pred_csv /dev/null` 补评。
+（"soft"列 = 094058 run，即 gat_aux 复跑，可当 gat_aux 的噪声对照。）
+
+| 指标 | theory (3G+2A) | gat (全GAT) | gat_aux | soft(=无效run) |
+|---|---|---|---|---|
+| q_brier ↓ | **0.0684**±0.0028 | 0.0702 | 0.0686 | 0.0719 |
+| q_mae ↓ | **0.1632**±0.0043 | 0.1699 | 0.1678 | 0.1750 |
+| q_pearson | **0.7916**±0.0083 | 0.7843 | 0.7899 | 0.7805 |
+| q_spearman（键级） | **0.8088**±0.0083 | 0.8007 | 0.8064 | 0.7967 |
+| q_spearman_pep（肽级） | **0.9004**±0.0062 | 0.8872 | 0.8891 | 0.8826 |
+| q_ndcg | **0.9928** | 0.9918 | 0.9923 | 0.9916 |
+| q_top10_enrichment | **1.716**±0.019 | 1.694 | 1.710 | 1.693 |
+| q_top20_enrichment | **1.653**±0.009 | 1.630 | 1.640 | 1.629 |
+| lab_f1_mi（realized） | 0.7947 | 0.7946 | **0.7972** | 0.7954 |
+| spearman_rho（realized 肽级） | **0.7973** | 0.7856 | 0.7874 | 0.7815 |
+
+要点：①**混合骨干在全部 q 口径上优于全 GAT 系**——全 GAT 换骨干轻微损伤排序质量
+（与 realized Spearman 下降一致），故新增 theory 底座的软标签配置；②辅助头对 q
+也有小幅正贡献（gat_aux > gat）；③q_ndcg≈0.992 已近饱和、区分度弱，主看
+q_spearman_pep 与 enrichment；④top10 enrichment ~1.7：按模型排序取前 10% 肽的
+真实断裂比例比平均高 71%，直接对应存储筛选价值。
 
 ---
 
