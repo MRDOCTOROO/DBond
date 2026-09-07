@@ -26,6 +26,9 @@
 | 条件组折叠·自检（spectrum w=n_g） | `..._folded_spectrum/5fold/20260907_070840`（fold1222 单折） | 期望≡hard theory：F1 0.7951 vs hard 同折 0.7908（单折种子噪声内；训练日程不同不逐位等）→ 折叠实现正确 | —（单折） | 0.7963 | 0.7066 |
 | 条件组折叠·组均匀（uniform 五折） | `..._folded_uniform/5fold/20260907_072754` | 383k 行→7.6k 条件组，w=1；**候选排序主指标无增益**（§14.1） | 0.7954±0.0073 | 0.7975 | 0.7077 |
 | 条件组折叠·序列均衡（seqbal 五折） | `..._folded_seqbal/5fold/20260907_091256` | 每序列等权 w=1/K_s；同样无增益（§14.1） | 0.7960±0.0068 | 0.7972 | 0.7085 |
+| ~~+ 序列级 ranking loss（rank 五折）~~ | `..._folded_rank/5fold/20260907_124400` | λ=0.3 pairwise；**五折证伪**（q_seq 0.6122 < uniform 0.6171；试点 +0.033 为单折噪声，第二次教训：q_seq 折间 std 0.03-0.05，单折不可判） | 0.7953±0.0069 | 0.7970 | 0.7082 |
+| **+ FiLM 条件调制（film 五折）= 当前最佳** | `..._folded_film/5fold/20260907_124432` | [charge,nce]→(γ,β) 乘性调制（~33K 参数零初始化）；F1 **0.7980 新最高**，并把折叠底座掉的键级 q_spearman（0.8038→0.8101）/q_cond（0.8875→0.8901）拉回 hard 行级水平 | **0.7980±0.0057** | 0.8002 | 0.7112 |
+| （待跑）+ FiLM + 辅助头 | `..._folded_film_aux.yaml` | 两个已证正交正向机制首次叠加（+0.0026/+0.0026）；deep supervision 层 [1,3]→[1]（2 层 GAT） | — | — | — |
 | （待跑）+ ASL 主损失 | 配置 `..._gat_aux_asl.yaml` | BCE → ASL（正率 0.48，预计收益有限，降级） | — | — | — |
 
 补充指标（3G+2A 时代记录）：
@@ -263,16 +266,16 @@ delta 对比需先补跑 `python run_models_parallel.py -m dbond_s_pre dbond_m_p
 
 ## 11. 下一步优先级（按证据排序，2026-09-07 折叠五折后修订）
 
-1. **序列级 ranking loss**（首选）：肽级断裂比 pairwise/listwise margin，直接优化
-   q_spearman_pep_seq；折叠管线（每行=一个条件组 + 组键/序列键透传）让实现变简单，
-   单变量 = 主 BCE + λ·ranking
+1. **FiLM + 辅助头叠加**（`..._film_aux.yaml`）：两个已证正向机制首次组合，
+   目标 ~0.799+；胜出即为 pre-synthesis 定稿生产版
 2. 5 折 ensemble 推理：5 个 best_model 概率平均，零训练成本（需写跨折聚合小脚本）
 3. FiLM 条件调制（use_condition_film，~33K 参数，单变量）——charge×nce 占方差大头，
    现有三条注入路全是加性；q 泛化差距（§14.1）主要落在条件交互上
 4. GATv2 / bond-centric graph（论文扩展位）
 5. 补跑 4 个 ludbond pre 基线（与 pre_theory 配对算 delta）
-6. 已证伪/降级：~~条件组折叠与重加权~~（无增益 §14.1）、~~q Beta-Binomial 收缩~~
-   （目标侧第三拳，方向已证伪）、~~ASL~~（正率 0.48 无不平衡可治）
+6. 已证伪/降级：~~条件组折叠与重加权~~（无增益 §14.1）、~~q Beta-Binomial 收缩~~、
+   ~~ASL~~（正率 0.48 无不平衡可治）、~~序列级 ranking loss~~（五折证伪 §15.5：
+   q_seq 0.6122 < uniform 0.6171；注意 fold-1222 单折两次给出假阳性，q_seq 只认五折）
 
 ## 12. 运行手册（pod 项目根目录，.venv/bin/python）
 
