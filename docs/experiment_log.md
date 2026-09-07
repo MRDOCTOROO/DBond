@@ -479,13 +479,22 @@ fold-1222 试点（单折，20260907_070840）：
 - 看点：q_spearman_pep_cond/seq 与 q_brier 相对 uniform 五折的变化——FiLM 直接
   作用在条件交互的泛化上。
 
-### 15.3 跨折留一 ensemble（零训练成本）
+### 15.3 集成推理（⚠ 跨折版已作废，2026-09-07 泄漏实证）
 
-- 实现：`scripts/ensemble_inference.py`——对每个 fold f 用**其余 4 折**的
-  best_model 概率平均后在 fold f test 上评估。fold 间是独立重划分、test 大量
-  重叠，必须排除本折模型否则测试集泄漏进训练。
-- 概率平均经 logit 反变换喂指标器（其内部固定再做一次 sigmoid，精确还原）；
-  输出每折 CSV + ensemble_summary.csv（mean±std），口径含 q_*_cond/seq。
+**数据审计发现**：五个 fold 不是互斥分区，是相互重叠的随机重划分——
+fold 1222 的 test 有 **83.57%** 的谱图（按 name+scan_num+rt 唯一标识、全行含
+true_multi 完全相同）出现在 fold 2252 的 train 里（vs 3514/6072 同为 76-84%）。
+fold 内部 train/test 严格互斥（两折抽检 overlap=0，train 无重复谱图），故
+**所有单模型结果不受影响**；仅跨折集成无效。
+
+首版"留一跨折集成"（fold f 用其余 4 折模型）实测 F1 0.8559±0.0034、AUC 0.9407、
+q_spearman_pep_seq 0.8945 —— 看似巨大增益，实为记忆效应（其余 4 折模型各自见过
+fold f test 的 ~80%），**全部作废**。防泄漏方向当初就想反了：本折模型才是唯一
+没见过本折 test 的。
+
+**唯一诚实方案 = 同折同划分 + 不同 seed 集成**（权重初始化/dropout/批序差异）。
+`ensemble_inference.py` 已重写为该模式（--checkpoints 列表，文档头写明泄漏依据）。
+预期诚实增益幅度远小于作废数字（通常 +0.003~0.01），需实测。
 
 ### 15.4 运行命令（用户手动，pod 项目根）
 
@@ -503,10 +512,27 @@ CUDA_VISIBLE_DEVICES= .venv/bin/python graph_transform/scripts/smoke_test_pipeli
 CUDA_VISIBLE_DEVICES=0 nohup .venv/bin/python graph_transform/scripts/train_5fold.py     --config graph_transform/config/pre_synthesis_fold1222_theory_rank.yaml     --folds 1222 --fold_data_dir dataset/5fold_folded > logs/rank_pilot.log 2>&1 &
 CUDA_VISIBLE_DEVICES=1 nohup .venv/bin/python graph_transform/scripts/train_5fold.py     --config graph_transform/config/pre_synthesis_fold1222_theory_film.yaml     --folds 1222 --fold_data_dir dataset/5fold_folded > logs/film_pilot.log 2>&1 &
 
-# 4) ensemble（对 theory hard 五折；其余 run 换 cv_root/config 重跑即可）
-.venv/bin/python graph_transform/scripts/ensemble_inference.py     --cv_root checkpoints/graph_transform/pre_synthesis/5fold/20260902_073953     --config graph_transform/config/pre_synthesis_5fold_md6_theory.yaml     --fold_data_dir dataset/5fold_soft --out_dir result/metric/ensemble/theory
+# 4) ensemble（同折多种子，诚实口径；先要有多 seed 的 best_model 列表）
+.venv/bin/python graph_transform/scripts/ensemble_inference.py     --checkpoints <seed_a>/best_model.pt,<seed_b>/best_model.pt,<seed_c>/best_model.pt     --config graph_transform/config/pre_synthesis_fold1222_theory.yaml     --test_csv dataset/5fold_soft/1222.test.fbr.multi.csv     --out_csv result/metric/ensemble/seedN_fold1222.csv
 
 # 5) 判读：试点主看 fold-1222 上 q_spearman_pep_seq / q_pep_cond 相对
 #    uniform 试点（0.5497 / 0.8956）与 theory hard 同折（0.5300 / 0.8875）；
 #    任一方向为正再扩五折（对照 ±0.02 噪声标尺）
 ```
+
+### 15.5 rank / film 试点结果（fold-1222 单折，20260907_105212）
+
+| 指标 | hard 同折 | uniform 试点 | **rank 试点** | film 试点 |
+|---|---|---|---|---|
+| lab_f1_mi | 0.7908 | 0.7933 | **0.7966** | 0.7971 |
+| q_brier ↓ | 0.0668 | 0.0650 | **0.0644** | 0.0666 |
+| q_spearman | 0.8093 | 0.8167 | **0.8157** | 0.8119 |
+| q_spearman_pep_cond | 0.8875 | 0.8956 | 0.8947 | 0.8879 |
+| **q_spearman_pep_seq（主）** | 0.5300 | 0.5497 | **0.5630** | 0.5363 |
+| q_top10_enrichment_seq | 1.2251 | 1.2466 | 1.2466 | 1.2194 |
+
+- **rank**：主指标 +0.033 vs hard / +0.013 vs uniform，q_brier 全场最优——方向正确，
+  幅度在种子噪声边缘（±0.017），**值得扩五折**确认。
+- **film**：与 hard 基本持平（seq +0.006 / cond ±0）——零初始化恒等起步下未学出
+  条件交互增益。单折证据太弱，五折便宜（~6 min）可顺带确认；若五折仍平则搁置。
+- 两臂 realized F1 均正常（0.797 上下），无训练不稳迹象。
