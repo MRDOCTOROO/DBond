@@ -28,7 +28,14 @@
 | 条件组折叠·序列均衡（seqbal 五折） | `..._folded_seqbal/5fold/20260907_091256` | 每序列等权 w=1/K_s；同样无增益（§14.1） | 0.7960±0.0068 | 0.7972 | 0.7085 |
 | ~~+ 序列级 ranking loss（rank 五折）~~ | `..._folded_rank/5fold/20260907_124400` | λ=0.3 pairwise；**五折证伪**（q_seq 0.6122 < uniform 0.6171；试点 +0.033 为单折噪声，第二次教训：q_seq 折间 std 0.03-0.05，单折不可判） | 0.7953±0.0069 | 0.7970 | 0.7082 |
 | **+ FiLM 条件调制（film 五折）= 当前最佳** | `..._folded_film/5fold/20260907_124432` | [charge,nce]→(γ,β) 乘性调制（~33K 参数零初始化）；F1 **0.7980 新最高**，并把折叠底座掉的键级 q_spearman（0.8038→0.8101）/q_cond（0.8875→0.8901）拉回 hard 行级水平 | **0.7980±0.0057** | 0.8002 | 0.7112 |
-| （待跑）+ FiLM + 辅助头 | `..._folded_film_aux.yaml` | 两个已证正交正向机制首次叠加（+0.0026/+0.0026）；deep supervision 层 [1,3]→[1]（2 层 GAT） | — | — | — |
+| ~~+ FiLM + 辅助头（film_aux 五折）~~ | `..._folded_film_aux/5fold/20260907_144353` | **叠加证伪**：F1 0.7961 < film 0.7980，q_spearman/q_cond/q_pep 同向下降（辅助头的正收益在全 GAT 行级底座上，与折叠稀疏目标冲突）；唯一亮点 ECE 0.0375（最佳校准），不采纳 | 0.7961±0.0052 | 0.7974 | 0.7072 |
+
+**★ pre-synthesis 定稿版本 = film 臂**（`pre_synthesis_fold1222_theory_film.yaml`，
+五折 `..._folded_film/5fold/20260907_124432`）：混合 3G+2A 骨干 + 15 维理论离子
+特征 + 条件组折叠（group_uniform）+ FiLM 条件调制。F1 0.7980±0.0057 / AUC 0.8825 /
+q_cond 0.8901 / q_seq 0.6252 / top10_enrichment_cond 1.80。部署：排序用各折
+best_model_q.pt，分类用 best_model.pt。**模型搜索收敛**（正向：理论特征、辅助头
+@gat底座、FiLM；证伪：全GAT、软标签≡hard、折叠重加权、ranking loss、FiLM+aux叠加）。
 | （待跑）+ ASL 主损失 | 配置 `..._gat_aux_asl.yaml` | BCE → ASL（正率 0.48，预计收益有限，降级） | — | — | — |
 
 补充指标（3G+2A 时代记录）：
