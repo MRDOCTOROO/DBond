@@ -87,10 +87,12 @@ class GraphDataset(Dataset):
         # 条件组折叠权重（fold_condition_groups.py 生成的折叠 CSV 带 group_n 列）：
         # spectrum=按组内谱图数加权（期望上复现行级 hard BCE，实现自检用）；
         # group_uniform=每个 (seq,charge,nce) 条件等权；
-        # sequence_balanced=每序列等权（序列内条件平分，贴合候选肽筛选分布）
+        # sequence_balanced=每序列等权（序列内条件平分，贴合候选肽筛选分布）。
+        # 仅 train split 生效：test/eval 用的行级 CSV 无 group_n，且评估路径
+        # 不消费 sample_weights（val loss / 全部指标不加权）
         self.weighting_scheme = str(_get_config_value(config, 'weighting_scheme', 'none')).lower()
         self.sample_weights = None
-        if self.weighting_scheme != 'none':
+        if self.weighting_scheme != 'none' and split == 'train':
             if 'group_n' not in self.data.columns:
                 raise ValueError(
                     f"weighting_scheme={self.weighting_scheme} 需要折叠 CSV（group_n 列），"

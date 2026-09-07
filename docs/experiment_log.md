@@ -22,7 +22,7 @@
 | 全 GAT + 辅助头 | `pre_synthesis_gat_aux/5fold/20260903_112113` | +中间层 bond 头 + 肽级比例头 | **0.7972**±0.0062 | 0.7982 | 0.7096 |
 | ~~软标签(gat_aux底座)~~ | `pre_synthesis_gat_aux_soft/5fold/20260905_094058` | **无效 run**：use_soft_labels 因 config 传递 bug 未生效（ceafc5f 修复），实为 gat_aux 非确定性重跑（F1 0.7954±0.0086） | — | — | — |
 | ~~q 软标签(gat_aux底座)·真软标签~~ | `pre_synthesis_gat_aux_soft/5fold/20260906_040542` | 修复后重跑，q 确认生效；**等价性审计证明重复行 q ≡ hard BCE**（§7.2），F1 0.7956±0.0061 与 hard 0.7972 种子噪声内，作为等价性实证对照归档 | 0.7956±0.0061 | 0.7957 | 0.7077 |
-| （在跑）q 软标签·theory 底座 | `pre_synthesis_5fold_md6_theory_soft.yaml`（20260906_134418） | 同一恒等式 ⇒ 预计 ≈ theory 底座种子复跑（F1≈0.795） | — | — | — |
+| ~~q 软标签·theory 底座~~ | `pre_synthesis_theory_soft/5fold/20260907_053941` | 审计预言逐位兑现：F1 0.7949±0.0053 vs hard 0.7950（Δ=0.0001），q 指标全同（§7.2 实证二） | 0.7949±0.0053 | 0.8006 | 0.7041 |
 | （待跑）条件组折叠试点 ×3 臂 | `pre_synthesis_fold1222_theory_folded_{spectrum,uniform,seqbal}.yaml`，fold 1222 单折 | **真正改变训练目标**：383k 谱图行 → 7,643 条件组 + 显式权重（§14） | — | — | — |
 | （待跑）+ ASL 主损失 | 配置 `..._gat_aux_asl.yaml` | BCE → ASL（正率 0.48，预计收益有限，降级） | — | — | — |
 
@@ -183,7 +183,7 @@ q_spearman_pep 与 enrichment；④top10 enrichment ~1.7：按模型排序取前
 推论：mixed hard/soft 目标同样无效（组内平均后回到 q）；§7 的软标签路径只改变
 了 q 指标的"可见性"，没有改变训练目标。
 
-**实证**（修复 config bug 后真软标签 run `20260906_040542` vs hard gat_aux）：
+**实证一**（修复 config bug 后真软标签 run `20260906_040542` vs hard gat_aux）：
 
 | 指标 | gat_aux (hard) | gat_aux_soft（真 q） |
 |---|---|---|
@@ -192,9 +192,18 @@ q_spearman_pep 与 enrichment；④top10 enrichment ~1.7：按模型排序取前
 | q_spearman_pep | 0.8891（补评） | 0.8822±0.0149 |
 | q_top10_enrichment | 1.710（补评） | 1.689±0.027 |
 
-全部落在种子噪声内 ⇒ 定理成立。正在跑的 theory_soft（20260906_134418）按同一
-恒等式预计 ≈ theory 底座种子复跑。**结论：要真正改变训练目标，必须折叠条件组
-并显式选权重（§14）。**
+**实证二**（theory 底座，`pre_synthesis_theory_soft/5fold/20260907_053941`，五折）：
+
+| 指标 | theory (hard) | theory_soft（真 q） |
+|---|---|---|
+| lab_f1_mi | 0.7950±0.0053 | **0.7949±0.0053**（Δ=0.0001） |
+| lab_acc_mi | 0.8000 | 0.8006 |
+| q_spearman | 0.8088（补评） | 0.8086±0.0168 |
+| q_spearman_pep | 0.9004（补评） | 0.9010±0.0125 |
+| q_top10_enrichment | 1.716（补评） | 1.714±0.027 |
+
+两个底座五折全部落在种子噪声内（theory 底座 F1 差 0.0001，几乎逐位复现）⇒ 定理
+完全成立。**结论：要真正改变训练目标，必须折叠条件组并显式选权重（§14）。**
 
 ### 7.3 行级肽级 q 指标的口径缺陷（已修复，2026-09-06）
 
