@@ -470,6 +470,20 @@ class GraphTransformer(nn.Module):
                 nn.ReLU(),
                 nn.Dropout(config.dropout)
             )
+
+        # FiLM 条件调制：[charge, nce] -> (γ, β) ∈ R^{2H}，对打包后节点特征做
+        # h=(1+γ)h+β。末层零初始化使训练从恒等映射（=无 FiLM 基线）出发；
+        # charge/nce 均在 pre_synthesis 允许特征集内，无 observed-feature 泄漏。
+        self.use_condition_film = getattr(config, 'use_condition_film', False)
+        if self.use_condition_film:
+            film_hidden = 64
+            self.film_mlp = nn.Sequential(
+                nn.Linear(2, film_hidden),
+                nn.ReLU(),
+                nn.Linear(film_hidden, 2 * self.hidden_dim),
+            )
+            nn.init.zeros_(self.film_mlp[-1].weight)
+            nn.init.zeros_(self.film_mlp[-1].bias)
         
         # 图卷积层
         self.gcn_layers = nn.ModuleList([
@@ -648,6 +662,17 @@ class GraphTransformer(nn.Module):
             dim=0,
         )
         bond_src = bond_dst = valid_bond_mask = e_ij = None
+        if self.use_condition_film:
+            # FiLM 调制放在节点打包后、消息传递前：charge/nce 的乘性交互影响
+            # 全部后续层。输入缩放与 NodeEncoder 同口径（charge×0.1, nce×0.01）。
+            charges = batch_data['charges'].to(device=node_features.device, dtype=torch.float32)
+            nces = batch_data['nces'].to(device=node_features.device, dtype=torch.float32)
+            film_in = torch.stack([charges * 0.1, nces * 0.01], dim=1)
+            film_param = self.film_mlp(film_in)
+            gamma, beta = film_param.chunk(2, dim=-1)
+            sample_idx = torch.repeat_interleave(
+                torch.arange(batch_size, device=node_features.device), node_lens_tensor)
+            node_features = node_features * (1.0 + gamma[sample_idx]) + beta[sample_idx]
         if max_bonds > 0:
             bond_positions = torch.arange(max_bonds, device=node_features.device)
             valid_bond_mask = bond_positions.unsqueeze(0) < bond_counts.unsqueeze(1)

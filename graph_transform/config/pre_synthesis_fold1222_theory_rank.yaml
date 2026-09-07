@@ -1,0 +1,234 @@
+# 条件组折叠试点 · 组均匀权重臂（fold 1222 单折）。
+# 背景（20260906 等价性审计）：重复行 q 软标签与 hard BCE 损失函数完全相同
+# （gat_aux_soft 实证 f1 0.7956 vs hard 0.7972，种子噪声内），必须折叠到
+# 唯一 (seq,charge,nce) 条件组并显式选权重才构成新训练目标。
+# 底座 = theory mixed 3G+2A（q 基线最优），无辅助头；数据 = fold_condition_groups.py
+# 输出的 dataset/5fold_folded（一行=一个条件组，soft_multi=q 为训练目标）。
+# 本臂 weighting_scheme=group_uniform：每个 (seq,charge,nce) 条件等权。
+# 对照臂：_spectrum（w=n_g，应近似复现 hard theory 行级训练，实现自检）、
+#         _seqbal（每序列等权，序列内条件平分）。
+# 训练动力学重标定：7.6k 组/epoch（行级 38 万），batch 128 → ~48 步/epoch，
+# epochs/patience/warmup/t_max 等比放大保持总优化步数与行级 run 可比。
+# 本臂 = uniform 底座 + 序列级 pairwise ranking loss（单变量，对照 uniform 五折
+# 20260907_072754）：肽级断裂比 hinge，直接优化 q_spearman_pep_seq/enrichment_seq。
+ablation:
+  base_experiment_name: null
+  baseline_no_state_env: false
+  disable_global_node: false
+  env_nce_only: false
+  env_rt_only: false
+  env_scan_num_only: false
+  gat_only: false
+  gcn_only: false
+  no_edge_attr: false
+  no_message_passing: false
+  no_state_env: false
+  pre_synthesis: true
+  rebuild_cache: true
+  state_charge_only: false
+  state_intensity_only: false
+  state_mass_intensity_only: false
+  state_mass_only: false
+  tag: gt_pre
+  use_hybrid_graph: false
+  use_sequence_graph: false
+advanced:
+  backend: nccl
+  distillation: false
+  distillation_alpha: 0.5
+  distillation_temperature: 4.0
+  distributed: false
+  ensemble_methods:
+  - voting
+  - averaging
+  - stacking
+  hyperparameter_search: false
+  quantization: false
+  quantization_method: dynamic
+  search_method: grid
+  teacher_model_path: null
+  use_ensemble: false
+data:
+  augmentation: false
+  augmentation_prob: 0.3
+  cache_dir: cache/graph_data_folded
+  cache_full_graphs: false
+  cache_graphs: true
+  drop_last: true
+  env_feature_name: scan_num
+  env_feature_scale: 1.0
+  focal_loss_alpha: 0.25
+  focal_loss_gamma: 2.0
+  graph_strategy: distance
+  max_augmentation_trials: 3
+  max_seq_len: 32
+  num_workers: 8
+  pin_memory: true
+  prefetch_factor: 2
+  test_csv_path: dataset/5fold_folded/1222.test.fbr.multi.csv
+  train_csv_path: dataset/5fold_folded/1222.train.fbr.shuffle.multi.csv
+  use_class_weights: true
+  val_csv_path: null
+  use_soft_labels: true
+  weighting_scheme: group_uniform
+debug:
+  check_gradients: false
+  check_nan_inf: true
+  debug_mode: false
+  diagnostic_dir: logs/graph_transform/diagnostics
+  empty_cache_on_epoch_end: false
+  force_gc_on_epoch_end: false
+  force_gc_on_eval_end: false
+  log_grad_norm: true
+  profile_memory: false
+  profile_time: false
+  save_attention_weights: false
+  save_graph_structures: false
+  save_nonfinite_batch: true
+  visualize_predictions: false
+device:
+  amp_backend: native
+  auto_detect: true
+  device_type: cuda
+  gpu_id: 0
+  use_amp: true
+evaluation:
+  ensemble_predictions: false
+  eval_interval: 1
+  metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1
+  - auc
+  - hamming_loss
+  num_ensemble_models: 5
+  output_metric_dir: result/metric/graph_transform/pre_synthesis_theory_folded_rank
+  output_pred_dir: result/pred/graph_transform/pre_synthesis_theory_folded_rank
+  save_outputs: true
+  test_time_augmentation: false
+  threshold: 0.5
+  threshold_strategy: fixed
+experiment:
+  benchmark: true
+  description: 'folded condition-group pilot arm=group_uniform+ranking_loss on theory mixed 3G+2A
+    base (no aux heads); single-variable (data folding + weighting) vs row-level hard
+    theory run; sanity arm=_spectrum should reproduce it'
+  deterministic: false
+  name: gt_pre_fold1222_theory_folded_rank
+  seed: 42
+  version: v1.0
+logging:
+  level: INFO
+  log_dir: logs/graph_transform/pre_synthesis_theory_folded_rank
+  log_file: training.log
+  log_interval: 10
+  plot_dir: null
+  save_graph_interval: 50
+  save_loss_curves: true
+  save_training_curves: true
+  tensorboard_log_dir: tensorboard/graph_transform/pre_synthesis_theory_folded_rank
+  use_tensorboard: true
+loss:
+  ranking_loss_weight: 0.3
+  ranking_margin: 0.0
+  auxiliary_loss_weights:
+    dice: 0.3
+    focal: 0.5
+    l2_regularization: 0.1
+  handle_imbalance: false
+  imbalance_strategy: weighted
+  main_loss: binary_cross_entropy
+  pos_weight: null
+  use_auxiliary_losses: false
+model:
+  aa_embedding_dim: 64
+  alphabet: '#ABCDEFGHIKLMNOPQRSTVWXYZ'
+  bond_use_diff_feature: true
+  bond_use_edge_repr: true
+  bond_use_product_feature: true
+  concat_heads: true
+  distance_embedding_dim: 16
+  dropout: 0.1
+  edge_dim: 32
+  edge_embedding_dim: 16
+  edge_types:
+  - sequence
+  - distance
+  - functional
+  - long_range
+  - global
+  env_feature_mask:
+  - true
+  - true
+  gat_use_edge_bias: true
+  gat_use_edge_gate: true
+  hidden_dim: 256
+  leaky_relu_slope: 0.2
+  long_range_hops: 1
+  long_range_stride: 10
+  max_distance: 6
+  max_seq_len: 32
+  num_attention_heads: 4
+  num_classes: 1
+  num_env_features: 2
+  num_gat_layers: 2
+  num_gcn_layers: 3
+  num_physicochemical_features: 4
+  num_state_features: 3
+  pad_char: '#'
+  physicochemical_dim: 32
+  position_embedding_dim: 32
+  state_feature_mask:
+  - true
+  - true
+  - true
+  use_distance_embedding: true
+  use_edge_features: true
+  use_edge_type_embedding: true
+  use_env_features: true
+  use_global_node: true
+  use_long_range_edges: false
+  use_physicochemical_features: true
+  use_position_embedding: true
+  use_raw_edge_attr: true
+  use_state_features: true
+  use_theory_features: true
+optimizer:
+  betas:
+  - 0.9
+  - 0.999
+  eps: 1e-8
+  eta_min: 0.0
+  gamma: 0.1
+  momentum: 0.9
+  nesterov: true
+  step_size: 30
+  t_max: 300
+  type: adamw
+performance:
+  compile_model: false
+  gradient_checkpointing: false
+  max_memory_usage: 8GB
+  persistent_workers: false
+  prefetch_factor: 2
+  use_efficient_attention: false
+  use_torch_compile: false
+training:
+  batch_size: 128
+  checkpoint_dir: checkpoints/graph_transform/pre_synthesis_theory_folded_rank
+  early_stopping: true
+  epochs: 300
+  gradient_clip_norm: 1.0
+  learning_rate: 0.0001
+  min_delta: 0.001
+  min_lr: 1.0e-05
+  patience: 25
+  q_checkpoint_metric: q_spearman_pep_cond
+  save_best_only: false
+  save_interval: 50
+  scheduler: cosine
+  validation_interval: 1
+  validation_split: 0.2
+  warmup_epochs: 40
+  weight_decay: 0.0001

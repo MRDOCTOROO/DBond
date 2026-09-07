@@ -126,10 +126,43 @@ def test_group_level_metrics() -> None:
           f"seq_top10={out['q_top10_enrichment_seq']:.4f} (行级={0.9 / row_mean:.4f})")
 
 
+def test_sequence_ranking_loss() -> None:
+    """(4) 序列级 pairwise ranking loss：违序>0、顺序=0、同序列行聚合。"""
+    from types import SimpleNamespace
+    from graph_transform.training.trainer import Trainer
+
+    dummy = SimpleNamespace(config={"loss": {"ranking_margin": 0.0}})
+    B, L = 4, 4
+    mask = torch.zeros(B, L)
+    mask[:, :3] = 1.0                      # 每行 4 键只有前 3 个有效
+    seqs = ["A", "A", "B", "B"]            # 每序列 2 行（条件组），聚合到序列级
+    soft = torch.full((B, L), 0.2)
+    soft[2:] = 0.8                         # A 目标低、B 目标高
+    batch = {"label_mask": mask, "soft_labels": soft, "labels": soft.round(),
+             "sequences": seqs}
+
+    # A 预测高、B 预测低 → 与目标方向相反，hinge 必须给正损失
+    logits_bad = torch.zeros(B, L)
+    logits_bad[:2, :3] = 4.0
+    logits_bad[2:, :3] = -4.0
+    l_bad = Trainer._sequence_ranking_loss(dummy, logits_bad, batch)
+    assert l_bad.item() > 0.5, l_bad.item()
+
+    # 反向 → 已满足 margin=0，损失恰为 0
+    l_good = Trainer._sequence_ranking_loss(dummy, -logits_bad, batch)
+    assert l_good.item() == 0.0, l_good.item()
+
+    # 单序列批 → 无可排序对，返回 0
+    batch_one = dict(batch, sequences=["A"] * B)
+    assert Trainer._sequence_ranking_loss(dummy, logits_bad, batch_one).item() == 0.0
+    print(f"[4] ranking loss OK: 违序={l_bad.item():.4f} 顺序={l_good.item():.4f} 单序列=0")
+
+
 def main() -> None:
     test_weighted_bce_identity()
     test_weighted_mean_semantics()
     test_group_level_metrics()
+    test_sequence_ranking_loss()
     print("\n全部等价性/正确性测试通过 ✅")
 
 

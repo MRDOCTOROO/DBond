@@ -13,7 +13,7 @@ import logging
 import os
 import json
 import gc
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from tqdm import tqdm
 
 from .metrics import BinaryBondMetrics, MetricTracker, order_binary_bond_metric_dict, batch_group_keys
@@ -421,6 +421,15 @@ class Trainer:
         loss, aux_stats = self._apply_auxiliary_head_losses(
             loss, batch_data, self._soft_targets(batch_data, targets), row_weights)
 
+        # 序列级 pairwise ranking loss（loss.ranking_loss_weight > 0 启用）：
+        # 肽级断裂比的 pairwise margin，直接优化 q_spearman_pep_seq / enrichment_seq
+        rank_weight = float(self.config.get('loss', {}).get('ranking_loss_weight', 0.0))
+        ranking_loss_val = 0.0
+        if rank_weight > 0.0:
+            ranking_loss = self._sequence_ranking_loss(predictions_full, batch_data)
+            loss = loss + rank_weight * ranking_loss
+            ranking_loss_val = float(ranking_loss.item())
+
         self._ensure_finite_tensor(loss, "loss", batch_data)
         with torch.no_grad():
             dbond_style_loss = self._compute_dbond_style_loss(batch_data, predictions_full, targets_full)
@@ -442,6 +451,7 @@ class Trainer:
             'dbond_style_loss': float(dbond_style_loss.item()),
             'aux_bond_loss': aux_stats.get('aux_bond_loss', 0.0),
             'peptide_aux_loss': aux_stats.get('peptide_aux_loss', 0.0),
+            'ranking_loss': ranking_loss_val,
         }
 
     def _soft_targets(self, batch_data: Dict[str, Any], targets: torch.Tensor) -> torch.Tensor:
@@ -455,6 +465,53 @@ class Trainer:
             return targets
         soft_masked, _ = self._apply_label_mask(batch_data, soft, soft)
         return soft_masked if soft_masked is not None else targets
+
+    def _sequence_ranking_loss(self, predictions_full: torch.Tensor,
+                               batch_data: Dict[str, Any]) -> torch.Tensor:
+        """批内序列级 pairwise margin ranking loss（ranking_loss_weight 启用）。
+
+        行级（折叠数据一行=一个条件组）score = 有效键 sigmoid 均值，target = 有效标签
+        均值（优先 q 软标签）；按 sequences 聚合到序列级 (score_s, target_s)，对所有
+        target 不相等的序列对 (i,j) 施加 hinge：relu(margin - (s_hi - s_lo))，方向由
+        target 大小决定。不足两个序列或无有效对 → 0（不产生梯度）。
+        """
+        margin = float(self.config.get('loss', {}).get('ranking_margin', 0.0))
+        probs = torch.sigmoid(predictions_full.float())
+        mask = batch_data.get('label_mask')
+        targets = batch_data.get('soft_labels')
+        if targets is None:
+            targets = batch_data['labels']
+        targets = targets.float()
+        if mask is not None:
+            m = mask.bool()
+            row_score = (probs * m).sum(dim=1) / m.sum(dim=1).clamp_min(1)
+            row_target = (targets * m).sum(dim=1) / m.sum(dim=1).clamp_min(1)
+        else:
+            row_score = probs.mean(dim=1)
+            row_target = targets.mean(dim=1)
+        seqs = batch_data.get('sequences')
+        if not seqs or len(seqs) != row_score.size(0):
+            return predictions_full.new_zeros(())
+        groups: Dict[str, List[int]] = {}
+        for i, s in enumerate(seqs):
+            groups.setdefault(s, []).append(i)
+        idx_lists = list(groups.values())
+        if len(idx_lists) < 2:
+            return predictions_full.new_zeros(())
+        seq_score = torch.stack([row_score[idx].mean() for idx in idx_lists])
+        seq_target = torch.stack([row_target[idx].mean() for idx in idx_lists])
+        n = seq_score.size(0)
+        loss = predictions_full.new_zeros(())
+        n_pairs = 0
+        for i in range(n):
+            for j in range(i + 1, n):
+                if seq_target[i] > seq_target[j] + 1e-4:
+                    loss = loss + torch.relu(margin - (seq_score[i] - seq_score[j]))
+                    n_pairs += 1
+                elif seq_target[j] > seq_target[i] + 1e-4:
+                    loss = loss + torch.relu(margin - (seq_score[j] - seq_score[i]))
+                    n_pairs += 1
+        return loss / max(n_pairs, 1)
 
     def _masked_row_weights(self, batch_data: Dict[str, Any]) -> Optional[torch.Tensor]:
         """条件组权重按 label_mask 行主序展平（与 _apply_label_mask 的 targets 同序）。"""

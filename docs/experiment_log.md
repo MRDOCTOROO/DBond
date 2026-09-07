@@ -454,3 +454,59 @@ fold-1222 试点（单折，20260907_070840）：
 重复测量上限 0.888；当前模型已超过序列平均行为的信息上限（靠 charge/nce 泛化），
 剩余差距 = q 对未见序列的泛化差距 ⇒ 下一步转向条件交互建模（FiLM）与直接排序
 优化（ranking loss），不再做目标侧工程。
+
+## 15. 第二轮实现：ranking loss + FiLM + ensemble（2026-09-07，待跑）
+
+依据 §14.1 结论（目标侧饱和、差距在 q 对未见序列的泛化）启动三项，用户手动训练。
+
+### 15.1 序列级 pairwise ranking loss（损失侧，单变量）
+
+- 实现：`trainer._sequence_ranking_loss`——行级 score=有效键 sigmoid 均值、
+  target=有效标签均值（优先 q）；按 `sequences` 聚合到序列级，对 target 不等
+  （>1e-4）的序列对施加 hinge `relu(margin-(s_hi-s_lo))`；配对数归一。
+- 开关：`loss.ranking_loss_weight`（0=关，试点 0.3）、`loss.ranking_margin`（0）；
+  训练日志新增 `ranking_loss` 列。仅训练路径，val loss/指标口径不变。
+- 配置：`pre_synthesis_fold1222_theory_rank.yaml`（uniform 折叠底座 + ranking，
+  对照 = uniform 五折 20260907_072754）。
+- 单测：test_folded_equivalence.py [4]（违序>0.5 / 顺序=0 / 单序列=0）。
+
+### 15.2 FiLM 条件调制（结构侧，单变量）
+
+- 实现：`model.use_condition_film`——`[charge×0.1, nce×0.01]` → MLP(2→64→2H)
+  生成逐样本 (γ,β)，对打包后节点特征做 `h=(1+γ)h+β`；末层零初始化=恒等起步。
+  ~33.5K 参数；charge/nce 均在 pre 允许集，无泄漏。
+- 配置：`pre_synthesis_fold1222_theory_film.yaml`（uniform 折叠底座 + FiLM）。
+- 看点：q_spearman_pep_cond/seq 与 q_brier 相对 uniform 五折的变化——FiLM 直接
+  作用在条件交互的泛化上。
+
+### 15.3 跨折留一 ensemble（零训练成本）
+
+- 实现：`scripts/ensemble_inference.py`——对每个 fold f 用**其余 4 折**的
+  best_model 概率平均后在 fold f test 上评估。fold 间是独立重划分、test 大量
+  重叠，必须排除本折模型否则测试集泄漏进训练。
+- 概率平均经 logit 反变换喂指标器（其内部固定再做一次 sigmoid，精确还原）；
+  输出每折 CSV + ensemble_summary.csv（mean±std），口径含 q_*_cond/seq。
+
+### 15.4 运行命令（用户手动，pod 项目根）
+
+```bash
+# 0) 同步代码
+git pull
+
+# 1) 本地单测（CPU 秒级）
+.venv/bin/python graph_transform/scripts/test_folded_equivalence.py
+
+# 2) smoke（验证 FiLM 前向与 batch 键；rank 臂同样可跑）
+CUDA_VISIBLE_DEVICES= .venv/bin/python graph_transform/scripts/smoke_test_pipeline.py     --config graph_transform/config/pre_synthesis_fold1222_theory_film.yaml     --csv dataset/5fold_folded/1222.train.fbr.shuffle.multi.csv --n_rows 512 --device cpu
+
+# 3) 两个试点并行（fold 1222 单折，各 ~6 分钟）
+CUDA_VISIBLE_DEVICES=0 nohup .venv/bin/python graph_transform/scripts/train_5fold.py     --config graph_transform/config/pre_synthesis_fold1222_theory_rank.yaml     --folds 1222 --fold_data_dir dataset/5fold_folded > logs/rank_pilot.log 2>&1 &
+CUDA_VISIBLE_DEVICES=1 nohup .venv/bin/python graph_transform/scripts/train_5fold.py     --config graph_transform/config/pre_synthesis_fold1222_theory_film.yaml     --folds 1222 --fold_data_dir dataset/5fold_folded > logs/film_pilot.log 2>&1 &
+
+# 4) ensemble（对 theory hard 五折；其余 run 换 cv_root/config 重跑即可）
+.venv/bin/python graph_transform/scripts/ensemble_inference.py     --cv_root checkpoints/graph_transform/pre_synthesis/5fold/20260902_073953     --config graph_transform/config/pre_synthesis_5fold_md6_theory.yaml     --fold_data_dir dataset/5fold_soft --out_dir result/metric/ensemble/theory
+
+# 5) 判读：试点主看 fold-1222 上 q_spearman_pep_seq / q_pep_cond 相对
+#    uniform 试点（0.5497 / 0.8956）与 theory hard 同折（0.5300 / 0.8875）；
+#    任一方向为正再扩五折（对照 ±0.02 噪声标尺）
+```

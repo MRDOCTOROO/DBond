@@ -61,6 +61,10 @@ class ModelConfig:
         # 肽级辅助头：global node 表示回归该肽可观测断裂比例（需 use_global_node=True），
         # 与 Spearman/Top-K 排序指标对齐，起正则作用；同样仅训练期计算。
         self.use_peptide_aux_head = False
+        # FiLM 条件调制：由 [charge, nce] 经小 MLP 生成逐样本 (γ, β)，对全部节点特征
+        # 做乘性+平移调制 h=(1+γ)h+β。现有三条条件注入路（global node / state / env）
+        # 全是加性，FiLM 显式参数化 charge×nce 乘性交互（~33K 参数，零初始化=恒等起步）。
+        self.use_condition_film = False
         # Feature-group progressive addition 的 per-feature mask（True=保留，False=屏蔽）。
         # 维度固定对齐 state=[charge, pep_mass, intensity]、env=[nce, scan_num]。
         # 在 NodeEncoder._encode_state/_encode_environmental 与 GraphBuilder._create_edge_features
