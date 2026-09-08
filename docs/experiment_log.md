@@ -625,3 +625,33 @@ latest_test_metric.csv；集成 = `result/metric/ensemble_seed5_film_fold1222.cs
   增益；集成为部署侧免费增益。理论特征增益按 15.6.1/15.6.2 口径分层成立。
 - 全部对照/消融/补评产物：`result/metric/q_reeval_cond/`、`result/cv/`、
   `result/metric/ensemble_seed5_film_fold1222.csv`。
+
+### 15.8 ludbond 基线 q 口径补评：跨模型 GT 不领先（2026-09-08，重要修正）
+
+工具 `graph_transform/scripts/q_metrics_from_pred_csv.py`：读各 1D 基线每折
+`pred/test.pred.csv` 键级长表（dbond_s 变长含 bond_index；dbond_m/af 定宽 W=35 含
+padding 位），重排成概率矩阵 → logit 逆变换 → 喂 DBond-GT 同一 metrics 模块
+（注意：metrics.compute() 固定按 logits 过 sigmoid，概率必须先逆变换，否则双
+sigmoid 全预测正——f1 会掉到 0.64 一档）。对齐三重断言：行长匹配、逐行 true 串
+与 true_multi 全等、重建 f1 与该折 lab_f1_mi 全等（20/20 折 Δ≈3e-15）。
+
+五个 pre 模型 q 口径（5 折 mean±std，% 化；同一 5fold_soft test、同一指标实现）：
+
+| 模型 | lab_F1 | q_brier↓ | q_spearman_pep | _cond | **_seq** | top10_seq |
+|---|---|---|---|---|---|---|
+| dbond_s  | 77.75±0.51 | 7.55±0.12 | 89.53±0.93 | 88.78±0.54 | **65.06±3.69** | 1.260±0.048 |
+| dbond_m  | 76.91±0.64 | 8.25±0.32 | 89.41±0.71 | 88.64±0.54 | 63.35±4.35 | 1.239±0.051 |
+| dbond_af | 79.25±0.90 | 7.13±0.21 | **90.25±0.93** | **89.52±0.89** | 63.55±5.69 | 1.220±0.055 |
+| dbond_af_opt | 79.70±0.69 | **6.61±0.13** | 89.78±0.71 | 88.93±0.67 | 63.29±4.46 | **1.266±0.064** |
+| dbond_gt(film) | **79.80±0.64** | 6.69±0.19 | 89.67±0.90 | 89.01±0.82 | 62.52±5.93（最低） | 1.226±0.045 |
+
+**修正 §15.6/15.7 的跨模型表述**：理论特征/FiLM/5-seed 集成的 q_seq 增益全部是
+dbondGT **家族内**比较（±特征、±FiLM、±集成）；跨模型看 q 口径无一家领先——
+q_pep/cond 以 dbond_af 最高，q_seq 以 dbond_s 最高且跨折最稳（std 3.7），q_brier
+以 af_opt 最低；GT 仅 lab_F1 名义最高（Δ=0.001 vs af_opt，噪声内）。"GT 拉开差距
+在 q 口径"的说法不成立，撤回。
+
+解释：dbond_s 逐键独立模型正则最强、对条件结构欠拟合反而序列级排序最稳；GT 容量
+大，行级判别与校准强但序列级泛化方差大（std 5.9，家族内低折如 theory 臂 fold-1222
+=0.5300 拖累均值）。pre 设置下无模型全面占优；GT 的卖点应表述为 obs 设置全面领先
+（§10 旧表）+ pre 行级 F1 名义最高 + 校准第二。序列筛选排序基准建议同时报 dbond-s。
