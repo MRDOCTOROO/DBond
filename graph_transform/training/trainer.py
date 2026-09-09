@@ -556,19 +556,61 @@ class Trainer:
         if peptide_logits is not None and peptide_logits.numel() > 0:
             weight = float(loss_config.get('peptide_aux_weight', 0.2))
             ratio_target = self._peptide_cleavage_ratio(batch_data)
-            peptide_pred = torch.sigmoid(peptide_logits.float())
-            sample_weights = batch_data.get('sample_weights')
-            if sample_weights is not None:
-                # 肽级头按行对齐，直接用行权重（非展平版）
-                elem = F.mse_loss(peptide_pred, ratio_target, reduction='none')
-                w = sample_weights.float().reshape(elem.shape)
-                peptide_loss = (elem * w).sum() / w.sum().clamp_min(1e-8)
+            aux_loss_type = str(loss_config.get('peptide_aux_loss_type', 'mse')).lower()
+            if aux_loss_type == 'ranking':
+                # 肽级头 ranking 目标。与两条已证伪路线的区别（勿混淆）：
+                # ①主损失侧的序列级 hinge margin（_sequence_ranking_loss /
+                #   loss.ranking_loss_weight）已证伪——本损失只挂辅助头，主损失不动；
+                # ②film+辅助头(MSE) 叠加已证伪——本臂仅肽级头、目标换成排序。
+                # 配对在行=条件组一级（折叠数据一行一个 (seq,charge,nce)），
+                # target 用 _peptide_cleavage_ratio（优先 q 软标签）。
+                peptide_loss, n_pairs = self._peptide_ranking_loss(
+                    peptide_logits, ratio_target, loss_config)
+                stats['peptide_aux_pairs'] = float(n_pairs)
             else:
-                peptide_loss = F.mse_loss(peptide_pred, ratio_target)
+                peptide_pred = torch.sigmoid(peptide_logits.float())
+                sample_weights = batch_data.get('sample_weights')
+                if sample_weights is not None:
+                    # 肽级头按行对齐，直接用行权重（非展平版）
+                    elem = F.mse_loss(peptide_pred, ratio_target, reduction='none')
+                    w = sample_weights.float().reshape(elem.shape)
+                    peptide_loss = (elem * w).sum() / w.sum().clamp_min(1e-8)
+                else:
+                    peptide_loss = F.mse_loss(peptide_pred, ratio_target)
             loss = loss + weight * peptide_loss
             stats['peptide_aux_loss'] = float(peptide_loss.item())
 
         return loss, stats
+
+    @staticmethod
+    def _peptide_ranking_loss(peptide_logits: torch.Tensor,
+                              ratio_target: torch.Tensor,
+                              loss_config: Dict[str, Any]) -> tuple[torch.Tensor, int]:
+        """RankNet 成对排序损失（肽级辅助头专用，主损失不受影响）。
+
+        score = 肽级头 logit，target = 期望断裂比；对 |Δtarget| ≥
+        loss.peptide_aux_ranking_delta（默认 0.05，滤掉期望差过小的噪声对）的
+        行对 (i,j) 取 -log σ(sign(t_i−t_j)·(s_i−s_j))。无有效对时返回 0
+        （无梯度）。向量化实现，batch 128 → 最多 8128 对。
+        """
+        delta = float(loss_config.get('peptide_aux_ranking_delta', 0.05))
+        scores = peptide_logits.float().reshape(-1)
+        targets = ratio_target.float().reshape(-1)
+        n = scores.size(0)
+        if n < 2:
+            return scores.new_zeros(()), 0
+        # triu_indices 默认在 CPU 生成，索引 CUDA 张量需同设备（AMP/CUDA 下必须）
+        ii, jj = torch.triu_indices(n, n, offset=1)
+        ii, jj = ii.to(scores.device), jj.to(scores.device)
+        dt = targets[ii] - targets[jj]
+        keep = dt.abs() >= delta
+        n_pairs = int(keep.sum().item())
+        if n_pairs == 0:
+            return scores.new_zeros(()), 0
+        s_diff = scores[ii[keep]] - scores[jj[keep]]
+        loss = F.binary_cross_entropy_with_logits(
+            s_diff * torch.sign(dt[keep]), torch.ones_like(s_diff))
+        return loss, n_pairs
 
     @staticmethod
     def _peptide_cleavage_ratio(batch_data: Dict[str, Any]) -> torch.Tensor:
