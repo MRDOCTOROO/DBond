@@ -655,3 +655,46 @@ q_pep/cond 以 dbond_af 最高，q_seq 以 dbond_s 最高且跨折最稳（std 3
 大，行级判别与校准强但序列级泛化方差大（std 5.9，家族内低折如 theory 臂 fold-1222
 =0.5300 拖累均值）。pre 设置下无模型全面占优；GT 的卖点应表述为 obs 设置全面领先
 （§10 旧表）+ pre 行级 F1 名义最高 + 校准第二。序列筛选排序基准建议同时报 dbond-s。
+
+## 15.9 肽级辅助头 RankNet 排序试点（rankaux，2026-09-09，证伪）
+
+设计：film 底座（折叠+group_uniform+FiLM）+ 仅肽级辅助头（deep supervision 关），
+目标从 MSE 比例回归换为 RankNet 成对排序（行=条件组，|Δq|≥0.05，权重 0.2），
+q_checkpoint_metric 同步切到 q_spearman_pep_seq。与已证伪的"主损失序列级
+hinge"“film+MSE 辅助头”变量隔离。五折（best_model.pt 口径）：
+
+| 指标 | film 底座 | rankaux | Δ |
+|---|---|---|---|
+| lab_F1 (%) | 79.80±0.64 | 79.27±0.51 | −0.53 |
+| q_brier (×100) | 6.69 | 7.06 | +0.37 |
+| q_spearman_pep | 89.67 | 88.65 | −1.02 |
+| q_spearman_pep_cond | 89.01 | 88.01 | −1.00 |
+| q_spearman_pep_seq | 62.52±5.93 | 58.75±3.55 | −3.77 |
+
+全指标劣于底座，F1 跌幅 0.53 > 0.3 门限 → 证伪，不进主表。至此辅助头三种
+变体（主损失 rank / film+MSE 头 / film+rank 头）全部证伪，与"目标侧已饱和"
+判断一致：增益应从方差缩减（集成/正则）找，不从辅助目标找。产物：
+checkpoints/graph_transform/pre_synthesis_theory_film_rankaux/5fold/20260909_073823。
+
+## 15.10 五折 × 5-seed 集成正式化（2026-09-10，film 臂，seed 42-46）
+
+方法：train_5fold.py --seed 42..46 × --cv_root seedens5_film/s0-s4（每折 5 个
+同划分不同 seed 的 best_model 概率平均，ensemble_inference.py 防跨折泄漏）。
+产物：result/metric/ensemble_seed5_5fold/{1222..9075}.csv + summary.csv。
+
+| 指标 | GT 单模型(film) | GT ensemble | 跨模型参照 |
+|---|---|---|---|
+| lab_F1 (%) | 79.80±0.64 | **80.36±0.47** | af_opt 79.70 → 集成明确第一 |
+| q_brier (×100↓) | 6.69 | **6.28±0.14** | af_opt 6.61 → 集成第一（超 af_opt） |
+| q_mae (×100↓) | 16.60 | 16.72±0.23 | af 16.17 仍第一 |
+| q_spearman_pep | 89.67 | 89.87±0.50 | af 90.25 仍第一 |
+| q_spearman_pep_cond | 89.01 | 89.23±0.49 | af 89.52 仍第一 |
+| q_spearman_pep_seq | 62.52±5.93 | 63.84±3.93 | dbond_s 65.06 仍第一（差 1.22） |
+| q_top10_enrichment_seq | 1.226 | 1.236±0.032 | af_opt 1.266 / dbond_s 1.260 仍前二 |
+
+判读：①F1 由名义领先变为明确领先（+0.66 vs af_opt，>noise）；②Brier 全场第一；
+③q_seq +1.32（非 fold-1222 单折预示的 +5.7——该折实测 +5.1，其余折 +1~+3，
+折间增益不均），std 5.93→3.93 显著收窄；④MAE/pep/cond 全部第二；⑤Top10_seq
+1.236 仍第四（1.266/1.260/1.239）。结论："DBond-GT (ensemble)" 行 = 2 项第一 +
+4 项第二，论文可标注推理成本 ×5。剩余缺口：q_seq vs dbond_s（−1.2）与
+Top10_seq——对症杠杆是正则化上调（序列级方差），非容量/目标侧。
