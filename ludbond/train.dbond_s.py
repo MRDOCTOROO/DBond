@@ -490,20 +490,23 @@ def _evaluate_on_test(model, best_model_path, test_dataloader, test_dataset, los
                 gt_mat[r, bi] = v
             for bi, v in ex_pred[k].items():
                 pred_mat[r, bi] = v
+        # label_* 指标只统计每个 precursor 实际键位（bondacc 口径），padding 位不进 TP/FP/TN/FN
+        ex_n_bonds = [max(ex_true[k].keys()) + 1 for k in ex_keys]
+        bond_mask = multi_label_metrics.valid_length_mask(ex_n_bonds, max_bonds)
         # 完整 example/label 指标(与 DBond-m / DBond-AF 同口径, 便于表 3 同台对比)
         subset_acc = multi_label_metrics.example_subset_accuracy(gt_mat, pred_mat)
         ex_acc = multi_label_metrics.example_accuracy(gt_mat, pred_mat)
         ex_precision = multi_label_metrics.example_precision(gt_mat, pred_mat)
         ex_recall = multi_label_metrics.example_recall(gt_mat, pred_mat)
         ex_f1 = multi_label_metrics.example_f1(gt_mat, pred_mat)
-        lab_acc_ma = multi_label_metrics.label_accuracy_macro(gt_mat, pred_mat)
-        lab_acc_mi = multi_label_metrics.label_accuracy_micro(gt_mat, pred_mat)
-        lab_precision_ma = multi_label_metrics.label_precision_macro(gt_mat, pred_mat)
-        lab_precision_mi = multi_label_metrics.label_precision_micro(gt_mat, pred_mat)
-        lab_recall_ma = multi_label_metrics.label_recall_macro(gt_mat, pred_mat)
-        lab_recall_mi = multi_label_metrics.label_recall_micro(gt_mat, pred_mat)
-        lab_f1_ma = multi_label_metrics.label_f1_macro(gt_mat, pred_mat)
-        lab_f1_mi = multi_label_metrics.label_f1_micro(gt_mat, pred_mat)
+        lab_acc_ma = multi_label_metrics.label_accuracy_macro(gt_mat, pred_mat, mask=bond_mask)
+        lab_acc_mi = multi_label_metrics.label_accuracy_micro(gt_mat, pred_mat, mask=bond_mask)
+        lab_precision_ma = multi_label_metrics.label_precision_macro(gt_mat, pred_mat, mask=bond_mask)
+        lab_precision_mi = multi_label_metrics.label_precision_micro(gt_mat, pred_mat, mask=bond_mask)
+        lab_recall_ma = multi_label_metrics.label_recall_macro(gt_mat, pred_mat, mask=bond_mask)
+        lab_recall_mi = multi_label_metrics.label_recall_micro(gt_mat, pred_mat, mask=bond_mask)
+        lab_f1_ma = multi_label_metrics.label_f1_macro(gt_mat, pred_mat, mask=bond_mask)
+        lab_f1_mi = multi_label_metrics.label_f1_micro(gt_mat, pred_mat, mask=bond_mask)
     else:
         subset_acc = ex_acc = ex_precision = ex_recall = ex_f1 = 0.0
         lab_acc_ma = lab_acc_mi = lab_precision_ma = lab_precision_mi = 0.0

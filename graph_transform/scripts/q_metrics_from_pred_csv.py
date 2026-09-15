@@ -136,7 +136,8 @@ def main() -> None:
             print(f"[参考] 该模型自有口径顶层 f1={float(row.iloc[0]):.6f}（行集口径不同，不比对）")
 
     keys = [
-        "f1_micro", "q_brier", "q_mae", "q_spearman",
+        "f1_micro", "accuracy", "hamming_loss",
+        "q_brier", "q_mae", "q_spearman",
         "q_spearman_pep", "q_spearman_pep_cond", "q_spearman_pep_seq",
         "q_top10_enrichment", "q_top10_enrichment_cond", "q_top10_enrichment_seq",
     ]

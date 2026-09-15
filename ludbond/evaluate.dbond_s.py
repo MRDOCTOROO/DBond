@@ -347,6 +347,8 @@ def masked_metric(
     multi_label_true_list_list = [
         list(map(int, item.split(";"))) for item in multi_label_true_str_list
     ]
+    # padding 前每行真实键数：label_* 指标（bondacc 口径）只统计有效键位
+    valid_n_bonds = [len(item) for item in multi_label_true_list_list]
     multi_label_true_list_list = [
         item + [0] * (pad_len - len(item)) for item in multi_label_true_list_list
     ]
@@ -366,20 +368,23 @@ def masked_metric(
     predict = multi_label_pred_list_list
     import multi_label_metrics
 
+    # bondacc 口径：label_* 只统计有效键位，padding 位不进 TP/FP/TN/FN
+    bond_mask = multi_label_metrics.valid_length_mask(valid_n_bonds, m)
+
     subset_acc = multi_label_metrics.example_subset_accuracy(gt, predict)
     ex_acc = multi_label_metrics.example_accuracy(gt, predict)
     ex_precision = multi_label_metrics.example_precision(gt, predict)
     ex_recall = multi_label_metrics.example_recall(gt, predict)
     ex_f1 = multi_label_metrics.example_f1(gt, predict)
 
-    lab_acc_ma = multi_label_metrics.label_accuracy_macro(gt, predict)
-    lab_acc_mi = multi_label_metrics.label_accuracy_micro(gt, predict)
-    lab_precision_ma = multi_label_metrics.label_precision_macro(gt, predict)
-    lab_precision_mi = multi_label_metrics.label_precision_micro(gt, predict)
-    lab_recall_ma = multi_label_metrics.label_recall_macro(gt, predict)
-    lab_recall_mi = multi_label_metrics.label_recall_micro(gt, predict)
-    lab_f1_ma = multi_label_metrics.label_f1_macro(gt, predict)
-    lab_f1_mi = multi_label_metrics.label_f1_micro(gt, predict)
+    lab_acc_ma = multi_label_metrics.label_accuracy_macro(gt, predict, mask=bond_mask)
+    lab_acc_mi = multi_label_metrics.label_accuracy_micro(gt, predict, mask=bond_mask)
+    lab_precision_ma = multi_label_metrics.label_precision_macro(gt, predict, mask=bond_mask)
+    lab_precision_mi = multi_label_metrics.label_precision_micro(gt, predict, mask=bond_mask)
+    lab_recall_ma = multi_label_metrics.label_recall_macro(gt, predict, mask=bond_mask)
+    lab_recall_mi = multi_label_metrics.label_recall_micro(gt, predict, mask=bond_mask)
+    lab_f1_ma = multi_label_metrics.label_f1_macro(gt, predict, mask=bond_mask)
+    lab_f1_mi = multi_label_metrics.label_f1_micro(gt, predict, mask=bond_mask)
 
     metric["subset_acc"] = subset_acc
     metric["ex_acc"] = ex_acc

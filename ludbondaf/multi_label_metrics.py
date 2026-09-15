@@ -39,67 +39,93 @@ def example_f1(gt, predict, beta=1):
 
 
 # Label-based metrics
+#
+# 口径约定（2026-09-09 bondacc 修正）：对定宽 padding 矩阵统计 label_* 指标时
+# 必须传 mask（每行真实键位，True=有效），否则 padding 位 (gt=0, pred=0) 会以
+# 真 negative 身份灌水 accuracy 类指标（实测 +3~+6 点），macro 类则被全零列稀释。
+# bondacc ≡ label_accuracy_micro(gt, predict, mask)。
+# mask=None 保留历史行为仅为向后兼容；跨模型对比禁止使用无 mask 的 accuracy 类结果。
 
 
-def _label_quantity(gt, predict):
-    tp = np.sum(np.logical_and(gt, predict), axis=0)
-    fp = np.sum(np.logical_and(1 - gt, predict), axis=0)
-    tn = np.sum(np.logical_and(1 - gt, 1 - predict), axis=0)
-    fn = np.sum(np.logical_and(gt, 1 - predict), axis=0)
-    return np.stack([tp, fp, tn, fn], axis=0).astype("float")
+def valid_length_mask(lengths, width=None):
+    """按每行有效键数构造 N×W 布尔掩码（True=有效键位）。"""
+    lengths = np.asarray(lengths, dtype=np.int64)
+    w = int(width) if width is not None else int(lengths.max(initial=0))
+    return np.arange(w)[None, :] < lengths[:, None]
 
 
-def label_accuracy_macro(gt, predict):
-    quantity = _label_quantity(gt, predict)
+def _label_quantity(gt, predict, mask=None):
+    tp = np.logical_and(gt, predict)
+    fp = np.logical_and(1 - gt, predict)
+    tn = np.logical_and(1 - gt, 1 - predict)
+    fn = np.logical_and(gt, 1 - predict)
+    if mask is not None:
+        m = np.asarray(mask, dtype=bool)
+        tp, fp, tn, fn = tp & m, fp & m, tn & m, fn & m
+    return np.stack(
+        [tp.sum(axis=0), fp.sum(axis=0), tn.sum(axis=0), fn.sum(axis=0)], axis=0
+    ).astype("float")
+
+
+def _macro_mean(per_label_values, mask=None):
+    # macro 只平均至少含一个有效行的列；mask=None 时平均全部列（历史行为）
+    if mask is None:
+        return np.mean(per_label_values)
+    valid = np.asarray(mask, dtype=bool).sum(axis=0) > 0
+    return np.mean(np.asarray(per_label_values)[valid])
+
+
+def label_accuracy_macro(gt, predict, mask=None):
+    quantity = _label_quantity(gt, predict, mask)
     tp_tn = np.add(quantity[0], quantity[2])
     tp_fp_tn_fn = np.sum(quantity, axis=0)
-    return np.mean(tp_tn / (tp_fp_tn_fn + epsilon))
+    return _macro_mean(tp_tn / (tp_fp_tn_fn + epsilon), mask)
 
 
-def label_accuracy_micro(gt, predict):
-    quantity = _label_quantity(gt, predict)
+def label_accuracy_micro(gt, predict, mask=None):
+    quantity = _label_quantity(gt, predict, mask)
     sum_tp, sum_fp, sum_tn, sum_fn = np.sum(quantity, axis=1)
     return (sum_tp + sum_tn) / (sum_tp + sum_fp + sum_tn + sum_fn + epsilon)
 
 
-def label_precision_macro(gt, predict):
-    quantity = _label_quantity(gt, predict)
+def label_precision_macro(gt, predict, mask=None):
+    quantity = _label_quantity(gt, predict, mask)
     tp = quantity[0]
     tp_fp = np.add(quantity[0], quantity[1])
-    return np.mean(tp / (tp_fp + epsilon))
+    return _macro_mean(tp / (tp_fp + epsilon), mask)
 
 
-def label_precision_micro(gt, predict):
-    quantity = _label_quantity(gt, predict)
+def label_precision_micro(gt, predict, mask=None):
+    quantity = _label_quantity(gt, predict, mask)
     sum_tp, sum_fp, sum_tn, sum_fn = np.sum(quantity, axis=1)
     return sum_tp / (sum_tp + sum_fp + epsilon)
 
 
-def label_recall_macro(gt, predict):
-    quantity = _label_quantity(gt, predict)
+def label_recall_macro(gt, predict, mask=None):
+    quantity = _label_quantity(gt, predict, mask)
     tp = quantity[0]
     tp_fn = np.add(quantity[0], quantity[3])
-    return np.mean(tp / (tp_fn + epsilon))
+    return _macro_mean(tp / (tp_fn + epsilon), mask)
 
 
-def label_recall_micro(gt, predict):
-    quantity = _label_quantity(gt, predict)
+def label_recall_micro(gt, predict, mask=None):
+    quantity = _label_quantity(gt, predict, mask)
     sum_tp, sum_fp, sum_tn, sum_fn = np.sum(quantity, axis=1)
     return sum_tp / (sum_tp + sum_fn + epsilon)
 
 
-def label_f1_macro(gt, predict, beta=1):
-    quantity = _label_quantity(gt, predict)
+def label_f1_macro(gt, predict, beta=1, mask=None):
+    quantity = _label_quantity(gt, predict, mask)
     tp = quantity[0]
     fp = quantity[1]
     fn = quantity[3]
-    return np.mean(
-        (1 + beta**2) * tp / ((1 + beta**2) * tp + beta**2 * fn + fp + epsilon)
+    return _macro_mean(
+        (1 + beta**2) * tp / ((1 + beta**2) * tp + beta**2 * fn + fp + epsilon), mask
     )
 
 
-def label_f1_micro(gt, predict, beta=1):
-    quantity = _label_quantity(gt, predict)
+def label_f1_micro(gt, predict, beta=1, mask=None):
+    quantity = _label_quantity(gt, predict, mask)
     tp = np.sum(quantity[0])
     fp = np.sum(quantity[1])
     fn = np.sum(quantity[3])

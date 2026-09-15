@@ -137,6 +137,7 @@ def evaluate(
     predict = []
     predict_probs = []
     gt = []
+    masks = []  # bond 级有效位 mask（与 train.dbond_m 同法），label_* 指标 bondacc 口径用
     seq_index_batch: torch.Tensor
     seq_padding_mask_batch: torch.Tensor
 
@@ -178,6 +179,8 @@ def evaluate(
             predict.extend(label_predict_batch.detach().cpu().numpy())
             predict_probs.extend(label_prob_batch.detach().cpu().numpy())
             gt.extend(label_real_batch.detach().cpu().numpy())
+            # bond i 连残基 i 与 i+1；残基 i 非 padding 则该键有效。label pad 到 max_len-1 列
+            masks.append((~seq_padding_mask_batch[:, :-1]).cpu().numpy())
             loop.set_postfix({"loss": loss.item()})
             # break
 
@@ -189,6 +192,7 @@ def evaluate(
 
     gt = numpy.vstack(gt)
     predict = numpy.vstack(predict)
+    bond_mask = numpy.vstack(masks)
     subset_acc = multi_label_metrics.example_subset_accuracy(gt, predict)
 
     ex_acc = multi_label_metrics.example_accuracy(gt, predict)
@@ -196,14 +200,15 @@ def evaluate(
     ex_recall = multi_label_metrics.example_recall(gt, predict)
     ex_f1 = multi_label_metrics.example_f1(gt, predict)
 
-    lab_acc_ma = multi_label_metrics.label_accuracy_macro(gt, predict)
-    lab_acc_mi = multi_label_metrics.label_accuracy_micro(gt, predict)
-    lab_precision_ma = multi_label_metrics.label_precision_macro(gt, predict)
-    lab_precision_mi = multi_label_metrics.label_precision_micro(gt, predict)
-    lab_recall_ma = multi_label_metrics.label_recall_macro(gt, predict)
-    lab_recall_mi = multi_label_metrics.label_recall_micro(gt, predict)
-    lab_f1_ma = multi_label_metrics.label_f1_macro(gt, predict)
-    lab_f1_mi = multi_label_metrics.label_f1_micro(gt, predict)
+    # label_* 指标只统计有效键位（bondacc 口径），padding 位不进 TP/FP/TN/FN
+    lab_acc_ma = multi_label_metrics.label_accuracy_macro(gt, predict, mask=bond_mask)
+    lab_acc_mi = multi_label_metrics.label_accuracy_micro(gt, predict, mask=bond_mask)
+    lab_precision_ma = multi_label_metrics.label_precision_macro(gt, predict, mask=bond_mask)
+    lab_precision_mi = multi_label_metrics.label_precision_micro(gt, predict, mask=bond_mask)
+    lab_recall_ma = multi_label_metrics.label_recall_macro(gt, predict, mask=bond_mask)
+    lab_recall_mi = multi_label_metrics.label_recall_micro(gt, predict, mask=bond_mask)
+    lab_f1_ma = multi_label_metrics.label_f1_macro(gt, predict, mask=bond_mask)
+    lab_f1_mi = multi_label_metrics.label_f1_micro(gt, predict, mask=bond_mask)
 
     metrics_dict = {
         "Loss": mean_loss,

@@ -698,3 +698,166 @@ checkpoints/graph_transform/pre_synthesis_theory_film_rankaux/5fold/20260909_073
 1.236 仍第四（1.266/1.260/1.239）。结论："DBond-GT (ensemble)" 行 = 2 项第一 +
 4 项第二，论文可标注推理成本 ×5。剩余缺口：q_seq vs dbond_s（−1.2）与
 Top10_seq——对症杠杆是正则化上调（序列级方差），非容量/目标侧。
+
+## 15.11 dropout 0.2 试点 + 25-run 单模型参照 + 集成行 ρ_key 补齐（2026-09-10）
+
+**drop02 五折**（vs film 底座，同判据）：
+
+| 指标 | film(0.1) | drop02 | 判 |
+|---|---|---|---|
+| lab_F1 (%) | 79.80±0.64 | 80.09±0.53 | +0.29（升） |
+| q_brier (×100↓) | 6.69 | 6.48±0.15 | 改善 |
+| q_spearman_pep / cond | 89.67 / 89.01 | 89.36 / 88.62 | −0.3~−0.4 |
+| q_spearman_pep_seq | 62.52±5.93 | 62.09±4.43 | 未过线（std 收窄） |
+| q_top10_enrichment_seq | 1.226 | 1.233 | 持平 |
+
+判读：dropout 0.2 改善行级 F1 与校准，但**不动序列级排序**——晋级门限
+（q_seq>62.52）未过，对"补 q_seq 缺口"判为无效；行级收益也不足以替换主臂
+（F1 已由 ensemble 行第一）。正则化路线对 q_seq 至此无证据支持。
+
+**25-run 单模型参照**（seed 42-46 × 5 折，seedens5_film）：f1 79.49±0.51、
+q_brier 6.91±0.21、q_seq 60.05±5.16 → 集成增益 +0.87 F1 / −0.63 Brier /
+**+3.79 q_seq**，且单模型 q_seq 的种子间波动（60.05 vs 主 run 62.52）再次
+确认 q_seq 噪声 ±2-3，种子级别结论一律不可信。
+
+**集成行 ρ_key 补齐**：81.67±0.52 > af 81.21 → **集成行升至 3 项第一
+（lab_F1 / q_brier / ρ_key）+ 3 项第二（MAE/pep/cond）+ q_seq 第二（差
+dbond_s 1.22）+ Top10_seq 第四**。剩余缺口仍集中序列级两列。
+
+## 15.12 9-seed 集成（2026-09-11，增益饱和确认，判据收口）
+
+seed 47-50 补跑（s5-s8），9 模型概率平均（vs 5-seed）：
+
+| 指标 | 5-seed | 9-seed | Δ |
+|---|---|---|---|
+| lab_F1 (%) | 80.36±0.47 | 80.40±0.42 | +0.04 |
+| q_brier (×100↓) | 6.28 | 6.24 | −0.04 |
+| q_spearman (ρ_key) | 81.67 | 81.76 | +0.09 |
+| q_spearman_pep / cond | 89.87 / 89.23 | 89.98 / 89.34 | +0.11 |
+| q_spearman_pep_seq | 63.84±3.93 | 64.28±3.73 | **+0.44（<0.5 门限）** |
+| q_top10_enrichment_seq | 1.236 | 1.248 | +0.012 |
+
+八项指标同向微升但全部噪声量级；q_seq 增益 25→5→9 seeds 为 60.05→63.84→
+64.28，方差缩减曲线明确饱和。**决策：论文主表保留 5-seed 行（成本脚注 ×5），
+正文一句"扩到 9 seeds 再 +0.44 q_seq（64.28），与方差缩减饱和一致"。**
+与 dbond_s（65.06）终局差距 0.78-1.22，序列级缺口定性为库容量限制（410 条
+训练序列），不再追。产物：result/metric/ensemble_seed9_5fold/。
+
+## 15.13 bondacc 口径事故与全链路修复（2026-09-12）
+
+**事故**：ludbond 系（s/m/af/af_opt）全部 lab_acc_ma/mi 由定宽 padding 矩阵
+（pad 到 max_len−1≈35）统计，padding 位 (0,0) 以真 negative 身份灌水 accuracy
+（实测 +3.4~+5.7 点）；lab_*_ma 同时被全零列稀释。**GT 家族所有 run（film/
+theory/uniform/soft/gat_aux/rankaux/drop02/ensemble）不受影响**——GT 管道
+BinaryBondMetrics 本来就 padding-free，折叠脚本 test 不折叠（行级 realized）。
+受污染的只有"引用基线 cv 汇总 lab_acc_*"的跨模型表：§2.7/§15 旧表、09-12
+前版论文表（均已在 docs/paper_tables_20260909.md 修正）。
+
+**基线 padding-free bondacc 重算值**（各折 test.pred.csv → GT 同一模块，剥
+padding + 对齐断言；自检 dbond_s fold1222 0.78164 == 其 top-level accuracy）：
+dbond_s 81.71→**78.30**、dbond_m 83.19→**77.48**、dbond_af 84.96→**79.86**、
+af_opt 85.02→**79.93**；GT 80.02 / Ens 80.38 本就正确。统一口径后排名：
+**Ens 80.38 > GT 80.02 > af_opt 79.93 > af 79.86**——bondacc 第一/第二归 GT
+家族，此前"af_opt 85 第一"为 padding 假象。表 1 其余 8 列数学上不受 padding
+影响（(0,0) 不进 subset/ex/micro-PRF1 计数；f1 已有 20 折 1e-15 校验）。
+
+**源头修复（后续 run 不再产出灌水 lab_acc）**：
+- `multi_label_metrics.py`（ludbond/ 与 ludbondaf/ 两份同步）：label_* 全系
+  加 `mask=` 参数（有效键位掩码）+ `valid_length_mask()` 构造器；mask=None
+  保留旧行为仅向后兼容；**bondacc ≡ label_accuracy_micro(gt,pred,mask)**。
+  自测：padded 0.80 → bondacc 0.60（构造用例），macro 剔除全零列。
+- 生产管道全部接线：train.dbond_s.py（per-precursor 实际键数）、train.dbond_m.py
+  （val+test 两块，复用已有 seq_padding 掩码）、train.dbond_m.exp_af.py（两块）、
+  evaluate.dbond_s.py masked_metric（padding 前真实键数）、evaluate.dbond_m.py
+  （补 mask 收集）。此后基线重跑的 lab_acc_mi 应 ≈ 其 top-level accuracy（可作
+  自检断言）。
+- `q_metrics_from_pred_csv.py` 落盘键加 accuracy/hamming_loss——跨模型补评
+  自动携带 bondacc。
+- **未修（已证伪死代码，任何驱动脚本均未引用，勿再跑勿采信其 lab_acc）**：
+  ludbondaf/train.dbond_m.exp_af_rm_{cat,attn,attn_cat}.py 及对应 evaluate.*
+  （rm 消融变体，不建 mask）。
+
+**双 checkpoint（F1 选 vs q 选）现状**：机制在（同训双存 best_model.pt /
+best_model_q.pt，film 臂按 q_spearman_pep_cond 选点），film 五折 best_model_q.pt
+齐全，但 test 侧对比评估**从未跑成**——当时循环因 $CV 未设中断，
+result/metric/rankaux_5fold_qsel/ 为空目录。对比命令见 docs/paper_tables
+会话记录（evaluate_graph_model.py --checkpoint best_model_q.pt 逐折评估后与
+F1 选点行对照）。
+
+## 15.14 双 checkpoint 五折实证：q 选点 vs F1 选点（2026-09-14）
+
+film 臂五折 best_model_q.pt（val q_spearman_pep_cond 选点）补评完成
+（result/metric/film_5fold_qsel/），与 F1 选点同折配对：
+
+| 指标 | F1 选点 | q 选点 | 配对 Δ |
+|---|---|---|---|
+| lab_F1 (%) | 79.80±0.64 | 79.62±0.68 | −0.18（4/5 折降，最多 −0.60） |
+| bondacc (%) | 80.02±0.36 | 80.09±0.32 | +0.07 |
+| lab_P / lab_R | 77.70 / 82.04 | 78.45 / 80.86 | +0.75 / −1.18（操作点向 precision 移） |
+| q_brier | 6.69 | 6.69 | 0（校准不动） |
+| q_mae | 16.60 | 16.38 | −0.22 |
+| ρ_key / pep / cond | 81.01/89.67/89.01 | 81.17/89.89/89.31 | +0.17/+0.22/+0.31 |
+| q_seq | 62.52±5.93 | 63.06±4.64 | +0.54（全部来自 fold1222 +3.65；2 折微降） |
+| Top10_seq | 1.2263 | 1.2308 | +0.005 |
+
+**判读**：方向与设计一致（排序口径 5/5 不劣、precision 端点右移、校准不变），
+但幅度全部在折间噪声内（q_seq +0.54 集中于单折，非稳健赢）。**决策：主表
+保持 F1 选点行不动；q 选点不进对比表**（避免选型标准混口径），双 checkpoint
+作为方法卖点写一句：一次训练产出两个部署端点，排序筛选场景可用 q 选点
+（排序指标不劣且 q_seq 方差更小 5.93→4.64），行级判别场景用 F1 选点。
+
+
+
+## 15.15 传统机器学习基线（RF/XGBoost/HistGB/LogReg）：小样本假设检验入档（2026-09-14）
+
+**假设**：MiPD513 只有 513 条唯一序列（47.7 万谱图行，93% 标签方差在序列内，
+ICC 0.072），小样本低序列多样性下传统树模型可能不逊于深度模型。新增
+`sklearn_baseline/`（features.py + run_tree_baselines.py + README.md），在
+**与 film 臂完全相同的特征/折/指标**下直接检验。
+
+**parity 口径**：每键 18 维 = 15 理论特征（`compute_bond_theory` 同源）+
+charge/pep_mass/nce（pre-synthesis mask 保留项）；标签 = true_multi 展开逐键
+0/1（一折 ~1000 万键行）；5 折（1222/2252/3514/6072/9075）+ seed 42+idx +
+行级 20% val；评测走 `BinaryBondMetrics`（f1_micro@0.5 + q_* 全套，logit 逆
+变换喂入），q 真值 = 测试折 (seq,charge,nce) 组内均值（逐行复刻
+`compute_group_soft`，含 %.4f 取整）；pred 落 dbond_s 变长长表，
+`q_metrics_from_pred_csv.py` 可直接补评对拍。
+
+**模型**：rf(300树) / histgb(500轮,lr0.1) / xgb(hist,lr0.05,d6,val logloss
+early-stop 50；依赖已进 pyproject+uv.lock→xgboost 3.4.1) / logreg 线性对照。
+XGB 迭代数按 val logloss 早停（自定义 F1 eval 的 margin/概率入参歧义不冒险），
+val F1 照记。
+
+**运行（pod gsj-5090）**：
+```bash
+cd /mnt/pvc/graphtrans/DBond && git pull && source .venv/bin/activate
+uv pip install xgboost        # 勿 uv sync（会剪掉未声明的 torch）
+python sklearn_baseline/run_tree_baselines.py --models rf,histgb,xgb,logreg --folds all --xgb_device cuda
+# 对拍闭环（本机缺 torch_geometric 跑不了 canonical precompute）：
+python graph_transform/scripts/precompute_soft_labels.py --fold_dir dataset/5fold --out_fold_dir dataset/5fold_soft
+python graph_transform/scripts/q_metrics_from_pred_csv.py --pred_csv sklearn_baseline/result/cv/xgb/<ts>/fold_1222/pred/test.pred.csv \
+  --test_csv dataset/5fold_soft/1222.test.fbr.multi.csv \
+  --ref_metric_csv sklearn_baseline/result/cv/xgb/<ts>/fold_1222/metric/test_metric.csv \
+  --out_csv sklearn_baseline/result/cv/xgb/<ts>/fold_1222/metric/q_reeval_check.csv
+```
+
+**本机预跑（Windows .venv，fold1222 全量，histgb/logreg 全参，rf 降载
+100 树+max_samples 0.3——16GB 本机 RF 全量 OOM）**：管线贯通，pred 长表经
+q_metrics_from_pred_csv 对拍 f1 重建 Δ=0.00e+00（histgb/rf 双双位级一致）。
+
+| fold1222 全量 | lab_f1_mi | q_brier | ρ_cond | q_seq | Top10_seq |
+|---|---|---|---|---|---|
+| histgb(500轮) | **0.7874** | 0.0713 | 0.856 | 0.383 | 1.246 |
+| rf(100树,0.3采样) | 0.7771 | 0.0790 | 0.855 | 0.356 | 1.221 |
+| logreg 对照 | 0.6828 | 0.1274 | 0.809 | 0.150 | 0.934 |
+| （同折锚点·主线 GT hard theory） | 0.7908 | — | — | — | — |
+| （同折锚点·1D 基线 dbond_s） | 0.7816 | — | — | — | — |
+
+初步判读（锚点已对齐主线 GT，非 1D 基线）：同特征同折下 histgb 0.7874
+**低于主线 GT 单折锚点（hard theory 0.7908，folded 变体单折 0.7951）约
+0.3~0.8 点，高于 1D 基线 dbond_s（0.7816）**——"513 序列小样本下传统树
+模型键级判别可用、但未超主线 GNN"，且训练成本近零；**q_seq 0.35-0.38 vs
+GT 家族 61-63**，序列级排序/筛选能力是树模型明显短板（概率分辨率不足），
+该口径主线不可替代。正式结论待 pod 5 折
+（rf 300 树全量 + xgb cuda）+ 对拍闭环后回填；对照锚点：film 79.80±0.64 /
+Ens 80.36 / dbond_s bondacc 78.30 / q_seq dbond_s 65.06 vs GT 62.52。
