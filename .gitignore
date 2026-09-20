@@ -127,3 +127,6 @@ docs/*
 # agent 入口文件仅本地使用，不入库
 /CLAUDE.md
 /AGENTS.md
+
+# ===== node 运行时依赖(figures 构图等)不入库 =====
+node_modules/
