@@ -185,6 +185,12 @@ class GraphBuilder:
             max_j = min(seq_len - 1, i + max_seq_dist)
             for j in range(i + 1, max_j + 1):
                 seq_dist = j - i
+                # folding_factor 为无出处的启发式（非物理推导，无消融支撑）。在主模型
+                # max_distance=6 下恰为 no-op：包含集恰为 |i-j|<=5，且 d<=5 的
+                # int(distance)==d（距离嵌入取到精确整数）；唯一可见差异是 d=2 落入
+                # remote 边型（2.337>2）。其余 max_distance 的有效半径非直觉：
+                # md3/4/5/7/8 -> R=2/3/4/8/9（d=7,8 的嵌入距离均被抹为 6）。
+                # 论文按有效语义描述：|i-j|<=5 连边，相邻边独占边型。
                 folding_factor = 1.0 + 0.2 * np.sin(seq_dist * 0.5)
                 distance = seq_dist * folding_factor
                 if distance <= self.max_distance:
