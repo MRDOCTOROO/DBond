@@ -1,0 +1,162 @@
+.vscode/**
+__pycache__/
+
+tensorboard/*
+checkpoint/*
+best_model/*
+result/*
+dataset/*
+PBCLA/__pycache__/**
+REDEME.md
+# 先取消忽略 result 目录本身
+!result/
+
+# 然后取消忽略 result 下的特定子目录
+!result/pred/
+!result/metric/
+!result/pred/dbond_m/
+!result/pred/dbond_s/
+!result/pred/dbond_m/multi/
+!result/pred/dbond_s/multi/
+!result/metric/dbond_m/
+!result/metric/dbond_s/
+!result/metric/dbond_m/multi/
+!result/metric/dbond_s/multi/
+
+!best_model/
+!best_model/dbond_m/
+!best_model/dbond_s/
+# 保留所有目录里的 .gitkeep 文件
+!**/.gitkeep
+
+cache/
+# 保留 dataset 中的特定文件
+!dataset/dataset.fbr.csv
+!dataset/dbond_m.test.csv
+!dataset/dbond_m.train.shuffle.csv
+!dataset/dbond_s.test.csv
+!dataset/dbond_s.train.shuffle.csv
+#!dataset/说明.md
+# 最后指定要保留的具体文件
+!result/pred/dbond_m/multi/default.pred.csv
+!result/pred/dbond_s/multi/default.pred.csv
+!result/metric/dbond_s/multi/default_metric.csv
+!result/metric/dbond_s/single/default_metric.csv
+!result/metric/dbond_m/multi/default_metric.csv
+
+# 虚拟环境与工具目录
+.venv/
+.claude/*
+.kilo/
+# 本地临时测试环境/脚本（如做代码验证时创建的 venv、一次性测试脚本），
+# 绝不进 git —— 真正执行在云端
+.r20_test_venv/
+.r20_test_figs/
+.r20_functional_test.py
+*_test_venv/
+.*_test_venv/
+# 兜底：任何本地临时的验证脚本（命名约定 .*_test.py 或 *_functional_test.py）
+.*_functional_test.py
+*_functional_test.py
+# 本地临时的 PDF 提取/分析产物
+.pdf_tmp_venv/
+.pdf_*.py
+.pdf_fulltext.txt
+.pdf_*.txt
+
+ # 其他忽略
+*.pyc
+*.pt
+*.svg
+*.png
+CLAUDE.md
+plans/*
+nul
+AGENTS.md
+.zcode/*
+*.drawio
+实验图/*
+# Feature-group progressive addition 消融实验产物
+# 训练 checkpoint / 5 折产物 / 日志 / 图缓存（权重由 *.pt 覆盖，这里补非 .pt 的派生文件）
+checkpoints/graph_transform/feature_group_ablation/
+logs/graph_transform/feature_group_ablation/
+tensorboard/graph_transform/feature_group_ablation/
+result/pred/graph_transform/feature_group_ablation/
+# R-01 基线 pre 变体批量运行器的实验日志（result/cv/ 已由上方 result/* 规则忽略）
+logs/pre_baselines/
+# R-03 LOFO 实验产物：checkpoint 目录内非 .pt 快照/指标、运行日志、派生配置（由 run_lofo_experiments.py 从主模型快照自动生成）
+checkpoints/graph_transform/lofo/
+logs/lofo/
+logs/graph_transform/lofo/
+tensorboard/graph_transform/lofo/
+graph_transform/config/lofo_derived/
+# 对比分析结果默认放 result/metric/.../feature_group_comparison/，CSV 通常希望保留，故不忽略
+# 但生成的 PDF 图表由 *.pdf 规则决定（当前未忽略 *.pdf，如需忽略可显式加 result/metric/graph_transform/feature_group_comparison/*.pdf）
+
+# ===== ludbond 对比模型（拍平自原 LoserLus/DBond 仓库）排除规则 =====
+# 对比模型自带的训练/数据产物，用 DBond 自己的数据划分重跑，不进 git
+ludbond/tensorboard/
+ludbond/dataset/*
+!ludbond/dataset/.gitkeep
+ludbond/result/
+ludbond/PBCLA/mgf_dataset/
+# 兜底：对比模型可能产出的非 .pt 权重/缓存扩展名（*.pt 已由上方规则覆盖）
+*.ckpt
+*.pth
+*.safetensors
+*.h5
+
+# ===== ludbondaf (DBond-AF, attention-based feature fusion) 排除规则 =====
+# 对比模型自带的训练/数据产物, 用 DBond-GT 的 5fold 数据重跑, 不进 git
+ludbondaf/tensorboard/
+ludbondaf/dataset/*
+!ludbondaf/dataset/.gitkeep
+ludbondaf/result/
+ludbondaf/best_model/*
+!ludbondaf/best_model/.gitkeep
+!ludbondaf/best_model/dbond_m_exp_af/.gitkeep
+ludbondaf/checkpoint/*
+!ludbondaf/checkpoint/.gitkeep
+
+# ===== 批量复现脚本的运行时状态(续跑用, 不进 git) =====
+# scripts/run_baselines_5fold.sh 用 state/{model}.cvroot 记录每个模型的 cv_root 以支持断点续跑
+state/
+
+docs/*
+
+# agent 入口文件仅本地使用，不入库
+/CLAUDE.md
+/AGENTS.md
+
+# ===== node 运行时依赖(figures 构图等)不入库 =====
+node_modules/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

@@ -73,7 +73,10 @@ def setup_logging() -> logging.Logger:
 def load_config(config_path: str) -> Dict[str, Any]:
     """加载配置文件"""
     with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    # 与训练/评估同口径：应用 ablation 运行时覆盖（pre_synthesis 掩码泄漏防护）
+    from train_graph_model import apply_ablation_config
+    return apply_ablation_config(config)
 
 
 def setup_device(config: Dict[str, Any]) -> torch.device:

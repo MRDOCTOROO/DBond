@@ -53,7 +53,7 @@ aa.forEach((c,i) => {
 // bond-site marker (amber diamond between C and D)
 s.addShape(pres.shapes.RECTANGLE, { x:1.905, y:2.445, w:0.11, h:0.11, rotate:45, fill:{color:A600} });
 
-s.addText("Bidirectional sequence edges + distance edges (\u2264 6) + global node;  \u25C6 = bond site (i, i+1)",
+s.addText("Bidirectional sequence edges + distance edges (d_max=6, effective |i\u2212j|\u22645) + global node;  \u25C6 = bond site (i, i+1)",
   { x:0.45, y:3.16, w:2.55, h:0.68, fontSize:12, color:MUTED, fontFace:F, margin:0 });
 
 // ---------- input / condition boxes ----------
@@ -63,8 +63,8 @@ const block = (x,y,w,h,fill,border) => s.addShape(pres.shapes.ROUNDED_RECTANGLE,
 block(0.45, 3.95, 2.55, 1.0, T50, T600);
 s.addText([
   { text:"Input (per condition group)", options:{ bold:true, color:T900, fontSize:12.5, breakLine:true } },
-  { text:"sequence + charge, pep_mass,", options:{ color:TEXT, fontSize:12, breakLine:true } },
-  { text:"intensity, NCE, scan_num", options:{ color:TEXT, fontSize:12 } },
+  { text:"sequence + charge, pep_mass, NCE", options:{ color:TEXT, fontSize:12, breakLine:true } },
+  { text:"(pre-synthesis: no intensity / scan_num / rt)", options:{ color:MUTED, fontSize:11 } },
 ], { x:0.58, y:3.95, w:2.32, h:1.0, fontFace:F, valign:"middle", margin:0 });
 
 block(0.45, 5.5, 4.15, 1.0, A50, A600);
@@ -80,8 +80,8 @@ const enc = (y,h,title,body) => {
   body.forEach((t,i) => lines.push({ text:t, options:{ color:TEXT, fontSize:12, breakLine:i < body.length-1 } }));
   s.addText(lines, { x:3.62, y, w:2.38, h, fontFace:F, valign:"middle", margin:0 });
 };
-enc(1.15, 1.5, "Node Encoder", ["AA emb (64) \u2295 position (32) \u2295", "physicochem. (32) \u2295 state MLP (32)", "\u2295 env MLP (32) \u2192 Linear+LN \u2192 h\u2208\u211D\u00B2\u2075\u2076"]);
-enc(2.85, 1.15, "Edge Encoder", ["type emb \u2295 distance emb \u2295 raw attrs (8-d)", "\u2192 e\u2208\u211D\u00B2\u2075\u2076"]);
+enc(1.15, 1.5, "Node Encoder", ["AA emb (64) \u2295 position (32) \u2295", "physicochem. (32) \u2295 state MLP (charge, pep_mass)", "\u2295 env MLP (NCE) \u2192 Linear+LN \u2192 h\u2208\u211D\u00B2\u2075\u2076"]);
+enc(2.85, 1.15, "Edge Encoder", ["type emb \u2295 distance emb \u2295 raw attrs (4-d: d, q, m, NCE)", "\u2192 e\u2208\u211D\u00B2\u2075\u2076"]);
 enc(4.2, 1.0, "Global Node", ["learnable emb \u2295 proj(state \u2295 env),", "linked to all residues"]);
 
 // ---------- col 3: message passing ----------
