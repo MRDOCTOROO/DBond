@@ -2306,6 +2306,7 @@ def plot_residue_pair_matrix(
     figsize: Tuple[float, float] = (30, 10.5),
     filter_empty: bool = False,
     min_total_n: int = 1,
+    show_footer_notes: bool = False,
 ) -> plt.Figure:
     """3-panel residue-pair chemistry matrix.
 
@@ -2333,6 +2334,10 @@ def plot_residue_pair_matrix(
                       in D-amino-acid mirror peptides).
         min_total_n:  minimum total count (sum over row + column) for an AA
                       to be retained when filter_empty=True.
+        show_footer_notes: if True, draw the bottom legend (N/A / rare-AA
+                      markers) and the Pearson r / MAE stats line. Default
+                      False (paper style): those explanations live in the
+                      figure caption instead.
     """
     n_aa = len(aa_labels)
     assert empirical.shape == (n_aa, n_aa)
@@ -2471,38 +2476,41 @@ def plot_residue_pair_matrix(
     # ---- 底部 figure-level legend：自适应显示 ----
     # N/A 始终显示（只要存在空 cell）；*/** 仅在数据中确实存在低频 cell 时显示，
     # 保证图例与图内容绝对一致（R-24 复审：避免解释不存在的标记）。
+    # show_footer_notes=False（默认，论文口径）：页脚图例与统计行全部不画，
+    # 灰色格/r 与 MAE 的解释由论文图注承担。
     legend_handles = []
-    has_empty = bool((counts == 0).any())
-    if has_empty:
-        legend_handles.append(
-            mpatches.Patch(facecolor='#EEEEEE', edgecolor='#BBBBBB',
-                           linewidth=0.5, label='N/A (no observation)')
-        )
-    if has_rare_single:
-        legend_handles.append(
-            mlines.Line2D([], [], color='black', marker='$*$', linestyle='None',
-                          markersize=12,
-                          label=f'N ∈ [{rare_thresholds[0]}, {rare_thresholds[1]})')
-        )
-    if has_rare_double:
-        legend_handles.append(
-            mlines.Line2D([], [], color='black', marker='$**$', linestyle='None',
-                          markersize=12,
-                          label=f'N < {rare_thresholds[0]} (rare AA, statistically uncertain)')
-        )
-    if legend_handles:
-        fig.legend(handles=legend_handles, loc='lower center',
-                   bbox_to_anchor=(0.5, 0.055),
-                   ncol=len(legend_handles), frameon=False,
-                   fontsize=10, handlelength=1.5, columnspacing=2.0)
+    if show_footer_notes:
+        has_empty = bool((counts == 0).any())
+        if has_empty:
+            legend_handles.append(
+                mpatches.Patch(facecolor='#EEEEEE', edgecolor='#BBBBBB',
+                               linewidth=0.5, label='N/A (no observation)')
+            )
+        if has_rare_single:
+            legend_handles.append(
+                mlines.Line2D([], [], color='black', marker='$*$', linestyle='None',
+                              markersize=12,
+                              label=f'N ∈ [{rare_thresholds[0]}, {rare_thresholds[1]})')
+            )
+        if has_rare_double:
+            legend_handles.append(
+                mlines.Line2D([], [], color='black', marker='$**$', linestyle='None',
+                              markersize=12,
+                              label=f'N < {rare_thresholds[0]} (rare AA, statistically uncertain)')
+            )
+        if legend_handles:
+            fig.legend(handles=legend_handles, loc='lower center',
+                       bbox_to_anchor=(0.5, 0.055),
+                       ncol=len(legend_handles), frameon=False,
+                       fontsize=10, handlelength=1.5, columnspacing=2.0)
 
-    # ---- 底部定量统计行：reliable cells 的 Pearson r 与 MAE ----
-    if not np.isnan(r_value):
-        stats_text = (f'Pearson r = {r_value:.3f}    '
-                      f'MAE = {mae_value:.1f} pp    '
-                      f'(over N ≥ {rare_thresholds[1]} residue pairs)')
-        fig.text(0.5, 0.015, stats_text, ha='center', va='bottom',
-                 fontsize=10, style='italic', color='#333333')
+        # ---- 底部定量统计行：reliable cells 的 Pearson r 与 MAE ----
+        if not np.isnan(r_value):
+            stats_text = (f'Pearson r = {r_value:.3f}    '
+                          f'MAE = {mae_value:.1f} pp    '
+                          f'(over N ≥ {rare_thresholds[1]} residue pairs)')
+            fig.text(0.5, 0.015, stats_text, ha='center', va='bottom',
+                     fontsize=10, style='italic', color='#333333')
 
     _save_figure(fig, save_path)
     return fig

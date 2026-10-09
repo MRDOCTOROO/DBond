@@ -130,3 +130,6 @@ docs/*
 
 # ===== node 运行时依赖(figures 构图等)不入库 =====
 node_modules/
+
+# draw.io skill scratch dirs
+.drawio-tmp/

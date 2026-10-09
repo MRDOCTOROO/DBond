@@ -178,15 +178,15 @@ def run_inference(
 
 
 def _move_batch_to_device(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
-    out = dict(batch)
-    tensor_keys = [
-        "edge_index", "edge_attr", "edge_types", "edge_distances",
-        "bond_edge_map", "labels", "label_mask",
-        "state_vars", "env_vars", "seq_lens", "node_lens",
-    ]
-    for k in tensor_keys:
-        if k in out and isinstance(out[k], torch.Tensor):
-            out[k] = out[k].to(device)
+    # 与 trainer._move_to_device 同口径：所有 Tensor 一律上设备。
+    # 旧实现的硬编码键列表缺 bond_theory 等 theory 时代字段，
+    # 导致 bond_theory 留在 CPU 而 forward 内的 valid_bond_mask 在 GPU 上。
+    out = {}
+    for k, v in batch.items():
+        if isinstance(v, torch.Tensor):
+            out[k] = v.to(device, non_blocking=True)
+        else:
+            out[k] = v
     return out
 
 
