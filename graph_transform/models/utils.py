@@ -54,6 +54,11 @@ class ModelConfig:
         # 序列衍生理论键离子特征（prefix/suffix mass、b/y 理论 m/z、H2O/NH3-loss、
         # Pro 上下文等，见 data/theory_features.py）；开启后 bond head 多一路投影
         self.use_theory_features = False
+        # Optional architecture experiments; absent keys retain legacy behavior.
+        self.use_fragment_readout = False
+        self.fragment_readout_dim = 64
+        self.use_residue_chemistry = False
+        self.residue_chemistry_dim = 32
         # Deep supervision 辅助头：指定 GAT 层索引（0-based）的输出各接一个轻量
         # bond 预测头，仅训练期参与损失（eval/inference 不计算，不影响推理路径）。
         self.use_deep_supervision = False
@@ -63,7 +68,8 @@ class ModelConfig:
         self.use_peptide_aux_head = False
         # FiLM 条件调制：由 [charge, nce] 经小 MLP 生成逐样本 (γ, β)，对全部节点特征
         # 做乘性+平移调制 h=(1+γ)h+β。现有三条条件注入路（global node / state / env）
-        # 全是加性，FiLM 显式参数化 charge×nce 乘性交互（~33K 参数，零初始化=恒等起步）。
+        # 全是加性，FiLM 显式参数化 charge×nce 乘性交互（~33K 参数）。
+        # 历史实现最终使用 Xavier 初始化；本轮架构实验保持该行为。
         self.use_condition_film = False
         # Feature-group progressive addition 的 per-feature mask（True=保留，False=屏蔽）。
         # 维度固定对齐 state=[charge, pep_mass, intensity]、env=[nce, scan_num]。
@@ -416,6 +422,23 @@ class CheckpointManager:
             device = next(model.parameters()).device
         
         checkpoint = torch.load(filepath, map_location=device, weights_only=False)
+
+        # New experimental branches must never be silently dropped/left random
+        # by strict=False. Legacy checkpoints have neither prefix and remain
+        # compatible with both flags off. Inspect actual keys, also for older
+        # checkpoints without serialized config metadata.
+        saved_keys = set(checkpoint['model_state_dict'])
+        requested_keys = set(model.state_dict())
+        for prefix in ('residue_chemistry.', 'fragment_readout.'):
+            saved_branch = {key for key in saved_keys if key.startswith(prefix)}
+            requested_branch = {key for key in requested_keys if key.startswith(prefix)}
+            if saved_branch != requested_branch:
+                raise ValueError(
+                    f"Checkpoint architecture mismatch for {prefix[:-1]}: "
+                    "use the same architecture config for training and inference; "
+                    f"missing={sorted(requested_branch - saved_branch)}, "
+                    f"unexpected={sorted(saved_branch - requested_branch)}"
+                )
 
         # strict=False：容忍结构差异（例如已移除未使用的 layer_norms 字段），打印缺失/多余键以便排查。
         missing, unexpected = model.load_state_dict(checkpoint['model_state_dict'], strict=False)

@@ -116,7 +116,7 @@ T(SBX + 0.15, BOT_Y + 0.1, SBW - 0.3, 0.32, "Condition stream", { align: "left",
 LN(SBX + 1.42, BOT_Y + 1.15, SBX + 1.85, BOT_Y + 1.15, { lw: 2.5 });
 slab(SBX + 1.95, BOT_Y + 0.75, 0.92, 0.78, ["FDE68A", "FCD34D", "FBBF24", "F59E0B"]);
 T(SBX + 1.9, BOT_Y + 1.68, 1.7, 0.26, "FiLM MLP", { fs: 9.5, color: AMB.h, bold: true });
-T(SBX + 1.9, BOT_Y + 1.94, 1.7, 0.26, "(\u03B3, \u03B2) \u2208 \u211D\u00B2\u2075\u2076", { fs: 9, color: MUTED });
+T(SBX + 1.9, BOT_Y + 1.94, 1.7, 0.26, "\u03B3, \u03B2 \u2208 \u211D\u00B2\u2075\u2076 (each)", { fs: 9, color: MUTED });
 LN(SBX + SBW - 0.5, BOT_Y + 1.15, SBX + SBW - 0.08, BOT_Y + 1.15, { lw: 2.5 });
 
 // --------------------- FiLM glossy fusion box -------------------------------
@@ -128,6 +128,9 @@ LN(SBX + SBW + 0.06, TOP_Y + 1.1, FX - 0.06, FY + 0.35, { lw: 3 });
 LN(SBX + SBW + 0.06, BOT_Y + 1.15, FX - 0.06, FY + FH - 0.35, { lw: 3 });
 LN(ix + 1.45, MID - 0.55, SBX - 0.06, TOP_Y + 1.1, { lw: 3 });
 LN(ix + 0.78, iy + 2.78, SBX - 0.06, BOT_Y + 1.15, { lw: 3 });
+// pep_mass 注入路径：经节点/边/全局节点特征进入图流（teal 与左上 chips 中
+// pep_mass 同色，图注说明其经节点、边与全局节点编码注入）。
+LN(ix + 1.34, iy + 2.09, SBX - 0.06, TOP_Y + 2.45, { lw: 2, color: "0D9488" });
 
 // --------------------- message passing dotted box ---------------------------
 const MX = 9.4, MW = 2.0, MY = MID - 1.25, MH = 2.5;
@@ -148,7 +151,7 @@ T(BX - 0.12, MID + 0.14, BW + 0.2, 0.26, "MLP \u2192 Sigmoid \u2192 p\u1D62", { 
 LN(MX + MW + 0.06, MID, BX - 0.06, MID, { lw: 3 });
 // probability bars
 const barY = MID + 1.35, barH = 0.85, bw = 0.14;
-[0.24, 0.58, 0.35, 0.78, 0.42, 0.66, 0.3].forEach((p, i) => {
+[0.62, 0.35, 0.78].forEach((p, i) => {
   const bh = p * barH, bx = BX + 0.05 + i * 0.19;
   s.addShape(pres.ShapeType.roundRect, {
     x: bx, y: barY - bh, w: bw, h: bh, rectRadius: 0.015,

@@ -1,0 +1,57 @@
+{
+ "per_fold": {
+  "1222": {
+   "n": 150,
+   "strong_r_ge_0.5": 0,
+   "global_pearson": 0.20460434922220358,
+   "global_spearman": 0.33114162606692454,
+   "mean_per_sample_r": 0.21389315311943422
+  },
+  "2252": {
+   "n": 150,
+   "strong_r_ge_0.5": 0,
+   "global_pearson": 0.2952301968582029,
+   "global_spearman": 0.3427693487861296,
+   "mean_per_sample_r": 0.3040103753817184
+  },
+  "3514": {
+   "n": 150,
+   "strong_r_ge_0.5": 0,
+   "global_pearson": 0.26818639406986605,
+   "global_spearman": 0.3414824943927913,
+   "mean_per_sample_r": 0.2674447650266684
+  },
+  "6072": {
+   "n": 150,
+   "strong_r_ge_0.5": 0,
+   "global_pearson": 0.29284046354954363,
+   "global_spearman": 0.3933277462795763,
+   "mean_per_sample_r": 0.3021631853539956
+  },
+  "9075": {
+   "n": 150,
+   "strong_r_ge_0.5": 1,
+   "global_pearson": 0.3530481090333151,
+   "global_spearman": 0.366827823861386,
+   "mean_per_sample_r": 0.3654760879647087
+  }
+ },
+ "five_fold": {
+  "global_pearson_mean_std": [
+   0.2827819025466262,
+   0.05366151592676815
+  ],
+  "global_spearman_mean_std": [
+   0.3551098078773615,
+   0.02505188145132325
+  ],
+  "mean_per_sample_r_mean_std": [
+   0.2905975133693051,
+   0.05554295456315849
+  ]
+ },
+ "strong_consistency": {
+  "n_samples_total": 750,
+  "n_strong_total": 1
+ }
+}

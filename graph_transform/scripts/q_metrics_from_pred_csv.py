@@ -140,6 +140,11 @@ def main() -> None:
         "q_brier", "q_mae", "q_spearman",
         "q_spearman_pep", "q_spearman_pep_cond", "q_spearman_pep_seq",
         "q_top10_enrichment", "q_top10_enrichment_cond", "q_top10_enrichment_seq",
+        # 20261017 追加（基线多种子集成对照需要，键名与 GT-Ens 逐折 csv 同源模块一致）：
+        # subset/ex_* 数学上不受 padding 位影响（§15.13）；ex_f1 是逐样本（samples）
+        # 口径，跨模型 Ex-F1 对比请用 ex_precision/ex_recall 的调和值 2PR/(P+R)（§15.16）。
+        "subset_acc", "ex_acc", "ex_precision", "ex_recall", "ex_f1",
+        "auc", "mcc",
     ]
     os.makedirs(os.path.dirname(args.out_csv), exist_ok=True)
     rows = [{"metric": k, "value": float(out.get(k, float("nan")))} for k in keys]

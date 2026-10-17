@@ -957,8 +957,7 @@ DEFAULT_ATTENTION_MODE = "functional"
 
 # Unified, non-causal caption shown on every figure (single source of truth).
 FUNCTIONAL_SALIENCY_CAPTION = (
-    "Attention = functional saliency "
-    "(structural role specialization in bond cleavage prediction)"
+    "Attention = functional saliency"
 )
 
 
@@ -1462,7 +1461,7 @@ def plot_layer_evolution_trend(
         ax.annotate(f'{yi:.3f}', xy=(xi, yi), xytext=(0, 12),
                     textcoords='offset points', ha='center', fontsize=10,
                     fontweight='bold', color=INTERP_COLORS['line'])
-    ax.fill_between(x, primary_vals, alpha=0.15, color=INTERP_COLORS['fill'])
+    # 曲线至 0 的同色填充已移除（与置信带同色会被误读为 CI；R-24 复审）。
 
     # Linear trend on the primary metric
     if num_layers > 1:
@@ -1720,6 +1719,7 @@ def plot_panel_c_violin(
     about missing uncertainty quantification.
     """
     broken_weights, intact_weights = [], []
+    broken_seq, intact_seq = [], []
     for attn_weights, labels, edge_idx, seq in zip(
         attention_weights_list, bond_labels_list, edge_indices, sequences
     ):
@@ -1727,7 +1727,12 @@ def plot_panel_c_violin(
         bond_attn, _ = extract_bond_level_attention(layer_w, edge_idx, seq, max_seq_len)
         labels_np = labels.cpu().numpy() if isinstance(labels, torch.Tensor) else np.asarray(labels)
         for i in range(min(len(bond_attn), len(labels_np))):
-            (broken_weights if labels_np[i] == 1 else intact_weights).append(bond_attn[i])
+            if labels_np[i] == 1:
+                broken_weights.append(bond_attn[i])
+                broken_seq.append(seq)
+            else:
+                intact_weights.append(bond_attn[i])
+                intact_seq.append(seq)
 
     if not broken_weights or not intact_weights:
         raise ValueError(
@@ -1738,17 +1743,27 @@ def plot_panel_c_violin(
     effect = compute_effect_size(broken_weights, intact_weights, mode=attention_mode)
     mode = effect["mode"]
 
-    # Bootstrap CI on Cohen's d (resample broken/intact jointly).
+    # Bootstrap CI on Cohen's d — sequence-clustered：以整条序列（含其全部键）
+    # 为重抽单元，避免逐键独立重抽无视肽内相关而低估区间（审稿 R-24）。
     d_point = effect["cohen_d_signed"]
     d_low = d_high = d_point
     if len(broken_weights) > 1 and len(intact_weights) > 1:
-        b = np.asarray(broken_weights, dtype=float)
-        i_arr = np.asarray(intact_weights, dtype=float)
+        from collections import defaultdict
+        b_clusters: Dict[str, List[float]] = defaultdict(list)
+        i_clusters: Dict[str, List[float]] = defaultdict(list)
+        for v, s in zip(broken_weights, broken_seq):
+            b_clusters[s].append(v)
+        for v, s in zip(intact_weights, intact_seq):
+            i_clusters[s].append(v)
+        b_keys = list(b_clusters)
+        i_keys = list(i_clusters)
         rng = np.random.default_rng(42)
         boot_d = np.empty(n_bootstrap, dtype=float)
         for k in range(n_bootstrap):
-            bs = b[rng.integers(0, len(b), size=len(b))]
-            is_ = i_arr[rng.integers(0, len(i_arr), size=len(i_arr))]
+            bs = np.concatenate([b_clusters[b_keys[j]] for j in
+                                 rng.integers(0, len(b_keys), size=len(b_keys))])
+            is_ = np.concatenate([i_clusters[i_keys[j]] for j in
+                                  rng.integers(0, len(i_keys), size=len(i_keys))])
             md = float(np.mean(bs) - np.mean(is_))
             ps = float(np.sqrt((np.var(bs) + np.var(is_)) / 2))
             boot_d[k] = md / ps if ps > 0 else 0.0
@@ -1791,7 +1806,8 @@ def plot_panel_c_violin(
     ci_pct = int(ci_level * 100)
     stats_text = (
         f"Cohen's d = {d_point:+.3f}  [{ci_pct}% CI: {d_low:+.3f}, {d_high:+.3f}]\n"
-        f"AUC = {effect['auc']:.3f}  (p = {effect['p_value']:.2e})\n"
+        f"(CI: sequence-clustered bootstrap)\n"
+        f"AUC (broken vs intact ranking) = {effect['auc']:.3f}\n"
         f"n_broken = {effect['n_broken']}, n_intact = {effect['n_intact']}\n"
         f"bootstrap iters = {n_bootstrap}"
     )
@@ -2429,28 +2445,25 @@ def plot_residue_pair_matrix(
         ax.grid(which='minor', color='white', linestyle='-', linewidth=0.6)
         ax.tick_params(which='minor', bottom=False, left=False)
 
+        # 未达展示阈值（N < rare_thresholds[1]）的残基对：三个面板统一灰格遮罩
+        # （缺失值 ≠ 预测 0 / 偏差 0；图注按"未达到展示阈值"表述；R-24 复审）。
+        for i in range(n_aa):
+            for j in range(n_aa):
+                if int(counts[i, j]) < rare_thresholds[1]:
+                    ax.add_patch(plt.Rectangle((j - 0.5, i - 0.5), 1, 1,
+                                               fill=True, facecolor='#EEEEEE',
+                                               edgecolor='#BBBBBB',
+                                               linewidth=0.3, zorder=1))
+
         # 只在 (a) Empirical 面板标注数值（实验事实，便于读者精读）；
         # (b)(c) 仅靠颜色（Nature/Cell 风格，颜色已高度一致即可直接比较）。
         if annotate_values:
             for i in range(n_aa):
                 for j in range(n_aa):
                     n = int(counts[i, j])
-                    if n == 0:
-                        # empty cell: hatch background
-                        ax.add_patch(plt.Rectangle((j - 0.5, i - 0.5), 1, 1,
-                                                   fill=True, facecolor='#EEEEEE',
-                                                   edgecolor='#BBBBBB',
-                                                   linewidth=0.3, zorder=1))
+                    if n < rare_thresholds[1]:
                         continue
-                    val = matrix[i, j]
-                    if n < rare_thresholds[0]:
-                        marker = '**'
-                    elif n < rare_thresholds[1]:
-                        marker = '*'
-                    else:
-                        marker = ''
-                    text = f'{val:.0f}{marker}'
-                    ax.text(j, i, text, ha='center', va='center',
+                    ax.text(j, i, f'{matrix[i, j]:.0f}', ha='center', va='center',
                             fontsize=9.5, color='black')
         return im
 
@@ -2480,11 +2493,11 @@ def plot_residue_pair_matrix(
     # 灰色格/r 与 MAE 的解释由论文图注承担。
     legend_handles = []
     if show_footer_notes:
-        has_empty = bool((counts == 0).any())
+        has_empty = bool((counts < rare_thresholds[1]).any())
         if has_empty:
             legend_handles.append(
                 mpatches.Patch(facecolor='#EEEEEE', edgecolor='#BBBBBB',
-                               linewidth=0.5, label='N/A (no observation)')
+                               linewidth=0.5, label=f'N < {rare_thresholds[1]} (below display threshold)')
             )
         if has_rare_single:
             legend_handles.append(
@@ -3148,9 +3161,7 @@ def plot_aggregate_layer_attention(
     axes[-1].set_xlabel('Bond position (i)', fontsize=10, fontweight='bold')
 
     fig.suptitle(
-        f'Aggregate Per-Layer Attention Pattern (n = {n_samples} samples)\n'
-        f'Lower entropy = more focused; higher top-K share = sharper peaks.  '
-        f'Expected after GCN fix: L0 diffuse → L_last focused.',
+        f'Aggregate Per-Layer Attention Pattern (n = {n_samples} samples)',
         fontsize=12, fontweight='bold', y=0.97,
     )
 

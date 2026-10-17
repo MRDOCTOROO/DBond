@@ -109,7 +109,7 @@ R(955, 130, 140, 95, "#FFFFFF", "#3B3B3B", 2);
 R(1018, 225, 12, 12, "#3B3B3B", "#3B3B3B");
 R(993, 237, 62, 6, "#3B3B3B", "#3B3B3B", 1, { rx: 2 });
 T(890, 262, 270, 66, [
-  { t: "Predict peptide bond", size: 12.5 }, { t: "cleavage probabilities", size: 12.5 }, { t: "and theoretical spectra", size: 12.5 },
+  { t: "Predict peptide bond", size: 12.5 }, { t: "cleavage probabilities", size: 12.5 },
 ]);
 
 card(1200, 40, 250, 300, C.gold, "5", ["Optimal Sequence", "Selection"]);
@@ -180,9 +180,9 @@ frameBox.id = "frame";
 // --- rich fragmentation panel
 R(580, 495, 410, 60, C.richHdr, C.richLine, 1.5);
 T(580, 495, 410, 60, [
-  { t: "Rich Fragmentation (Easy to Sequence)", bold: true, size: 13.5 },
-  { t: "More cleavage sites, stronger signals,", size: 11.5 },
-  { t: "better sequence coverage", size: 11.5 },
+  { t: "Rich Fragmentation (Higher Coverage Propensity)", bold: true, size: 13.5 },
+  { t: "More predicted cleavage sites,", size: 11.5 },
+  { t: "more potential fragment information", size: 11.5 },
 ]);
 R(580, 555, 410, 315, "#FFFFFF", C.richLine, 1.5);
 T(594, 578, 32, 16, [{ t: "H—", size: 11.5, bold: true }], { align: "left" });
@@ -199,16 +199,16 @@ spectrum(640, 800, 335, 642, [
   { h: 98, c: C.barBlue, lab: "y2" }, { h: 40, c: C.barRed, lab: "b9" },
 ]);
 T(635, 830, 300, 36, [
-  { t: "High signal, high coverage,", bold: true, size: 13 },
-  { t: "easy to sequence ✅", bold: true, size: 13 },
+  { t: "More potential fragment information,", bold: true, size: 13 },
+  { t: "higher coverage propensity ✅", bold: true, size: 13 },
 ]);
 
 // --- sparse fragmentation panel
 R(1010, 495, 390, 60, C.sparseHdr, C.red, 1.5);
 T(1010, 495, 390, 60, [
-  { t: "Sparse Fragmentation (Hard to Sequence)", bold: true, size: 13.5 },
-  { t: "Fewer cleavage sites, weaker signals,", size: 11.5 },
-  { t: "poor sequence coverage", size: 11.5 },
+  { t: "Sparse Fragmentation (Lower Coverage Propensity)", bold: true, size: 13.5 },
+  { t: "Fewer predicted cleavage sites,", size: 11.5 },
+  { t: "less potential fragment information", size: 11.5 },
 ]);
 R(1010, 555, 390, 315, "#FFFFFF", C.red, 1.5);
 T(1024, 578, 32, 16, [{ t: "H—", size: 11.5, bold: true }], { align: "left" });
@@ -221,8 +221,8 @@ spectrum(1048, 800, 330, 642, [
   { h: 50, c: C.barBlue, lab: "y2" }, { h: 110, c: C.barRed, lab: "b7" },
 ], { step: 70, barW: 8 });
 T(1045, 830, 320, 36, [
-  { t: "Low signal, low coverage,", bold: true, size: 13 },
-  { t: "difficult to sequence ❌", bold: true, size: 13 },
+  { t: "Less potential fragment information,", bold: true, size: 13 },
+  { t: "lower coverage propensity ❌", bold: true, size: 13 },
 ]);
 
 // ---------------------------------------------------------------- edges (draw.io cell edges + svg/pptx arrows)

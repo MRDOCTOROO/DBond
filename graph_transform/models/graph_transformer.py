@@ -138,7 +138,7 @@ class NodeEncoder(nn.Module):
         nn.init.xavier_uniform_(self.aa_embedding.weight)
         nn.init.xavier_uniform_(self.position_embedding.weight)
     
-    def forward(self, batch_data: Dict) -> torch.Tensor:
+    def forward(self, batch_data: Dict, residue_chemistry: Optional[nn.Module] = None) -> torch.Tensor:
         """
         前向传播
         
@@ -200,6 +200,8 @@ class NodeEncoder(nn.Module):
         
         # 最终编码
         node_features = self.node_encoder(combined_features)
+        if residue_chemistry is not None:
+            node_features = node_features + residue_chemistry(seq_tokens)
         
         return node_features
     
@@ -472,7 +474,8 @@ class GraphTransformer(nn.Module):
             )
 
         # FiLM 条件调制：[charge, nce] -> (γ, β) ∈ R^{2H}，对打包后节点特征做
-        # h=(1+γ)h+β。末层零初始化使训练从恒等映射（=无 FiLM 基线）出发；
+        # h=(1+γ)h+β。注意：下方末层零初始化会被后续 _init_weights 的
+        # Xavier 初始化覆盖；此处保留历史训练行为，避免混入架构实验变量。
         # charge/nce 均在 pre_synthesis 允许特征集内，无 observed-feature 泄漏。
         self.use_condition_film = getattr(config, 'use_condition_film', False)
         if self.use_condition_film:
@@ -553,6 +556,25 @@ class GraphTransformer(nn.Module):
         self.last_forward_timing = {}
 
         self._init_weights()
+
+        # Construct optional residual branches AFTER legacy initialization. This
+        # preserves shared parameter initialization for paired runs at one seed,
+        # and avoids overwriting their zero-initialized last layers.
+        self.use_residue_chemistry = getattr(config, 'use_residue_chemistry', False)
+        self.use_fragment_readout = getattr(config, 'use_fragment_readout', False)
+        # Separate RNG contexts also preserve each branch's initial weights
+        # when both flags are enabled for a later combination experiment.
+        if self.use_residue_chemistry:
+            with torch.random.fork_rng(devices=[]):
+                from .residue_chemistry import ResidueChemistryEncoder
+                self.residue_chemistry = ResidueChemistryEncoder(
+                    self.node_encoder.char_to_idx, self.node_encoder.vocab_size,
+                    self.hidden_dim, getattr(config, 'residue_chemistry_dim', 32))
+        if self.use_fragment_readout:
+            with torch.random.fork_rng(devices=[]):
+                from .fragment_readout import DualFragmentReadout
+                self.fragment_readout = DualFragmentReadout(
+                    self.hidden_dim, getattr(config, 'fragment_readout_dim', 64), config.max_seq_len)
     
     def _init_weights(self):
         """初始化模型权重"""
@@ -581,7 +603,8 @@ class GraphTransformer(nn.Module):
             total_start = time.perf_counter()
 
         # 节点特征编码
-        node_features = self.node_encoder(batch_data)
+        node_features = self.node_encoder(
+            batch_data, self.residue_chemistry if self.use_residue_chemistry else None)
         if timing_enabled:
             _maybe_sync(node_features.device, True)
             node_encode_end = time.perf_counter()
@@ -637,7 +660,9 @@ class GraphTransformer(nn.Module):
             if max_seq_len > 0:
                 packed_nodes[:, :max_seq_len] = node_features[:, :max_seq_len]
             global_positions = seq_lens_tensor.view(-1, 1, 1).expand(-1, 1, hidden_dim)
-            packed_nodes.scatter_(1, global_positions, global_nodes.unsqueeze(1))
+            # Under autocast the residual global embedding can promote the
+            # global node to FP32 while encoded residues stay FP16/BF16.
+            packed_nodes.scatter_(1, global_positions, global_nodes.to(packed_nodes.dtype).unsqueeze(1))
             node_positions = torch.arange(max_node_len, device=node_features.device)
             valid_node_mask = node_positions.unsqueeze(0) < node_lens_tensor.unsqueeze(1)
             node_features = packed_nodes[valid_node_mask]
@@ -770,6 +795,10 @@ class GraphTransformer(nn.Module):
                 bond_feature_parts.append(self.bond_theory_proj(theory_flat.to(h_src.dtype)))
             bond_features = torch.cat(bond_feature_parts, dim=-1)
             bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
+            if self.use_fragment_readout:
+                bond_logits_flat = bond_logits_flat + self.fragment_readout(
+                    node_features, seq_lens_tensor, node_offsets, max_seq_len,
+                    valid_bond_mask, bond_src, bond_dst)
             # AMP 下 bond_head 输出为 half，predictions 容器为 float32，需对齐 dtype 后赋值。
             # （autocast 不改 NodeEncoder 的 embedding 查表输出，故 node_features.dtype 不可靠）
             predictions[valid_bond_mask] = bond_logits_flat.to(predictions.dtype)

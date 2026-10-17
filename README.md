@@ -1,530 +1,160 @@
-# DBond - 基于深度学习的镜像肽肽键断裂预测模型
-
-DBond是基于论文《Optimizing Mirror-Image Peptide Sequence Design for Data Storage via Peptide Bond Cleavage》开发的深度神经网络预测模型，专门用于预测镜像肽在串联质谱（Tandem Mass Spectrometry）过程中的肽键断裂情况。该模型是镜像肽数据存储技术的核心组件，通过预测肽键断裂率来优化序列设计，从而提高数据存储的可靠性。
-
-## 核心目标：优化镜像肽数据存储技术
-
-### 背景问题
-镜像肽（由D-氨基酸组成）具有存储密度高、化学稳定性好的特点，是理想的数据存储介质。然而，对镜像肽进行测序（读取数据）极其困难，现有的从头测序（De-novo）算法在处理镜像肽时准确率有限。
-
-### 解决思路
-研究发现，质谱图中肽键断裂越多（产生的碎片离子越丰富），测序就越容易。DBond的作用就是通过预测候选镜像肽序列的"肽键断裂率"，来判断该序列是否容易被测序。
-
-### 应用价值
-- **序列筛选器**：如果一个序列被DBond预测为具有高断裂率，它就是"易于测序"的优良数据载体
-- **数据存储优化**：在数据写入阶段就筛选出最优序列，克服镜像肽测序难的技术瓶颈
-- **桥梁作用**：连接"数据编码"与"生物测序"，确保存储的数据未来能够被准确读取
-
-## 模型架构与技术特点
-
-### 输入特征（多维度特征融合）
-DBond综合四组特征进行预测：
-
-1. **序列特征 (Sequence Features)**
-   - 镜像肽本身的氨基酸序列（由D-氨基酸组成）
-   - 决定了肽段的基础理化性质
-
-2. **状态特征 (State Features)**
-   - 前体离子的电荷 (Charge)
-   - 质荷比 (m/z)
-   - 绝对强度 (Intensity)
-
-3. **键特征 (Bond Features)**
-   - 肽键在序列中的相对位置（从N端开始计数）
-
-4. **环境特征 (Env Features)**
-   - 质谱实验的环境参数
-   - 归一化碰撞能量 (NCE)
-   - 扫描编号 (Scan Number)
-
-### 网络架构
-模型针对不同类型的特征使用专门的处理模块：
-
-- **多头自注意力机制 (Multi-head Self-Attention, MSA)**
-  - 处理序列特征，捕捉D-氨基酸之间的依赖关系
-  - 提取序列内部的深层信息
-
-- **数值嵌入 (Numerical Embedding)**
-  - 处理状态、键和环境特征
-  - 数值特征经过归一化和仿射变换后嵌入到高维空间
-
-- **多层感知机 (MLP)**
-  - 所有特征处理后拼接输入MLP
-  - 输出最终的预测结果
-
-## 预测策略对比
-
-DBond设计了两种预测策略，通过实验验证了单标签策略的优越性：
-
-### 多标签分类策略 (Multi-label Classification) - DBond-m
-**策略描述**：
-- 一次性预测一条镜像肽中所有肽键的断裂状态
-- 输入整条肽段信息，输出包含每个肽键"断裂/未断裂"状态的向量
-
-**劣势**：
-- 数据集样本数量相对较少，每个样本对应多个标签
-- 解空间非常稀疏，模型难以准确匹配整条肽链的真实断裂模式
-- Subset Accuracy较低
-
-### 单标签分类策略 (Single-label Classification) - DBond-s ⭐推荐
-**策略描述**：
-- 将复杂的整体预测任务分解为多个独立的子任务
-- 依次预测每一个肽键的断裂状态
-- 输入包含肽段信息和当前要预测的特定肽键位置
-- 输出仅针对这一个肽键是否断裂的判断
-
-**优势**：
-- 虽然忽略了标签之间的依赖关系，但显著提高了预测性能
-- 在独立测试集上表现出色
-- 单肽键预测准确率达到**82.42%**
-
-## 在数据存储流程中的应用
-
-DBond在镜像肽数据存储的编码/翻译阶段（Translate Step）发挥关键筛选作用：
-
-```
-原始数据 → 二进制编码 → 候选序列生成 → DBond预测筛选 → 最优序列选择 → 物理合成
-```
-
-### 详细流程
-
-1. **原始数据编码**
-   - 图片、文档等原始数据转换为二进制流
-
-2. **候选规则生成**
-   - 二进制数据通过不同映射规则转换为不同的D-氨基酸序列
-   - 例如：规则A生成序列AABB，规则B生成序列CCDD
-
-3. **DBond预测与筛选**
-   - 将候选序列输入DBond
-   - DBond预测各序列的肽键断裂率
-   - 系统选择预测断裂率最高的序列及其映射规则
-
-4. **合成与存储**
-   - 合成筛选出的最优序列进行物理存储
-
-## 项目结构
-
-```
-DBond2/
-├── README.md                        # 项目说明文档
-├── LICENSE                          # MIT许可证
-├── Dockerfile                       # Docker构建文件
-├── .gitignore                       # Git忽略文件
-│
-├── 核心模型文件/
-│   ├── dbond_s.py                   # 单标签DBond模型架构定义
-│   ├── dbond_m.py                   # 多标签DBond模型架构定义
-│   ├── data_utils_dbond_s.py        # 单标签模型数据处理工具
-│   └── data_utils_dbond_m.py        # 多标签模型数据处理工具
-│
-├── 训练和评估脚本/
-│   ├── train.dbond_s.py             # 单标签模型训练脚本
-│   ├── train.dbond_m.py             # 多标签模型训练脚本
-│   ├── evaluate.dbond_s.py          # 单标签模型评估脚本
-│   └── evaluate.dbond_m.py          # 多标签模型评估脚本
-│
-├── 配置文件/
-│   ├── dbond_s_config/default.yaml  # 单标签模型配置文件
-│   └── dbond_m_config/default.yaml  # 多标签模型配置文件
-│
-├── 数据集/
-│   ├── dbond_s.train.shuffle.csv    # 单标签模型训练数据
-│   ├── dbond_s.test.csv             # 单标签模型测试数据
-│   ├── dbond_m.train.shuffle.csv    # 多标签模型训练数据
-│   ├── dbond_m.test.csv             # 多标签模型测试数据
-│   └── dataset.fbr.csv              # 格式结合断裂位点信息数据
-│
-├── PBCLA工具/
-│   ├── pbcla.py                     # 主数据处理和转换工具
-│   ├── mgf2csv.dbond_s.py           # 单标签模型MGF到CSV转换
-│   ├── mgf2csv.dbond_m.py           # 多标签模型MGF到CSV转换
-│   ├── utils.py                     # 工具函数
-│   └── mgf_dataset/                 # 示例数据集
-│       ├── example.mgf              # 示例MGF文件
-│       ├── example.csv              # 示例CSV文件
-│       ├── example.multi.csv       # 示例多标签CSV文件
-│       └── example_out.mgf          # 示例输出MGF文件
-│
-├── 评估指标/
-│   └── multi_label_metrics.py       # 多标签分类评估指标计算
-│
-├── graph_transform/                 # 图神经网络扩展模块
-│   ├── models/                      # 图模型架构
-│   ├── training/                    # 图模型训练
-│   ├── evaluation/                  # 图模型评估
-│   └── data/                        # 图数据处理
-│
-└── 输出目录/
-    ├── best_model/                  # 最佳模型权重存储
-    ├── checkpoint/                  # 模型检查点
-    ├── result/                      # 评估结果存储
-    └── tensorboard/                 # TensorBoard日志
-```
-
-## 核心文件功能说明
-
-### 模型架构文件
-- **`dbond_s.py`**: 单标签DBond-s模型实现，基于Transformer架构，用于逐个肽键断裂预测
-- **`dbond_m.py`**: 多标签DBond-m模型实现，一次性预测整条肽链的所有肽键断裂状态
-
-### 数据处理文件
-- **`data_utils_dbond_s.py`**: 单标签模型数据加载器，处理包含肽键位置信息的特征
-- **`data_utils_dbond_m.py`**: 多标签模型数据加载器，处理整条肽链的多标签数据
-
-### 训练脚本
-- **`train.dbond_s.py`**: 单标签模型训练，支持GPU加速和学习率调度
-- **`train.dbond_m.py`**: 多标签模型训练，包含完整的验证流程
-
-### 评估脚本
-- **`evaluate.dbond_s.py`**: 单标签模型评估，计算二分类指标
-- **`evaluate.dbond_m.py`**: 多标签模型评估，计算多标签分类指标
-
-## 数据格式说明
-
-### 输入数据格式
-训练和测试数据CSV文件包含以下列：
-
-| 列名 | 类型 | 描述 |
-|------|------|------|
-| name | 字符串 | 样本唯一标识符 |
-| seq | 字符串 | D-氨基酸序列（如：ACDEFGHIK） |
-| charge | 整数 | 前体离子电荷状态（通常为2-4） |
-| pep_mass | 浮点数 | 质荷比 (m/z) |
-| nce | 整数 | 归一化碰撞能量 (NCE) |
-| scan_num | 整数 | 质谱扫描编号 |
-| rt | 浮点数 | 保留时间（秒） |
-| intensity | 浮点数 | 前体离子绝对强度 |
-| bond_position | 整数 | 当前预测的肽键位置（仅DBond-s） |
-| cleavage_label | 整数 | 肽键断裂标签（0/1，仅DBond-s） |
-| multi_labels | 字符串 | 所有肽键断裂标签（分号分隔，仅DBond-m） |
-
-### 标签编码格式
-
-**DBond-s（单标签）**：
-- `cleavage_label`: 0表示未断裂，1表示断裂
-- 每行数据对应一个肽键的预测任务
-
-**DBond-m（多标签）**：
-- `multi_labels`: 分号分隔的0/1序列
-- 示例：`"1;0;1;0;1;0;1;0;1;0"`表示在位置0、2、4、6、8发生断裂
-
-## 使用方法
-
-### 环境要求
-- **Python**: 3.7或更高版本
-- **PyTorch**: 1.8或更高版本
-- **CUDA**: 推荐使用GPU加速训练
-- **内存**: 至少16GB内存用于数据加载和模型训练
-
-### 安装依赖
-
-```bash
-# 克隆项目
-git clone https://github.com/MRDOCTOROO/DBond.git
-cd DBond
-
-# 安装PyTorch（根据CUDA版本选择）
-pip install torch torchvision torchaudio
-
-# 安装其他依赖
-pip install -r requirements.txt
-```
-
-### 快速开始
-
-#### 1. 准备数据集
-```bash
-# 确保数据集文件存在
-ls dataset/
-# 应该包含：dbond_s.train.shuffle.csv, dbond_s.test.csv, dbond_m.train.shuffle.csv, dbond_m.test.csv
-```
-
-#### 2. 训练模型
-
-**训练单标签模型（推荐，DBond-s）**：
-```bash
-python train.dbond_s.py --config dbond_s_config/default.yaml
-```
-
-**训练多标签模型（DBond-m）**：
-```bash
-python train.dbond_m.py --config dbond_m_config/default.yaml
-```
-
-#### 3. 评估模型
-
-**评估单标签模型**：
-```bash
-python evaluate.dbond_s.py --config dbond_s_config/default.yaml
-```
-
-**评估多标签模型**：
-```bash
-python evaluate.dbond_m.py --config dbond_m_config/default.yaml
-```
-
-#### 4. 使用训练好的模型进行预测
-
-```python
-import torch
-from dbond_s import DBondS
-from data_utils_dbond_s import DBondSDataset
-
-# 加载模型
-model = DBondS.load_from_checkpoint('best_model/dbond_s/best_model.pth')
-model.eval()
-
-# 准备数据
-dataset = DBondSDataset('path/to/your/data.csv')
-dataloader = torch.utils.data.DataLoader(dataset, batch_size=32)
-
-# 预测
-predictions = []
-with torch.no_grad():
-    for batch in dataloader:
-        seq, charge, nce, rt, bond_pos = batch
-        pred = model(seq, charge, nce, rt, bond_pos)
-        predictions.extend(pred.cpu().numpy())
-```
-
-### 配置文件说明
-
-#### DBond-s配置示例
-```yaml
-data:
-  csv_path: "dataset/dbond_s.train.shuffle.csv"
-  max_len: 50
-  batch_size: 32
-  alphabet: "ACDEFGHIKLMNPQRSTVWY"
-
-model:
-  d_model: 256
-  n_head: 8
-  n_layer: 6
-  dropout: 0.1
-
-training:
-  epochs: 100
-  learning_rate: 0.001
-  weight_decay: 0.0001
-  save_interval: 10
-```
-
-#### DBond-m配置示例
-```yaml
-data:
-  csv_path: "dataset/dbond_m.train.shuffle.csv"
-  max_len: 50
-  batch_size: 16  # 多标签模型内存需求更大
-
-model:
-  d_model: 512    # 更大的模型容量
-  n_head: 8
-  n_layer: 8
-  dropout: 0.1
-
-training:
-  epochs: 150
-  learning_rate: 0.0005
-```
-
-## 性能对比
-
-### 实验结果
-根据论文实验结果，DBond-s在独立测试集上表现优异：
-
-| 模型 | 预测策略 | 准确率 | 优势 |
-|------|----------|--------|------|
-| DBond-s | 单标签分类 | **82.42%** | 高精度，适合实际应用 |
-| DBond-m | 多标签分类 | 较低 | 一次性预测，但精度受限 |
-| Prosit | 基线方法 | 较低 | 传统方法，性能一般 |
-| PredFull | 基线方法 | 较低 | 传统方法，性能一般 |
-
-### 推荐使用场景
-
-**DBond-s（推荐）**：
-- 镜像肂数据存储的实际应用
-- 需要高精度预测的场景
-- 资源受限的环境
-
-**DBond-m**：
-- 研究和实验目的
-- 需要快速整链预测的初步筛选
-- 计算资源充足的场景
-
-## 数据处理工具
-
-### PBCLA工具使用
-
-```bash
-# 转换MGF到CSV（单标签模型）
-python PBCLA/mgf2csv.dbond_s.py --input your_data.mgf --output output_s.csv
-
-# 转换MGF到CSV（多标签模型）
-python PBCLA/mgf2csv.dbond_m.py --input your_data.mgf --output output_m.csv
-
-# 使用PBCLA主工具
-python PBCLA/pbcla.py --mode convert --input data.mgf --output result.csv
-```
-
-### 自定义数据处理
-
-```python
-import pandas as pd
-from data_utils_dbond_s import DBondSDataset
-
-# 创建自定义数据集
-def create_custom_dataset():
-    data = {
-        'name': ['sample_1', 'sample_2'],
-        'seq': ['ACDEFGHIK', 'LMNPQRSTV'],
-        'charge': [2, 3],
-        'pep_mass': [1234.5, 1567.8],
-        'nce': [30, 35],
-        'scan_num': [1001, 1002],
-        'rt': [1200.5, 1300.8],
-        'intensity': [1000000, 800000],
-        'bond_position': [2, 3],
-        'cleavage_label': [1, 0]
-    }
-    return pd.DataFrame(data)
-
-# 使用自定义数据
-df = create_custom_dataset()
-dataset = DBondSDataset(df)
-```
-
-## 高级功能
-
-### 模型集成
-```python
-class DBondEnsemble:
-    def __init__(self, model_paths):
-        self.models = [DBondS.load_from_checkpoint(path) for path in model_paths]
-    
-    def predict(self, seq, charge, nce, rt, bond_pos):
-        predictions = []
-        for model in self.models:
-            pred = model(seq, charge, nce, rt, bond_pos)
-            predictions.append(pred)
-        return torch.mean(torch.stack(predictions), dim=0)
-```
-
-### 数据增强
-```python
-def augment_mirror_peptide_data(df, aug_prob=0.1):
-    """镜像肽数据增强"""
-    augmented_data = []
-    
-    for _, row in df.iterrows():
-        augmented_data.append(row)
-        
-        if random.random() < aug_prob:
-            # 添加噪声到连续特征
-            noisy_row = row.copy()
-            noisy_row['nce'] += random.uniform(-2, 2)
-            noisy_row['intensity'] *= random.uniform(0.9, 1.1)
-            augmented_data.append(noisy_row)
-    
-    return pd.DataFrame(augmented_data)
-```
-
-## 故障排除
-
-### 常见问题
-
-1. **内存不足错误**：
-   - 减少batch_size
-   - 使用梯度累积
-   - 增加swap空间
-
-2. **训练不收敛**：
-   - 检查学习率设置
-   - 增加数据预处理
-   - 使用学习率调度器
-
-3. **预测精度低**：
-   - 检查数据质量和标签准确性
-   - 增加训练数据量
-   - 调整模型架构参数
-
-### 性能优化
-
-```yaml
-# 优化配置示例
-training:
-  batch_size: 64
-  accumulation_steps: 4  # 梯度累积
-  mixed_precision: true  # 混合精度训练
-  gradient_clip_norm: 1.0
-  
-model:
-  d_model: 512
-  n_head: 16
-  n_layer: 12
-```
-
-## Docker使用
-
-```bash
-# 构建镜像
-docker build -t dbond:latest .
-
-# 运行容器（GPU支持）
-docker run --gpus all -v $(pwd):/workspace -it dbond:latest
-
-# 训练模型
-docker run --gpus all -v $(pwd):/workspace dbond:latest python train.dbond_s.py
-```
-
-## 引用格式
-
-如果您在研究中使用了DBond，请引用原始论文：
-
-```bibtex
-@article{DBond2024,
-  title={Optimizing Mirror-Image Peptide Sequence Design for Data Storage via Peptide Bond Cleavage},
-  author={[作者列表]},
-  journal={[期刊名称]},
-  year={2024},
-  volume={[卷号]},
-  pages={[页码]}
-}
-```
-
-## 许可证
-
-本项目采用MIT许可证，详见LICENSE文件。
-
-## 贡献指南
-
-我们欢迎社区贡献！请遵循以下步骤：
-
-1. Fork项目并创建功能分支
-2. 提交代码并确保所有测试通过
-3. 更新相关文档
-4. 创建Pull Request并详细描述更改
-
-### 开发规范
-- 遵循PEP 8编码规范
-- 添加类型提示和文档字符串
-- 编写单元测试
-- 确保向后兼容性
-
-### v1.0.0
-- 初始版本发布
-- 实现DBond-s和DBond-m两个模型
-- 提供完整的数据处理和评估工具
-
-## 联系方式
-
-
--**Fork自源项目**: https://github.com/LoserLus/DBond
-- **项目主页**: https://github.com/MRDOCTOROO/DBond
-- **问题反馈**: 请在GitHub提交Issue
-- **技术讨论**: 欢迎在Discussions中交流
+# DBond — 镜像肽肽键断裂预测（数据存储序列筛选）
+
+DBond 是一个基于深度学习的**镜像肽（D-氨基酸组成）肽键断裂预测**项目。镜像肽具有高存储密度与化学稳定性，
+是理想的数据存储介质，但其串联质谱（MS/MS）测序（读回）困难；质谱中肽键断裂越充分、碎片离子越丰富，
+序列就越容易被测序。DBond 通过预测候选镜像肽序列的**肽键断裂概率**，在写入阶段筛选"易于测序"的序列，
+连接数据编码与生物测序两端。
+
+> 本 README 描述 **2026-10-14 仓库整理后**的当前状态。AI 协作细则、硬规则与实验台账见
+> `AGENTS.md`（仅本地）；历史实验结论见 `docs/experiment_log.md`（仅本地）。
 
 ---
 
-**注意**: DBond是一个专门用于镜像肽数据存储优化的研究工具。在使用过程中，请确保理解其在数据存储流程中的作用和局限性。如需技术支持，请通过GitHub Issue联系开发团队。
+## 1. 当前主线（论文口径）
+
+| 项目 | 内容 |
+|---|---|
+| 主模型 | **DBond-GT**：残基图 + 3×残差 GCN + 2×边感知多头 GAT（hidden 256、4 头、dropout 0.1、全局节点） |
+| 任务设置 | **pre-synthesis**：屏蔽观测特征 intensity / scan_num / rt，仅用序列、charge、pep_mass、NCE + 15 维理论特征 |
+| 模型体改动 | ① 15 维键级理论特征（`data/theory_features.py`）经 Linear(15→256) 拼入键级预测头；② FiLM 条件调制（charge/NCE → γ,β，零初始化） |
+| 图构建 | 距离窗口策略：**R = 5**（连接全部 \|i−j\|≤5 的残基对）+ 全局虚拟节点 |
+| 训练数据 | 条件组折叠（行 → 唯一 (seq, charge, NCE) 组，软标签 q + `group_uniform` 加权）；**测试侧保持行级** |
+| 数据划分 | **5 组重复序列级随机 80/20 划分**（1222/2252/3514/6072/9075；每折内 train/test 零序列重叠）——注意：不是 k-fold CV |
+| 集成 | **DBond-GT-Ens** = 同折 5 seed 概率平均（42–46） |
+| 主配置 | `graph_transform/config/pre_synthesis_fold1222_theory_film.yaml` |
+
+五组划分上的最终对比（bondacc = padding-free 有效键准确率，%；完整表见 `docs/paper_tables_20260909.md`）：
+
+| 模型 | bondacc | Lab-F1 | q-Brier ↓ | ρ_key |
+|---|---|---|---|---|
+| DBond-s | 78.30±0.28 | 77.75±0.51 | 7.55 | 76.85 |
+| DBond-m | 77.48±0.48 | 76.91±0.64 | 8.25 | 75.36 |
+| DBond-AF | 79.86±0.37 | 79.25±0.90 | 7.13 | 81.21 |
+| DBond-AF(opt) | 79.93±0.34 | 79.70±0.69 | 6.61 | 81.11 |
+| **DBond-GT** | 80.02±0.36 | 79.80±0.64 | 6.69 | 81.01 |
+| **DBond-GT-Ens** | **80.38±0.22** | **80.36±0.47** | **6.28** | **81.67** |
+
+**指标口径（重要）**：标签级准确率只以带有效键掩码的 **bondacc** 为准
+（`label_accuracy_micro(gt, predict, mask)`）。未经掩码的 accuracy 会被 padding 位 (0,0) 的 TN 灌水
+（+3.4~+5.7 点），本仓库不再产生、也不再引用该口径的数字。
+原始论文中的 **82.42%** 是旧口径/旧划分下的历史数值，与上表不可直接比较。
+
+---
+
+## 2. 仓库结构
+
+```
+DBond/
+├── graph_transform/            # 主线：DBond-GT 图模型（模型/训练/评估/数据/脚本/配置）
+│   ├── config/                 # 含论文主线配置、md 敏感性扫描配置、archive/ 历史配置
+│   ├── scripts/                # 训练、5 组划分并行、评估、折叠、软标签、集成、可解释性、聚合
+│   ├── data/ models/ training/ evaluation/ utils/
+│   └── README.md               # 模块说明（架构、图构建、脚本入口）
+├── ludbond/                    # 对比基线 DBond-s / DBond-m（独立镜像形态，含 5fold 入口）
+├── ludbondaf/                  # 对比基线 DBond-AF / DBond-AF(opt)
+├── sklearn_baseline/           # 树模型/线性基线（XGBoost/RF/HistGB/LogReg，同口径对照）
+├── PBCLA/                      # MGF 解析与 CSV 转换工具 + 示例数据
+├── dataset/                    # 随仓库发布的最小基线数据（5 组划分的行级 CSV）
+├── figures/                    # 论文图件：源码（.js/.drawio/.py）+ 成品（.pptx/.pdf）+ 图 4 数据
+├── result/                     # 运行输出目录（结构用 .gitkeep 保留，内容不入库）
+├── docs/                       # 实验台账与论文数值表（仅本地，见 §6）
+├── archive/                    # 归档区：被取代的图件/文档/脚本（随仓库保留，见 archive/README.md）
+├── run_pre_baselines.py        # 基线 pre 变体批量运行入口
+├── run_models_parallel.py      # 多模型 × 多 GPU 矩阵调度
+├── scripts/run_baselines_5fold.sh  # 基线 obs 设置 5 组划分批量运行
+└── AGENTS.md / CLAUDE.md       # AI 协作说明（仅本地，不入库）
+```
+
+## 3. 环境
+
+- Python 3.7+、PyTorch 1.8+（GPU）、CUDA 11.8；依赖见 `requirements.txt`，
+  精确版本锁见 `pyproject.toml` + `uv.lock`（推荐 `uv sync`）。
+- 训练/评估在 GPU pod 上执行（本项目实际运行环境：A800，`/mnt/pvc/graphtrans/DBond`，结果写入 `result/`、`checkpoints/`）。
+- 对比基线镜像自带独立环境（`ludbond/Dockerfile`、`ludbondaf/Dockerfile`，
+  亦可 `docker pull LoserLus/dbond_env:latest` / `LoserLus/dbond_af_env:latest`）。
+- 本机（无 GPU）只用于图件与仓库维护：`figures/` 下 node 图件脚本需要 `figures/node_modules`（`npm i` 安装 pptxgenjs）。
+
+## 4. 快速开始（复现主线）
+
+```bash
+# 0) 数据准备（在 pod 上，项目根目录执行）
+#    基线行级数据：dataset/*.csv（已随仓库发布）
+#    图模型数据：锚定 5 组划分 → 训练侧条件组折叠 + 软标签 q 真值
+python graph_transform/scripts/fold_condition_groups.py      # -> dataset/5fold_folded
+python graph_transform/scripts/precompute_soft_labels.py     # q 真值（期望行为口径）
+
+# 1) 五组划分并行训练（5 张 GPU，终端日志）
+python graph_transform/scripts/train_5fold_parallel.py \
+    --config graph_transform/config/pre_synthesis_fold1222_theory_film.yaml \
+    --fold_data_dir dataset/5fold_folded --gpus 0,1,2,3,4
+
+# 2) 单折评估（注意参数是 --checkpoint）
+python graph_transform/scripts/evaluate_graph_model.py \
+    --config graph_transform/config/pre_synthesis_fold1222_theory_film.yaml \
+    --checkpoint checkpoints/graph_transform/<run>/fold_<id>/checkpoints/gt_pre/<ts>/best_model.pt \
+    --out_metric_csv result/metric/<name>.csv
+
+# 3) 同折 5-seed 集成推理 + 统一 q 口径复算（跨模型数字都用这两个脚本产出）
+python graph_transform/scripts/ensemble_inference.py
+python graph_transform/scripts/q_metrics_from_pred_csv.py
+
+# 4) 基线（三个入口按设置选用；同样在 pod 上跑）
+python run_pre_baselines.py            # DBond-s/m/AF/AF(opt) 的 pre 变体（论文表行）
+bash   scripts/run_baselines_5fold.sh  # 基线的 obs 设置（历史对照行）
+```
+
+配置与消融：
+- md 敏感性扫描（7 臂）：`pre_synthesis_theory_folded_film_{md3,md4,md5,md7,md8,mddense,notheory}.yaml`，
+  用同一 `train_5fold_parallel.py` 逐臂运行（采纳规则：平台期内取最小有效半径）；
+- 特征/结构消融：`pre_synthesis_theory_folded_film_{nocharge,nonce,nomass,nomp,noedge,noglobal,gcnonly,...}.yaml`；
+- 已证伪的实验方向（辅助头、ranking loss、ASL、9-seed 等）见 `AGENTS.md` 台账，**不要重跑**。
+
+## 5. 论文图件对应关系
+
+| 论文图件 | 源码（`figures/`） | 成品 |
+|---|---|---|
+| Fig 1 工作流 | `build_workflow_figure.js` | `workflow_mesure.pptx` / `.drawio` / `.svg` |
+| Fig 2 残基图构建 | `graph_representation.drawio` | 论文目录内 `graph_representation.drawio2.pdf` |
+| Fig 3 模型架构 | `build_architecture_v5.js` | `dbond_gt_architecture_v5.pptx` / `.pdf` |
+| Fig 4 残基对化学矩阵 | `graph_transform/scripts/residue_pair_analysis.py` | 数据 `figures/residue_pair_film_fold9075/`；统计复算 `figures/paper_stats_20261013/` |
+| SI 可解释性面板 | `graph_transform/scripts/{interpretability,occlusion}_analysis.py` | 汇总脚本 `aggregate_interpretability_occlusion_5fold.py`；解读手册 `graph_transform/docs/interpretability_figures_guide.md` |
+
+PPTX 渲染/导出 PDF 用 `figures/{render_pptx,export_pptx_pdf}.ps1`（PowerPoint COM）。
+更早世代的图件源码与成品（panels 系列、v4、chaintograph3、matplotlib 架构图等）已移入 `archive/figures/`。
+
+## 6. 仅本地约定（不入库）
+
+| 路径 | 说明 |
+|---|---|
+| `docs/` | 实验台账（`experiment_log.md`，**随代码入库**）与论文数值表、工作草稿；其余内容仅本地 |
+| `AGENTS.md` / `CLAUDE.md` | AI 协作说明，仅本地使用，不推送到云端 |
+| `archive/` | 归档区，随仓库保留（被取代的图件/文档/脚本，见 `archive/README.md`） |
+| `实验图/`、`result/`、`checkpoints/`、`results/`、`logs/`、`tensorboard/`、`state/` | 运行产物，不入库 |
+
+## 7. 数据格式
+
+行级 CSV（`dataset/dbond_{s,m}*.csv`）关键列：
+
+| 列 | 含义 |
+|---|---|
+| `seq` | 镜像肽序列（D-氨基酸） |
+| `charge` / `pep_mass` / `nce` / `scan_num` / `rt` / `intensity` | 前体离子与实验条件特征 |
+| `bond_position` / `cleavage_label` | 键位置 / 断裂标签（单标签长表） |
+| `multi_labels` | 分号分隔的整链断裂标签（多标签模型） |
+
+MGF → CSV：`PBCLA/mgf2csv.dbond_s.py`、`PBCLA/mgf2csv.dbond_m.py`（示例数据在 `PBCLA/mgf_dataset/`，
+脚本内默认路径即指向该示例；`ludbond/PBCLA/` 镜像版提供 `--mgf_path/--csv_path` 参数形式）。
+
+## 8. 归档区
+
+`archive/` 存放被取代但保留备查的内容：旧世代架构图（v4、panels、chaintograph3、matplotlib 版）、
+旧工作流图、旧规划/评审响应文档、被取代的分析脚本（跨折分析、注意力可视化旧框架等）。
+规则见 `archive/README.md`：**归档 = 冻结，不参与流水线、不在论文中引用**；
+确证无效的产物（错误口径的消融训练/评估脚本、跑不通的 bench、运行日志）已直接删除，可从 git 历史恢复。
+
+## 9. 引用与许可
+
+论文引用信息请以正式发表版本为准（DBond：Optimizing Mirror-Image Peptide Sequence Design for
+Data Storage via Peptide Bond Cleavage）。本项目采用 MIT 许可证，详见 `LICENSE`。
+
+问题与建议请通过本仓库 Issue 反馈。

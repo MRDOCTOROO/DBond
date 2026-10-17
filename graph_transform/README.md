@@ -1,13 +1,22 @@
-# Graph Transformer - 蛋白质键级别二分类模型
+# Graph Transformer — 镜像肽肽键断裂预测（DBond-GT）
 
 ## 项目概述
 
-本项目实现了一个基于图神经网络（Graph Neural Network, GNN）的蛋白质键级别二分类模型，专门用于预测蛋白质二硫键的断裂位置。模型将蛋白质序列转换为图结构，通过图卷积网络（GCN）和图注意力网络（GAT）进行特征学习，最终对每个氨基酸残基之间的键（bond）进行二分类预测（断裂/未断裂）。
+本项目实现 DBond-GT：一个基于图神经网络（Graph Neural Network, GNN）的**肽键（peptide bond）级别二分类**模型，
+用于预测镜像肽（D-氨基酸组成）在串联质谱中的肽键断裂情况，服务于镜像肽数据存储的序列筛选。
+模型将肽序列转换为残基图，通过残差图卷积网络（GCN）与边感知多头图注意力网络（GAT）学习表示，
+对每对相邻残基之间的肽键（bond）做二分类预测（断裂/未断裂）。
+
+> **当前状态（2026-10-14 仓库整理后）**
+> - 论文主线配置：`config/pre_synthesis_fold1222_theory_film.yaml`（pre-synthesis 屏蔽 + 15 维理论特征 + FiLM 条件调制 + 条件组折叠数据），
+>   五组重复划分（80/20）训练入口 `scripts/train_5fold_parallel.py`。
+> - 指标口径：标签级准确率只认带有效键掩码的 **bondacc**（见仓库根 `AGENTS.md`）。
+> - 被取代的脚本/文档已移入 `archive/`（仓库根目录），本 README 只描述当前在用的文件。
 
 ### 主要特点
-- **图结构表示**：将蛋白质序列建模为图结构，节点表示氨基酸残基，边表示残基之间的关系
+- **图结构表示**：将肽序列建模为图结构，节点表示氨基酸残基，边表示残基之间的关系
 - **混合架构**：结合GCN和GAT的优势，捕获局部和全局信息
-- **多源特征**：整合氨基酸序列、物理化学性质、质谱状态和环境信息
+- **多源特征**：整合氨基酸序列、物理化学性质、质谱状态与环境信息（pre-synthesis 设置下屏蔽 intensity/scan_num/rt）
 - **键级别预测**：对相邻残基之间的键进行细粒度预测
 - **完整训练流程**：支持训练、验证、测试、检查点管理和可视化
 
@@ -43,7 +52,7 @@
 - **GCN层**：3层（带残差连接）
 - **GAT层**：2层（多头注意力）
 - **隐藏维度**：256
-- **注意力头数**：8
+- **注意力头数**：4
 - **Dropout率**：0.1
 
 #### 1.3 关键组件
@@ -337,7 +346,7 @@ tensorboard --logdir tensorboard/graph_transform
 ```yaml
 model:
   hidden_dim: 256              # 隐藏维度
-  num_attention_heads: 8       # 注意力头数
+  num_attention_heads: 4       # 注意力头数
   dropout: 0.1                 # Dropout率
   use_edge_features: true      # 是否使用边特征
   num_gcn_layers: 3            # GCN层数
@@ -570,124 +579,90 @@ result/
 ```
 graph_transform/
 ├── config/
-│   └── default.yaml              # 配置文件
+│   ├── pre_synthesis_fold1222_theory_film.yaml  # 论文主线配置（理论特征 + FiLM + pre-synthesis 屏蔽）
+│   ├── pre_synthesis_theory_folded_film_*.yaml  # md 敏感性扫描 / 特征消融配置
+│   ├── pre_synthesis_5fold*.yaml                # 早期五折配置
+│   └── archive/                                 # 历史消融配置（已归档，勿重跑）
 ├── data/
-│   ├── graph_dataset.py          # 图数据集
-│   ├── optimized_graph_dataset.py # 优化的图数据集（缓存）
-│   ├── graph_builder.py          # 图构建器
+│   ├── graph_dataset.py          # 图数据集（含 CachedGraphDataset 路径）
+│   ├── optimized_graph_dataset.py # 预处理缓存路径（dormant：仅 data.preprocessed=true 启用）
+│   ├── graph_builder.py          # 图构建器（距离窗口，有效语义 R=5 即 |i−j|≤5）
+│   ├── theory_features.py        # 15 维键级理论特征（主线模型体改动之一）
+│   ├── label_validation.py       # 标签/序列校验
 │   ├── augmentation.py           # 数据增强
 │   └── preprocessing.py          # 数据预处理
 ├── models/
-│   ├── graph_transformer.py      # 主模型
-│   ├── attention_layers.py       # 注意力层
-│   ├── gcn_layers.py            # GCN层
-│   └── utils.py                 # 工具函数
+│   ├── graph_transformer.py      # 主模型（残差 GCN + 边感知 GAT + FiLM + 理论特征拼接）
+│   ├── attention_layers.py       # 边感知多头注意力层
+│   ├── gcn_layers.py             # 残差 GCN 层
+│   └── utils.py                  # 配置/检查点工具
 ├── training/
-│   ├── trainer.py               # 训练器
-│   ├── loss_functions.py        # 损失函数
-│   └── metrics.py               # 训练指标
+│   ├── trainer.py                # 训练器（折叠权重、软标签、q 检查点）
+│   ├── loss_functions.py         # 损失函数
+│   └── metrics.py                # BinaryBondMetrics 基类（padding-free）
 ├── evaluation/
-│   ├── evaluator.py             # 评估器
-│   └── metrics.py               # 评估指标
-├── scripts/
-│   ├── train_graph_model.py      # 训练脚本
-│   ├── evaluate_graph_model.py  # 评估脚本
-│   ├── visualize_sample_graph.py # 可视化脚本
-│   └── attention_visualization.py # 注意力可视化脚本
+│   ├── evaluator.py              # 评估器
+│   └── metrics.py                # 扩展指标（pull 自 training.metrics 子类：pr_auc/mcc/brier/ece）
+├── scripts/                      # 训练/评估/折叠/可解释性/聚合脚本（见 §12）
 ├── utils/
-│   ├── attention_extractor.py   # 注意力权重提取
-│   └── visualization.py         # 可视化工具
-└── README.md                    # 本文档
+│   ├── attention_extractor.py    # 注意力权重提取
+│   ├── visualization.py          # 论文级图件函数（panel/occlusion/残基对）
+│   └── interpretability.py       # 早期单样本辅助（保留，utils/__init__ 重导出）
+├── docs/
+│   └── interpretability_figures_guide.md  # 论文级可解释性图解读手册
+└── README.md                     # 本文档
 ```
 
-### 12. 注意力可视化使用指南
+> 被取代的脚本（`attention_visualization.py`、`cross_validation_analysis.py`、`visualize_sample_graph.py` 等 10 个）
+> 与旧框架文档已移入仓库根 `archive/scripts/`、`archive/docs/graph_transform/`。
 
-#### 12.1 功能概述
-注意力可视化工具用于分析GraphTransformer模型的可解释性，包括：
-- 注意力权重热力图
-- 肽段结构图叠加注意力
-- 注意力头模式分析
-- 综合分析报告
+### 12. 可解释性分析与常用入口
 
-#### 12.2 使用步骤
+论文级可解释性产物由以下脚本生成（脚本头的 docstring 是最新用法说明）：
 
-##### 步骤1：准备文件
-1. 训练好的模型检查点文件（.pt格式）
-2. 测试数据CSV文件（与训练数据格式相同）
-3. 配置文件（YAML格式）
+| 脚本 | 用途 |
+|---|---|
+| `scripts/interpretability_analysis.py` | 注意力/显著性分析（供五折汇总脚本调用） |
+| `scripts/occlusion_analysis.py` | 遮掩（occlusion）一致性分析 |
+| `scripts/aggregate_interpretability_occlusion_5fold.py` | 五组划分汇总（输出到 `results/` 与 `实验图/`） |
+| `scripts/residue_pair_analysis.py` | 残基对化学矩阵（论文图 4 / SI 图 S1） |
 
-##### 步骤2：运行可视化脚本
+图件坐标轴、指标含义与阈值说明见 `docs/interpretability_figures_guide.md`；
+早期基于 `attention_visualization.py` 的可视化指南与配套文档已移入 `archive/`。
+
+常用训练/评估入口（详细参数见 `AGENTS.md` 与脚本 docstring）：
+
 ```bash
-python graph_transform/scripts/attention_visualization.py \
-    --config graph_transform/config/default.yaml \
-    --checkpoint path/to/model.pt \
-    --input_csv path/to/test_data.csv \
-    --output_dir results/attention_viz \
-    --num_samples 5
-```
+# 五组重复划分并行训练（5 GPU）
+python graph_transform/scripts/train_5fold_parallel.py \
+    --config graph_transform/config/pre_synthesis_fold1222_theory_film.yaml \
+    --fold_data_dir dataset/5fold_folded --gpus 0,1,2,3,4
 
-##### 步骤3：查看结果
-可视化结果将保存在指定的输出目录中，包括：
-- `sample_X/`：每个样本的可视化结果
-  - `attention_heatmap_layerY.png`：注意力热力图
-  - `peptide_attention_layerY.png`：肽段结构图
-  - `attention_heads_layerY.png`：注意力头比较图
-  - `attention_analysis_layerY.txt`：分析结果
-- `comprehensive_analysis.png`：综合分析图
+# 单折评估（--checkpoint，注意不是 --model_path）
+python graph_transform/scripts/evaluate_graph_model.py \
+    --config graph_transform/config/<cfg>.yaml \
+    --checkpoint <run>/fold_<id>/checkpoints/gt_pre/<ts>/best_model.pt \
+    --out_metric_csv result/metric/<name>.csv
 
-#### 12.3 参数说明
-- `--config`：配置文件路径
-- `--checkpoint`：模型检查点路径
-- `--input_csv`：输入CSV文件路径
-- `--output_dir`：输出目录（默认：results/attention_viz）
-- `--num_samples`：要可视化的样本数量（默认：5）
-- `--sample_indices`：指定样本索引，逗号分隔（如：0,5,10）
-- `--batch_size`：批处理大小（默认：1）
-- `--device`：计算设备（cpu/cuda/mps）
-- `--max_seq_len`：最大序列长度
-
-#### 12.4 注意事项
-1. **模型兼容性**：确保检查点与配置文件匹配
-2. **数据格式**：CSV文件需包含`seq`列（序列）和`labels`列（键断裂标签）
-3. **GPU内存**：可视化过程需要较多GPU内存，建议使用batch_size=1
-4. **字符显示**：所有图表使用英文标签，确保兼容性
-
-#### 12.5 示例输出
-```
-results/attention_viz/
-├── sample_0/
-│   ├── attention_heatmap_layer0.png
-│   ├── peptide_attention_layer0.png
-│   ├── attention_heads_layer0.png
-│   └── attention_analysis_layer0.txt
-├── sample_1/
-│   └── ...
-└── comprehensive_analysis.png
+# 数据侧：条件组折叠 → 软标签（q 真值）→ 同折多种子集成 → 统一 q 口径
+python graph_transform/scripts/fold_condition_groups.py
+python graph_transform/scripts/precompute_soft_labels.py
+python graph_transform/scripts/ensemble_inference.py
+python graph_transform/scripts/q_metrics_from_pred_csv.py
 ```
 
 ### 13. 引用
 
-如果您在研究中使用了本代码，请引用：
-
-```bibtex
-@software{graph_transformer_2024,
-  title={Graph Transformer for Protein Bond-level Classification},
-  author={Your Name},
-  year={2024},
-  url={https://github.com/yourusername/DBond}
-}
-```
+引用信息以仓库根 `README.md` 的「引用格式」为准。
 
 ### 14. 许可证
 
-本项目采用 MIT 许可证。详见 LICENSE 文件。
+本项目采用 MIT 许可证。详见仓库根 `LICENSE` 文件。
 
 ### 15. 联系方式
 
-如有问题或建议，请通过以下方式联系：
-- 提交 Issue：https://github.com/yourusername/DBond/issues
-- 邮箱：your.email@example.com
+问题反馈请在本仓库提交 Issue。
 
 ---
 
-**最后更新**：2026年5月12日
+**最后更新**：2026年10月14日（仓库整理：更正主题描述与配置数值、同步脚本清单、指向 archive/）

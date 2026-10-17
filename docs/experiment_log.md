@@ -800,7 +800,7 @@ film 臂五折 best_model_q.pt（val q_spearman_pep_cond 选点）补评完成
 | q_seq | 62.52±5.93 | 63.06±4.64 | +0.54（全部来自 fold1222 +3.65；2 折微降） |
 | Top10_seq | 1.2263 | 1.2308 | +0.005 |
 
-**判读**：方向与设计一致（排序口径 5/5 不劣、precision 端点右移、校准不变），
+**判读**：方向与设计一致（排序口径均值不劣：ρ_key/pep/cond 平均 +0.17/+0.22/+0.31，q_seq +0.54 且方差 5.93→4.64（2 折微降）、precision 端点右移、校准不变），
 但幅度全部在折间噪声内（q_seq +0.54 集中于单折，非稳健赢）。**决策：主表
 保持 F1 选点行不动；q 选点不进对比表**（避免选型标准混口径），双 checkpoint
 作为方法卖点写一句：一次训练产出两个部署端点，排序筛选场景可用 q 选点
@@ -861,3 +861,112 @@ GT 家族 61-63**，序列级排序/筛选能力是树模型明显短板（概�
 该口径主线不可替代。正式结论待 pod 5 折
 （rf 300 树全量 + xgb cuda）+ 对拍闭环后回填；对照锚点：film 79.80±0.64 /
 Ens 80.36 / dbond_s bondacc 78.30 / q_seq dbond_s 65.06 vs GT 62.52。
+
+## 15.16 Example-F1 口径分裂修复（2026-10-08，外审 P0-1 定案）
+
+**问题**：主表 Table 5 的 Example-F1 列混用两种定义——
+- 基线（`ludbond/multi_label_metrics.py example_f1`）：先对谱平均 P/R、再调和平均；
+- GT（`graph_transform/training/metrics.py _example_f1`）：逐样本 F1 平均（docstring 自述
+  「旧实现是先平均 precision/recall 再调和，数值上不等价」）。
+GT 71.12±0.50 与基线 74.x 同列不可比（外审核出 P/R 调和值 ~75.4 的矛盾，根因即此）。
+
+**修复**（统一为基线/DBond 系列调和口径，零推理）：GT 每折 Ex-F1 = 2·ex_p·ex_r/(ex_p+ex_r)，
+直接由 film 5fold（20260907_124432）逐折 `5fold_metrics.fold_*.csv` 的 ex_precision/ex_recall 计算：
+
+| fold | ex_p | ex_r | ex_f1(samples) | ex_f1(harmonic) |
+|---|---|---|---|---|
+| 1222 | .7359 | .7723 | .7100 | .7536 |
+| 2252 | .7401 | .7663 | .7104 | .7529 |
+| 3514 | .7473 | .7697 | .7193 | .7583 |
+| 6072 | .7409 | .7637 | .7057 | .7522 |
+| 9075 | .7558 | .7505 | .7108 | .7531 |
+
+**samples 口径 71.12±0.50（与旧表逐位吻合，源完整）；harmonic 口径 75.40±0.25（ddof=1）**。
+75.40 > AF-opt 74.23 → **Example-F1 最优模型翻转为 DBond-GT**。
+
+**五处同步（20261008 完成）**：① 主表 GT 行 71.12±0.50→**75.40±0.25**（bold 归 GT，
+underline 归 AF-opt 74.23，AF 撤 underline）；② §3.1 最优句加 Example-F1（AF-opt 处删该项）；
+③ 结论句改「Subset Accuracy 以 AF-opt 最高（5.51%），Example-F1 以 GT 最高（75.40%）」；
+④ 摘要最优清单加 Example-F1；⑤ paper_tables_20260909.md 冻结表已注记。
+**注意**：GT-Ens 行 71.69 与 9-seed 行仍为 samples 口径（论文未引用；若将来引用须同法重算）。
+
+## 15.17 双侧片段读出和残基化学编码（2026-10-17，代码已验证，训练待运行）
+
+目标是检验：在既有 theory + FiLM 主线上，显式提供断点两侧的上下文、以及特殊残基的结构描述，是否改善有效肽键预测。**本节没有新增性能结果；冻结论文数值保持原样。**
+
+### 实现与实验变量
+
+| 实验臂 | 配置（位于 `graph_transform/config/`） | 新增参数 | 总参数 |
+|---|---|---:|---:|
+| 原模型对照 | `pre_synthesis_theory_film_arch_control.yaml` | 0 | 1,706,153 |
+| 双侧片段 | `pre_synthesis_theory_film_arch_fragment.yaml` | 65,857 | 1,772,010 |
+| 化学编码 | `pre_synthesis_theory_film_arch_chemistry.yaml` | 9,024 | 1,715,177 |
+
+三臂均复制 `pre_synthesis_fold1222_theory_film.yaml` 的训练设置，仅改变声明的新分支开关、实验名称说明及输出/cache目录。数据划分、种子、图半径、理论特征、FiLM、BCE、学习率、早停和固定0.5阈值不变。正式比较用5组重复序列级80/20划分；训练条件组折叠、测试逐谱口径保持不变。两分支组合在代码中支持，但暂不列为首轮训练臂。
+
+- **双侧片段**：先将 GNN 的每个真实残基状态投影为64维；对键 `i` 分别计算 N侧 `0..i` 和 C侧 `i+1..L-1` 的均值。将有序的两侧均值、差、乘积、两侧长度和局部相邻残基状态送入小MLP，输出加在原logit上的修正量。池化显式排除global节点与padding，按FP32分别做正反向累积。这里池化的是**经过全图消息传递的上下文状态**，不是独立碎片模拟，也不是 b/y 离子监督。
+- **化学编码**：17维固定描述（C/H/N/O/S元素数 + 12个官能团/环特征）经 `17→32→256` 投影加到原节点编码上。保留原AA身份embedding和旧4维物化特征；因此这是检验化学信息的增量，而非替换/纠正原特征。覆盖20种标准残基与 B=D-Dap、O=D-Orn、X=3-(3-pyridyl)-D-Ala、Z=D-Cha。组成采用游离氨基酸减H2O；24项重算质量与项目既有理论质量表相符（容差1e-5 Da）。固定缩放不读取数据统计；不填猜测的pKa、气相碱性或确定碎裂规则。
+- 两分支末层均为零初始化；新层在旧模型初始化完成后创建，并独立保存/恢复CPU随机状态，保证共享骨干与单独/组合分支的初始化可比。默认关闭，旧配置与旧权重仍可用。新增checkpoint分支键检查，拒绝新旧分支配置不匹配时的静默部分加载。
+- 顺带修复全局节点打包的AMP dtype不一致：scatter前转为残基容器dtype。FP32为恒等操作。**旧FiLM末层的零初始化实际会被后续Xavier覆盖**；本轮保留这一历史行为，三个臂完全一致，未把FiLM初始化修正混入实验。
+
+### 已完成验证
+
+本机 Windows / Python 3.12.8 / PyTorch 2.12.0+cpu，`test_architecture_extensions.py` 的13项测试全部通过。使用真实 GraphBuilder 与 GraphDataLoader collate 的合成异长序列，覆盖开关组合、有无global、池化方向与掩码、化学表、非零分支的批次/观测输入扰动不变性、梯度、CPU BF16、权重往返和错误checkpoint配置拒绝。配置测试确认三臂仅有声明的差异。
+
+另外加载修改前的模型文件，对正式256维、3GCN+2GAT配置进行对拍：关闭新分支时，参数及FP32前向输出在eval和train模式均逐值一致。三份正式配置通过runtime预合成掩码处理和合成批次前向，实际state/env mask为 `[T,T,F]` / `[T,F]`。语法编译与修改文件的 `git diff --check` 通过。没有启动训练、生产评估或GPU作业；CUDA FP16和真实数据管线需在pod验证。
+
+### 手动运行
+
+先将本节列出的源码、配置与测试同步到pod项目 `/mnt/pvc/graphtrans/DBond`。可以使用本次交付的补丁：在项目根目录先 `git apply --check <补丁路径>`，成功后再 `git apply <补丁路径>`；不要对有冲突的远端改动强制覆盖。
+
+在pod项目根目录，先运行小批验证（第二项只读少量真实训练样本，并执行一次优化步骤，供用户手动运行）：
+
+```bash
+python graph_transform/scripts/test_architecture_extensions.py
+python graph_transform/scripts/smoke_test_pipeline.py \
+  --config graph_transform/config/pre_synthesis_theory_film_arch_fragment.yaml \
+  --csv dataset/5fold_folded/1222.train.fbr.shuffle.multi.csv \
+  --n_rows 16 --batch_size 8 --device cuda
+python graph_transform/scripts/smoke_test_pipeline.py \
+  --config graph_transform/config/pre_synthesis_theory_film_arch_chemistry.yaml \
+  --csv dataset/5fold_folded/1222.train.fbr.shuffle.multi.csv \
+  --n_rows 16 --batch_size 8 --device cuda
+```
+
+通过后依次运行三个臂（每臂五张卡，每卡一个划分）：
+
+```bash
+python graph_transform/scripts/train_5fold_parallel.py \
+  --config graph_transform/config/pre_synthesis_theory_film_arch_control.yaml \
+  --fold_data_dir dataset/5fold_folded --gpus 0,1,2,3,4
+python graph_transform/scripts/train_5fold_parallel.py \
+  --config graph_transform/config/pre_synthesis_theory_film_arch_fragment.yaml \
+  --fold_data_dir dataset/5fold_folded --gpus 0,1,2,3,4
+python graph_transform/scripts/train_5fold_parallel.py \
+  --config graph_transform/config/pre_synthesis_theory_film_arch_chemistry.yaml \
+  --fold_data_dir dataset/5fold_folded --gpus 0,1,2,3,4
+```
+
+若pod的环境未激活，将 `python` 替换为该项目已有的虚拟环境解释器。每臂开始前确认上一臂五个划分均显示OK；现有调度器可能在子任务失败后继续汇总，不能只依据进程退出码判断成功。结果目录为 `checkpoints/graph_transform/pre_synthesis_theory_film_arch_<arm>/5fold/<timestamp>/`，读取5个划分齐全的 `5fold_metrics.csv` 和 `5fold_summary.csv`。
+
+报告每个划分相对control的有效键micro-F1、bondacc、ROC-AUC差值，另列q_seq和q_brier，检查改善是否由单个划分驱动。Example-F1沿用§15.16：每划分先取谱平均P/R再调和，不能直接混用samples-F1列。不要将重复划分当统计独立样本，不根据单折涨跌宣称有效。架构/超参数决策应依据训练内部验证集，测试用于固定方案的最终报告；尚无证据决定是否组合两分支或替换论文主模型。
+
+### storage 知识依据与 project_work_report
+
+`project_goal`：把storage知识库中可迁移的碎片上下文和化学组成思路落实为两个独立、可复现的架构实验。`completion_status`：实现与本机验证完成，训练及性能结论待运行。`target_kb`：`kb:storage`，根目录 `G:/valhalla/valhalla_storage_share_root_20260830`。本轮仅使用当前库，未写回知识库。
+
+`knowledge_used / source_records`（页码为PDF物理页）：
+
+| 实体与资源身份 | 公共表现文件与定位 | 原文支持的事实及迁移边界 |
+|---|---|---|
+| `ent_000004 → res_000119 → file_000119` | `Library/public_resources/res_000119/authoritative.pdf`，AlphaPeptDeep，第2、10页 | 使用基于化学组成的PTM表示及条件元数据嵌入；本实验把“组成描述”迁移到非标准残基，是项目假设，原文没有验证本项目的D残基收益。 |
+| `ent_000036 → res_000151 → file_000151` | `Library/public_resources/res_000151/authoritative.pdf`，Prosit，第11页 | 序列编码、charge/NCE条件融合、按b/y及电荷组织输出并屏蔽不可能通道。本轮保留既有条件输入，只借鉴显式碎片结构；没有复制Prosit网络或新增离子强度监督。 |
+| `ent_000024 → res_000140 → file_000140` | `Library/public_resources/res_000140/authoritative.pdf`，Fragmentation Pathways of Protonated Peptides，第3–4页 | 可见碎片涉及断裂、质子保留与前后续反应，不能仅等同局部键断裂。因此提出两侧上下文读出；原文不支持“均值池化必然提高预测”的结论。 |
+
+机器映射来自 `Wiki/Wiki_storage/.registry/machine/entity_resource_map.yaml` 对应 `entity_id/resource_id` 条目，均为 `relation: derived_from`。旧表没有 `map_id/evidence_type/locator` 字段；**map_id缺失，未臆造**，使用原条目的 `evidence_location` 与上述实际PDF页核验补足定位。三资源已核验active成员、未排除/未黑名单，资源注册状态active，authoritative公共副本present；未读取source_copies。
+
+`created_files`：`graph_transform/models/fragment_readout.py`、`graph_transform/models/residue_chemistry.py`、`graph_transform/scripts/test_architecture_extensions.py`、上表三份YAML。
+
+`modified_files`：`graph_transform/models/graph_transformer.py`、`graph_transform/models/utils.py`、`docs/experiment_log.md`（仅追加本节，保留已有修改）。
+
+`unresolved_questions`：实际五组划分效果、跨种子稳定性、CUDA兼容性；离子通道监督需要另行确认原始谱图/离子匹配标注；化学描述不能覆盖所有结构异构或完整碎裂动力学；机器映射旧表缺map_id。`suggested_knowledge_writeback`：取得完整训练证据后，可另行用 `ingest_engineering` 沉淀实验实现与结论；本次未摄入。
