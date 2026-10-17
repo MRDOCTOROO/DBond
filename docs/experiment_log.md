@@ -1034,7 +1034,7 @@ q-Brier是整体概率误差，并非纯标定误差；ECE提供另一个标定�
 
 ## 15.19 图传播前的序列顺序编码：第二轮三臂（2026-10-18）
 
-状态：代码与本机测试完成，待本次提交后在pod验证CUDA并运行。用户明确授权本地提交推送、pod拉取、启动训练及完成后自动分析；这次授权覆盖旧AGENTS.md的手工启动训练约定。Valhalla操作为project_work，知识库只读。
+状态：代码、本机/CUDA验证、15次训练及结果审计已全部完成，完整结果和否定性结论见§15.20。用户明确授权本地提交推送、pod拉取、启动训练及完成后自动分析；这次授权覆盖旧AGENTS.md的手工启动训练约定。Valhalla操作为project_work，知识库只读。
 
 ### 假设与知识来源
 
@@ -1068,6 +1068,77 @@ q-Brier是整体概率误差，并非纯标定误差；ECE提供另一个标定�
 
 `created_files`：sequence_adapter.py、3份seq2 YAML、test_sequence_adapters.py、training/checkpoint_selection.py、test_checkpoint_selection.py、run_architecture_batch.py、summarize_architecture_batch.py、test_architecture_batch.py（均位于graph_transform对应子目录）。`modified_files`：models/graph_transformer.py、models/utils.py、scripts/train_graph_model.py、scripts/train_5fold_parallel.py、本台账。
 
-本机验证：新分支5项（零初始化、RNG、padding/NaN、梯度、CPU bf16、checkpoint匹配、真实配置参数量）、保存策略10项、批处理/汇总6项、既有架构13项，共34项通过。批处理任一臂训练或汇总失败即停止；固定输出目录并记录配置快照、SHA256、git版本、运行状态；完成后自动校验15个结果并输出均值、ddof=1标准差与配对差。CUDA和真实数据单步验证、正式训练及结果审计将在实际完成后追加。
+本机验证：新分支5项（零初始化、RNG、padding/NaN、梯度、CPU bf16、checkpoint匹配、真实配置参数量）、保存策略10项、批处理/汇总6项、既有架构13项，共34项通过。批处理任一臂训练或汇总失败即停止；固定输出目录并记录配置快照、SHA256、git版本、运行状态；完成后自动校验15个结果并输出均值、ddof=1标准差与配对差。CUDA和真实数据单步验证见下方启动记录，正式训练及结果审计见§15.20。
 
-`unresolved_questions`：CUDA兼容性、完整三臂实际收益、单种子之外的稳定性、低样本量下迁移结构的适用性。`suggested_knowledge_writeback`：完整结果经审计后可另行摄入工程结论；本任务未执行知识库摄入。
+`unresolved_questions`：CUDA兼容性已验证、完整三臂实际收益已在§15.20报告；单种子之外的稳定性和低样本量下其他迁移结构的适用性仍未解决。`suggested_knowledge_writeback`：完整结果经审计后可另行摄入工程结论；本任务未执行知识库摄入。
+
+### 实际启动记录
+
+北京时间2026-10-18 01:25（pod UTC目录时间20261017_172512）启动，运行根目录 `/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/seq2_batch/20261017_172512`，主PID 200817，启动日志 `logs/seq2_batch_20261017_172512.log`。代码提交 `770ff82b6fa5bf977c9c5e02b18834efcf5e3566`，本地push、pod fast-forward pull后工作区clean；本批次使用GPU0/4，其余GPU已有任务。
+
+CUDA验证：新分支5项测试通过，包括FP16 autocast前后向；两种分支分别通过真实折叠数据16行、batch=8的单步训练，软标签/组权重与pre输入屏蔽断言通过。GPU测试中修正了测试自身的eval模式反向问题（cuDNN GRU要求train模式），全精度跨batch比较关闭TF32；完整图输出允许CUDA原子归约的1e-6舍入误差，权重和RNG仍精确相等。模型实现未因这些测试修正而变化。
+
+启动只读审计：3份配置快照和manifest四脚本SHA256匹配；control 1222/2252的train.csv、val.csv与上一轮对应文件逐字节相同、seed相同、序列重叠为0。1222第16轮F1相较early-stop anchor仅+0.0008422仍保存主checkpoint，bad_validations=2，证实max_f1保存和早停分别生效。批次completed后的正式结果见§15.20；上述启动证据本身不作为性能结论。
+
+## 15.20 序列顺序编码第二轮完成与判定（2026-10-18）
+
+**结论：多尺度序列卷积和BiGRU均未获得整体提升，不进入候选复验，也不替换现有主模型。** 相对本轮同期control，两者有效键micro-F1均值分别−0.0448和−0.0312个百分点，均仅2/5划分提高；平均AUC下降、q-Brier上升。§15.19预先规定的四项筛选条件，两臂均未满足任何一项。此结论限定于本轮小型残差分支、现有数据和训练设置，不是对原论文完整架构或所有序列建模方法的否定。
+
+### 完成情况与证据审计
+
+批次北京时间2026-10-18 01:25:12启动、02:54:35完成，耗时约89分23秒。三臂×五组重复序列级划分共15次训练，三臂returncode均为0，状态文件为completed、error为空。GPU0/4、最大同时2个训练；代码提交 `770ff82b6fa5bf977c9c5e02b18834efcf5e3566`。训练前本地push并在pod完成fast-forward pull；完成状态由本地SSH监视器自动捕获后执行结果下载与分析，没有手动挑选测试epoch或阈值。
+
+运行根目录：`/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/seq2_batch/20261017_172512`。三臂位于 `arms/01_pre_synthesis_theory_film_seq2_control`、`arms/02_pre_synthesis_theory_film_seq2_multiscale`、`arms/03_pre_synthesis_theory_film_seq2_bigru`；各臂 `cv/5fold_metrics.csv` 是原始逐划分汇总。批处理自动生成 `summary/summary.json` 及CSV；本地快照位于 `F:/codexout/dbond_seq2_results_20261017_172512`，原始文件按bytes下载，三个metrics CSV的SHA256均与远端summary记录一致。
+
+完整只读审计379项通过、0项失败：核对训练git版本、脚本/配置SHA256、仅声明的配置差异、15个产物及曲线有限值、连续epoch、三臂逐划分seed与train/val文件SHA256一致、训练内部train/val序列不重叠、pre输入屏蔽、阈值0.5、主checkpoint与历史验证F1严格最高值及首次达到该值的epoch一致；独立重放checkpoint选择/早停状态，并检查metrics与预测CSV首行checkpoint元数据。审计通过不意味着扫描了全部权重或全部预测；本轮未重新推理。指标恒等式及六指标均值/样本标准差另从原始CSV复算。
+
+下表为“主checkpoint epoch / 训练最终epoch”；主checkpoint不是最后一轮，也不是测试集最优轮。
+
+| 实验臂 | 1222 | 2252 | 3514 | 6072 | 9075 |
+|---|---:|---:|---:|---:|---:|
+| control | 74 / 99 | 84 / 109 | 85 / 86 | 80 / 105 | 83 / 96 |
+| multiscale | 74 / 99 | 61 / 86 | 106 / 122 | 80 / 105 | 70 / 76 |
+| bigru | 74 / 99 | 61 / 86 | 61 / 86 | 63 / 71 | 71 / 96 |
+
+### 统一口径结果
+
+均值±样本标准差（ddof=1）。所有分类指标仅统计有效肽键；Ex-F1每个划分先由谱平均P/R计算调和均值，再跨划分平均，不能直接使用原CSV的samples-F1列。五组是重复序列级80/20随机划分且共享序列，不视为统计独立样本；每个划分只有一次初始化，不是五种子复验。本轮checkpoint协议改变，因此架构归因只使用同期seq2_control，历史主表保持冻结。
+
+| 指标 | seq2_control | seq2_multiscale | seq2_bigru |
+|---|---:|---:|---:|
+| 有效键准确率（%） | 79.984 ± 0.373 | 79.895 ± 0.417 | 79.788 ± 0.364 |
+| 有效键micro-F1（%） | 79.778 ± 0.640 | 79.733 ± 0.670 | 79.747 ± 0.570 |
+| ROC-AUC | 0.882175 ± 0.003550 | 0.881722 ± 0.004414 | 0.880226 ± 0.004037 |
+| Ex-F1调和口径（%） | 75.367 ± 0.270 | 75.285 ± 0.350 | 75.406 ± 0.305 |
+| 序列级Spearman | 0.62155 ± 0.06124 | 0.62391 ± 0.06162 | 0.61582 ± 0.04955 |
+| q-Brier（越低越好） | 0.067317 ± 0.002203 | 0.067807 ± 0.002787 | 0.068297 ± 0.002727 |
+
+| 划分 | multiscale ΔF1（百分点） | BiGRU ΔF1（百分点） | multiscale Δq_seq | BiGRU Δq_seq |
+|---|---:|---:|---:|---:|
+| 1222 | +0.1877 | +0.1162 | +0.01769 | +0.01334 |
+| 2252 | -0.1607 | -0.0405 | -0.00036 | -0.00700 |
+| 3514 | -0.0988 | -0.0645 | +0.01661 | -0.01610 |
+| 6072 | +0.0140 | -0.3859 | -0.00738 | -0.01936 |
+| 9075 | -0.1660 | +0.2187 | -0.01478 | +0.00048 |
+
+### 判读与下一步
+
+多尺度卷积：F1 −0.0448个百分点、accuracy −0.0893个百分点、AUC −0.000453、Ex-F1 −0.0821个百分点。q_seq均值+0.002355，但只有2/5划分提高；q-Brier平均增加0.000491，虽3/5划分小幅降低，2252的较大恶化使总体变差。没有证据支持采用或与上一轮分支叠加。
+
+BiGRU：F1 −0.0312个百分点、accuracy −0.1964个百分点、AUC −0.001948；AUC在4/5划分下降，q-Brier在4/5划分升高，均值+0.000980。q_seq平均−0.005728。Ex-F1虽4/5提高、均值+0.0387个百分点，但谱平均precision下降0.5512个百分点、recall上升0.6822个百分点；这项局部变化不足以抵消有效键分类、排序及概率误差的损失。q-Brier是概率误差，不等同于纯校准误差。
+
+四项门槛是“平均ΔF1≥+0.20个百分点、F1至少4/5正向、平均AUC不降、平均q-Brier不升”，属于工程筛选而非显著性检验。两臂四项均未通过，故不宣称稳定提升、不据此替换论文主表。新分支保留为默认关闭的可复现实验代码。保存最高验证F1与早停分离的功能保持显式配置，旧配置仍采用legacy行为。
+
+结合§15.18和本轮，四种小型结构扩展都没有给出足以采用的整体收益。它们主要重表征同一序列信息；“缺乏更细监督可能是瓶颈”是待验证的解释，不能据此断言已到性能上限或已经证明过拟合。下一项优先研究应是知识库Prosit/PredFull所使用的离子级信息如何引入本项目：按b/y、碎片电荷及必要中性丢失组织可观测性/强度监督，再与键级任务联合训练。其收益尚未验证。
+
+已只读检查数据可行性：当前MiPD513训练CSV没有可直接训练的离子通道或碎片强度数组，`intensity`来自MGF前体PEPMASS[1]（`PBCLA/mgf2csv.dbond_m.py`），不是碎片峰强度；`PBCLA/utils.py`已有b/y×1+/2+×无/H2O/NH3的理论离子生成，但`PBCLA/pbcla.py`最终把匹配结果OR到键级标签，现有true_multi无法反推出每个离子通道。在已检查的项目及pod目录中未定位到完整MiPD513原始MGF及稳定行映射；这不是对所有存储位置的穷尽检查。
+
+本机存在带峰注释的外部MSP：`G:/msp-demo/FTMS_HCD_20_annotated_2019-11-12.msp`，可进一步评估离子级预训练。现有 `graph_transform/scripts/nist_msp_to_dbond_csv.py`未保留通道注释；若使用该资源，须先冻结预训练/验证/外部测试的序列隔离，不能训练后继续把同一NIST数据当独立外测，也不能假定标准L肽的强度规律直接适用于D肽和BOXZ。此次未启动新的数据转换或预训练。
+
+### 交付记录
+
+`project_goal`：结合storage知识实现并在pod完成两个新架构的配对实验，自动取得完成结果并判断提升。`completion_status`：代码、本机及CUDA验证、push/pull、15次训练、结果下载与审计、描述性比较全部完成；性能结论为两种新架构均未获得整体收益。`target_kb`：kb:storage，只读；`knowledge_used/source_records`见§15.19的PredFull/Prosit身份链与实际PDF定位。
+
+本地证据入口：`summary/summary.json`、`audit.json`（379项）、`decision.json`（预定规则逐项判定）、`summary/figures/seq2_paired_differences.png`及同名矢量PDF。图仅显示五组配对差及均值，不绘制独立样本置信区间；已查看最终PNG确认标签完整。论文表文件仅追加本轮实验附注，不替换历史冻结主表。
+
+`unresolved_questions`：跨初始化种子稳定性未复验；未验证更大/不同位置的序列编码器；离子级监督需要原始谱图、通道匹配和数据隔离；当前结论不构成性能上限估计。`suggested_knowledge_writeback`：可将这两轮完整负结果与checkpoint选择修正作为后续工程摄入候选；本次没有写回Valhalla知识库。
