@@ -28,6 +28,12 @@ def batch_to_device(batch):
     return {key: value.to(DEVICE) if torch.is_tensor(value) else value for key, value in batch.items()}
 
 
+def prediction_tolerance():
+    # Graph scatter reductions use CUDA atomics; identical FP32 inputs can
+    # differ by a few ulps. Parameter/RNG equality remains exact on every device.
+    return {'rtol': 1e-6, 'atol': 1e-6} if DEVICE.startswith('cuda') else {'rtol': 0, 'atol': 0}
+
+
 class SequenceAdapterTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -57,7 +63,7 @@ class SequenceAdapterTests(unittest.TestCase):
             for key, value in baseline.state_dict().items():
                 torch.testing.assert_close(model.state_dict()[key], value, rtol=0, atol=0)
             with torch.no_grad():
-                torch.testing.assert_close(model(batch), expected, rtol=0, atol=0)
+                torch.testing.assert_close(model(batch), expected, **prediction_tolerance())
 
     def test_padding_length_one_batch_order_and_active_gradients(self):
         for kind in ['multiscale', 'bigru']:
@@ -111,9 +117,11 @@ class SequenceAdapterTests(unittest.TestCase):
                 stream.seek(0)
                 restored = make_model(config, seed=17).to(DEVICE)
                 restored.load_state_dict(torch.load(stream, weights_only=True, map_location=DEVICE), strict=True)
+                for key, value in model.state_dict().items():
+                    torch.testing.assert_close(restored.state_dict()[key], value, rtol=0, atol=0)
                 model.eval()
                 with torch.no_grad():
-                    torch.testing.assert_close(model(batch), restored(batch), rtol=0, atol=0)
+                    torch.testing.assert_close(model(batch), restored(batch), **prediction_tolerance())
 
     def test_checkpoint_kind_mismatch_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
