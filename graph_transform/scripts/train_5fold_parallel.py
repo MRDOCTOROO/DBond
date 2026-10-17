@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import csv
 import os
 import re
 import subprocess
@@ -92,6 +93,17 @@ def aggregate(config_path: str, cv_root: str, work_root: str) -> None:
         proc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
     status = "OK" if proc.returncode == 0 else f"FAIL({proc.returncode})"
     print(f"[parallel] aggregate {status} log={log_path}", flush=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"aggregation failed rc={proc.returncode}, see {log_path}")
+
+
+def check_completed_folds(cv_root: str, folds: list[str]) -> None:
+    """Do not report success when aggregate_only silently skipped a fold."""
+    path = os.path.join(cv_root, "5fold_metrics.csv")
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        completed = [row.get("fold_id", "").strip() for row in csv.DictReader(f)]
+    if len(completed) != len(folds) or set(completed) != set(folds):
+        raise RuntimeError(f"Incomplete aggregate: expected {folds}, got {completed}: {path}")
 
 
 def main() -> None:
@@ -100,6 +112,8 @@ def main() -> None:
     ap.add_argument("--gpus", default="0,1,2,3", help="逗号分隔 GPU 列表")
     ap.add_argument("--folds", default=",".join(FOLDS), help="逗号分隔 fold 列表（默认 5 折）")
     ap.add_argument("--fold_data_dir", default="", help="折数据目录变体（如 dataset/5fold_soft，软标签版）")
+    ap.add_argument("--cv_root", default="", help="显式指定本次训练产物目录")
+    ap.add_argument("--work_root", default="", help="显式指定本次折级日志目录")
     args = ap.parse_args()
 
     gpus = [int(x) for x in args.gpus.split(",") if x.strip()]
@@ -107,6 +121,8 @@ def main() -> None:
     if not gpus or not folds:
         print("ERROR: gpus/folds empty")
         sys.exit(1)
+    if len(set(gpus)) != len(gpus) or len(set(folds)) != len(folds):
+        raise ValueError("gpus/folds must not contain duplicates")
 
     import yaml as _yaml
     with open(args.config, encoding="utf-8") as f:
@@ -115,9 +131,9 @@ def main() -> None:
         "checkpoint_dir", "checkpoints/graph_transform/pre_synthesis")
 
     # 单一共享 cv_root（与传统 train_5fold 相同的目录结构），由 runner 创建一次
-    cv_root = os.path.join(base_ckpt, "5fold", time.strftime("%Y%m%d_%H%M%S"))
+    cv_root = args.cv_root or os.path.join(base_ckpt, "5fold", time.strftime("%Y%m%d_%H%M%S"))
     os.makedirs(cv_root, exist_ok=True)
-    work_root = os.path.join("logs", f"5fold_par_{time.strftime('%Y%m%d_%H%M%S')}")
+    work_root = args.work_root or os.path.join("logs", f"5fold_par_{time.strftime('%Y%m%d_%H%M%S')}")
     os.makedirs(work_root, exist_ok=True)
 
     print(f"[parallel] {len(folds)} folds x {len(gpus)} GPUs -> {len(folds) // len(gpus) + (1 if len(folds) % len(gpus) else 0)} 轮", flush=True)
@@ -139,8 +155,11 @@ def main() -> None:
                 except Exception as e:
                     results[fold] = f"FAIL {e}"
         print(f"[parallel] 轮完成: {results}", flush=True)
+        if any(result != "OK" for result in results.values()):
+            raise RuntimeError(f"Training failed; aggregation was not run: {results}")
 
     aggregate(args.config, cv_root, work_root)
+    check_completed_folds(cv_root, folds)
     print(f"[parallel] 全部完成: {results}", flush=True)
     print(f"[parallel] 汇总目录: {cv_root} (5fold_metrics.csv / 5fold_summary.csv / 5fold_aggregate.csv)", flush=True)
 

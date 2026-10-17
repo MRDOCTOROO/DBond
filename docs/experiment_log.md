@@ -970,3 +970,104 @@ python graph_transform/scripts/train_5fold_parallel.py \
 `modified_files`：`graph_transform/models/graph_transformer.py`、`graph_transform/models/utils.py`、`docs/experiment_log.md`（仅追加本节，保留已有修改）。
 
 `unresolved_questions`：实际五组划分效果、跨种子稳定性、CUDA兼容性；离子通道监督需要另行确认原始谱图/离子匹配标注；化学描述不能覆盖所有结构异构或完整碎裂动力学；机器映射旧表缺map_id。`suggested_knowledge_writeback`：取得完整训练证据后，可另行用 `ingest_engineering` 沉淀实验实现与结论；本次未摄入。
+
+## 15.18 架构三臂首轮结果审计（2026-10-18）
+
+**结论：首轮结果不足以采用双侧片段或残基化学编码，也不足以支持直接叠加两者。** F1相对本轮control仅增加0.0512和0.0434个百分点；平均AUC均未提高，概率误差均增加。这是本次实现与训练设置下的结果，不等于否定所有片段建模或化学表示方法。§15.17的训练待运行状态现已更新为“三臂训练完成，结果已审计”；论文主表保留历史模型数值。
+
+### 数据来源与完整性
+
+pod项目根目录 `/mnt/pvc/graphtrans/DBond`，三臂目录均位于 `checkpoints/graph_transform/`：
+
+- control：`pre_synthesis_theory_film_arch_control/5fold/20261017_132121`
+- fragment：`pre_synthesis_theory_film_arch_fragment/5fold/20261017_135040`
+- chemistry：`pre_synthesis_theory_film_arch_chemistry/5fold/20261017_142454`
+- 历史参照：`pre_synthesis_theory_folded_film/5fold/20260907_124432`
+
+本次只读访问pod，未启动训练或模型推理。读取汇总、逐划分CSV、配置、日志、训练曲线和预测CSV首行元数据。15个训练均有唯一主checkpoint、正常完成记录，关键曲线无NaN/Inf；各臂5个划分齐全。逐划分seed一致，保存的train.csv/val.csv字节级SHA256一致；相同划分的历史训练/验证文件也一致。三臂配置差异仅为声明的新开关、名称和产物目录；当前pod模型及指标相关7个源码文件与本机版本匹配。预测元数据指向对应 `best_model.pt`，阈值0.5。这里未重新扫描全量预测或重做推理。
+
+逐指标复算均值、std和num_folds，与原summary相符；验证accuracy=lab_acc_mi=1−hamming_loss及f1=lab_f1_mi。原summary采用ddof=0，以下为与论文一致的**样本标准差ddof=1**。Ex-F1每个划分先计算 `2*ex_precision*ex_recall/(ex_precision+ex_recall)`，再跨划分平均；原 `ex_f1` 列是另一口径，不能直接代入。
+
+### 五组重复序列级划分的描述性结果
+
+准确率、F1、Ex-F1以百分数列示；其余为原尺度。均值±样本标准差，不是置信区间，五个划分也不是统计独立样本。
+
+| 指标 | control | fragment | chemistry |
+|---|---:|---:|---:|
+| 有效键准确率 | 79.842 ± 0.329 | 79.758 ± 0.462 | 79.834 ± 0.313 |
+| 有效键micro-F1 | 79.694 ± 0.566 | 79.745 ± 0.662 | 79.738 ± 0.526 |
+| ROC-AUC | 0.880686 ± 0.002944 | 0.880606 ± 0.005342 | 0.880682 ± 0.003050 |
+| Ex-F1调和口径 | 75.288 ± 0.373 | 75.081 ± 0.415 | 75.350 ± 0.301 |
+| 序列级Spearman | 0.61582 ± 0.05051 | 0.62449 ± 0.07720 | 0.61258 ± 0.05283 |
+| q-Brier（越低越好） | 0.067829 ± 0.002062 | 0.069297 ± 0.002606 | 0.068187 ± 0.002485 |
+| ECE（越低越好） | 0.04373 ± 0.00565 | 0.05409 ± 0.00881 | 0.04618 ± 0.00743 |
+
+| 划分 | fragment ΔF1（百分点） | chemistry ΔF1（百分点） | fragment Δq_seq | chemistry Δq_seq |
+|---|---:|---:|---:|---:|
+| 1222 | -0.3979 | +0.0274 | -0.03172 | -0.00950 |
+| 2252 | +0.3235 | +0.0348 | +0.02692 | -0.00377 |
+| 3514 | +0.3140 | -0.0590 | +0.04686 | -0.00183 |
+| 6072 | -0.2006 | +0.1530 | -0.00418 | -0.00444 |
+| 9075 | +0.2171 | +0.0608 | +0.00546 | +0.00332 |
+
+### 两个分支的判断
+
+**fragment**：F1在3/5划分提高，但accuracy仅1/5提高，Ex-F1平均下降0.2064个百分点。precision下降0.4331个百分点、recall上升0.6062个百分点，预测阳性率上升0.6731个百分点；这与固定阈值下更偏向阳性的权衡相符，不能由F1小涨推断整体判别变强。q_seq平均+0.008668，主要来自2252、3514；移除3514后，其余四组平均Δq_seq为−0.000881（仅作敏感性描述，不替代正式五组汇总）。q-Brier增加0.001468，4/5划分恶化；ECE由0.04373升至0.05409。概率质量没有净收益。
+
+**chemistry**：F1虽4/5提高，但均值仅+0.0434个百分点，AUC差为−0.00000382。precision下降0.1350个百分点、recall上升0.2563个百分点。q_seq在4/5划分下降，均值−0.003247；q-Brier在4/5划分恶化，ECE在5/5划分恶化。Ex-F1小涨0.0619个百分点，不足以抵消排序和概率误差的代价。
+
+q-Brier是整体概率误差，并非纯标定误差；ECE提供另一个标定诊断。两个分支均增加召回，现有汇总没有证明其错误互补，因此暂不建议直接运行组合臂。后续可以用现有预测按断点位置、片段长度、BOXZ邻键与charge/NCE分层，检验是否存在被全局均值掩盖的局部收益，再决定是否重设计。
+
+从实现看，片段分支池化的是已经经全图消息传递的状态；化学描述也是残基身份的确定性函数。二者可能主要增加已有信息的另一种表达，而没有提供新的监督或观测，这是与结果相容的解释，**尚非已验证的失败原因**。本轮不能据此诊断“过拟合”，也不能由train/val loss直接比较得出过拟合，因为训练使用软q、验证loss使用硬标签。
+
+### 本轮control与历史冻结值
+
+本轮control F1=79.6941%，历史film=79.7979%，相差−0.1038个百分点；accuracy相差−0.1783个百分点，AUC相差−0.001856。数据和名义超参数相同并不意味着重新训练逐值复现；本轮架构归因应对照同期control，不能用较高的历史值替代control，也不能把control漂移归因于新增分支。历史与本轮在2252、3514的主checkpoint epoch分别为84/97与61/61；漂移原因未被本次只读审计完全定位。
+
+另发现现有保存规则将主checkpoint更新与 `min_delta=0.001` 绑定：只有验证F1比已保存值高超过0.1个百分点才替换。若提升小于该值，就算是新的最高F1也不保存。例如control-2252第84轮验证F1比保存的第61轮高0.0583个百分点，但仍使用第61轮；fragment-1222第62轮比保存的第39轮高0.0749个百分点。所有臂遵守同一规则，本轮比较仍按既定协议；但这个选择粒度大于本轮架构平均收益。
+
+若下一轮研究微小收益，应将“保存验证集最高F1”与“早停的min_delta/patience”分开，并对所有比较臂统一重跑；这属于新的训练协议实验，不能在测试结果上事后挑epoch或阈值，也不能保证能提升性能。当前没有修改保存逻辑或启动该实验。
+
+### 本地产物与后续
+
+原始快照、逐划分CSV、训练曲线、配对差值、统一口径均值/标准差和审计结果位于 `F:/codexout/dbond_arch_results_20261018/`。主要入口：`comparison_summary.csv`、`audit_conclusions.json`、`raw_snapshot.json`、`run_audit.json`、`training_details.json`；每臂子目录保存原始汇总与 `verified_metrics.csv` / `delta_vs_control.csv`。这些文件是本次结果快照，不是Valhalla知识库资源；未自动摄入知识库。论文表仅追加实验附注，历史主表不替换。
+
+## 15.19 图传播前的序列顺序编码：第二轮三臂（2026-10-18）
+
+状态：代码与本机测试完成，待本次提交后在pod验证CUDA并运行。用户明确授权本地提交推送、pod拉取、启动训练及完成后自动分析；这次授权覆盖旧AGENTS.md的手工启动训练约定。Valhalla操作为project_work，知识库只读。
+
+### 假设与知识来源
+
+上一轮图传播后的均值汇聚没有稳定收益。本轮检验在图传播前显式编码有方向的残基次序：局部多尺度模式与两端递归上下文。两者都只重表征已有序列，不增加观测特征或标签，不能预先声称提供新信息或模拟了真实碎裂机制。
+
+| 实验臂 | 输入端残差分支 | 新增参数 |
+|---|---|---:|
+| seq2_control | 无 | 0 |
+| seq2_multiscale | AA embedding 64维 → 并行Conv1d核宽3/5/7、各32通道、SiLU → 96维拼接 → Linear(96,256) | 55,648 |
+| seq2_bigru | AA embedding 64维 → 单层双向GRU、每方向48维 → Linear(96,256) | 57,664 |
+
+分支加到NodeEncoder输出、在既有FiLM和GCN/GAT之前；末端投影零初始化，保持初始输出及旧权重完全一致，构建分支不消耗主随机数序列。卷积输入/输出显式屏蔽padding，GRU按真实长度打包，不直接编码global node。上一轮fragment/chemistry均关闭。
+
+知识库根目录 `G:/valhalla/valhalla_storage_share_root_20260830`，实际读取公开authoritative.pdf：
+
+- PredFull：`ent_000048 → res_000204 → file_000204`，`Library/public_resources/res_000204/authoritative.pdf`物理第5页及第13页Fig.1，8路序列卷积核宽2–9。原文完整谱图模型约1900万参数；本轮3/5/7和小通道是工程假设，原文未证明其对本项目D肽断键预测有效。
+- Prosit：`ent_000036 → res_000151 → file_000151`，`Library/public_resources/res_000151/authoritative.pdf`物理第11页，BiGRU/GRU/attention编码及条件融合。本轮只迁移有方向的顺序编码，不复现其完整网络或离子强度监督。
+- PepNet边界核对：`ent_000052 → res_000208 → file_000208`，物理第8–9页，TCN处理的是谱图m/z轴，不作为本轮已知序列卷积的直接证据。
+
+身份链由 `Wiki/Wiki_storage/.registry/machine/entity_resource_map.yaml` 的derived_from条目核验；旧表缺map_id，未补造。三资源均active、本地成员、未excluded/blacklisted且公共副本present。未读取source_copies、未写入知识库。
+
+### 共同训练协议与判读规则
+
+三臂统一使用 `training.checkpoint_selection: max_f1`：每次严格刷新验证F1最高值即保存；早停另用min_delta=0.001/patience=25的锚点。旧配置默认legacy，保留旧保存行为。本轮采用新同期control，不能把相对历史模型的差异单独归因于架构。保存选择状态供恢复核对；原框架没有保存scheduler/AMP scaler/RNG，恢复不宣称等同连续训练。
+
+其他设置固定：5组重复序列级80/20划分、训练内部验证划分及seed规则不变，条件组折叠、q软标签、group_uniform、pre输入屏蔽、theory+FiLM、3GCN+2GAT、固定阈值0.5、300轮上限、原学习率/调度/损失/图结构。配置为 `graph_transform/config/pre_synthesis_theory_film_seq2_{control,multiscale,bigru}.yaml`。
+
+主要判读为有效键micro-F1的五组均值及配对差，附accuracy、AUC、Ex-F1调和口径、q_seq和q-Brier。将“值得进一步复验的分类候选”事先定义为相对同期control平均F1至少+0.20个百分点、至少4/5划分F1提高，同时平均AUC不降、q-Brier不升；这是工程筛选门槛而非显著性检验。未达门槛时如实报告局部变化，不称稳定提升，不用测试集挑阈值/epoch。排序用途另外报告q_seq及概率误差权衡，不以单划分涨幅决定采用。五组共享序列，不进行独立样本t检验。
+
+### 实现与验证
+
+`created_files`：sequence_adapter.py、3份seq2 YAML、test_sequence_adapters.py、training/checkpoint_selection.py、test_checkpoint_selection.py、run_architecture_batch.py、summarize_architecture_batch.py、test_architecture_batch.py（均位于graph_transform对应子目录）。`modified_files`：models/graph_transformer.py、models/utils.py、scripts/train_graph_model.py、scripts/train_5fold_parallel.py、本台账。
+
+本机验证：新分支5项（零初始化、RNG、padding/NaN、梯度、CPU bf16、checkpoint匹配、真实配置参数量）、保存策略10项、批处理/汇总6项、既有架构13项，共34项通过。批处理任一臂训练或汇总失败即停止；固定输出目录并记录配置快照、SHA256、git版本、运行状态；完成后自动校验15个结果并输出均值、ddof=1标准差与配对差。CUDA和真实数据单步验证、正式训练及结果审计将在实际完成后追加。
+
+`unresolved_questions`：CUDA兼容性、完整三臂实际收益、单种子之外的稳定性、低样本量下迁移结构的适用性。`suggested_knowledge_writeback`：完整结果经审计后可另行摄入工程结论；本任务未执行知识库摄入。

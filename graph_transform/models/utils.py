@@ -59,6 +59,9 @@ class ModelConfig:
         self.fragment_readout_dim = 64
         self.use_residue_chemistry = False
         self.residue_chemistry_dim = 32
+        self.sequence_adapter_type = 'none'
+        self.sequence_adapter_dim = 96
+        self.sequence_conv_kernels = [3, 5, 7]
         # Deep supervision 辅助头：指定 GAT 层索引（0-based）的输出各接一个轻量
         # bond 预测头，仅训练期参与损失（eval/inference 不计算，不影响推理路径）。
         self.use_deep_supervision = False
@@ -429,7 +432,7 @@ class CheckpointManager:
         # checkpoints without serialized config metadata.
         saved_keys = set(checkpoint['model_state_dict'])
         requested_keys = set(model.state_dict())
-        for prefix in ('residue_chemistry.', 'fragment_readout.'):
+        for prefix in ('residue_chemistry.', 'fragment_readout.', 'sequence_adapter.'):
             saved_branch = {key for key in saved_keys if key.startswith(prefix)}
             requested_branch = {key for key in requested_keys if key.startswith(prefix)}
             if saved_branch != requested_branch:

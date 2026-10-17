@@ -138,7 +138,8 @@ class NodeEncoder(nn.Module):
         nn.init.xavier_uniform_(self.aa_embedding.weight)
         nn.init.xavier_uniform_(self.position_embedding.weight)
     
-    def forward(self, batch_data: Dict, residue_chemistry: Optional[nn.Module] = None) -> torch.Tensor:
+    def forward(self, batch_data: Dict, residue_chemistry: Optional[nn.Module] = None,
+                sequence_adapter: Optional[nn.Module] = None) -> torch.Tensor:
         """
         前向传播
         
@@ -202,6 +203,9 @@ class NodeEncoder(nn.Module):
         node_features = self.node_encoder(combined_features)
         if residue_chemistry is not None:
             node_features = node_features + residue_chemistry(seq_tokens)
+        if sequence_adapter is not None:
+            node_features = node_features + sequence_adapter(
+                aa_features, [len(sequence) for sequence in batch_data['sequences']])
         
         return node_features
     
@@ -575,6 +579,16 @@ class GraphTransformer(nn.Module):
                 from .fragment_readout import DualFragmentReadout
                 self.fragment_readout = DualFragmentReadout(
                     self.hidden_dim, getattr(config, 'fragment_readout_dim', 64), config.max_seq_len)
+        self.sequence_adapter_type = getattr(config, 'sequence_adapter_type', 'none')
+        if self.sequence_adapter_type not in ('none', 'multiscale', 'bigru'):
+            raise ValueError(f'Unknown sequence_adapter_type: {self.sequence_adapter_type}')
+        if self.sequence_adapter_type != 'none':
+            with torch.random.fork_rng(devices=[]):
+                from .sequence_adapter import SequenceAdapter
+                self.sequence_adapter = SequenceAdapter(
+                    config.aa_embedding_dim, self.hidden_dim, self.sequence_adapter_type,
+                    getattr(config, 'sequence_adapter_dim', 96),
+                    getattr(config, 'sequence_conv_kernels', [3, 5, 7]))
     
     def _init_weights(self):
         """初始化模型权重"""
@@ -604,7 +618,8 @@ class GraphTransformer(nn.Module):
 
         # 节点特征编码
         node_features = self.node_encoder(
-            batch_data, self.residue_chemistry if self.use_residue_chemistry else None)
+            batch_data, self.residue_chemistry if self.use_residue_chemistry else None,
+            self.sequence_adapter if self.sequence_adapter_type != 'none' else None)
         if timing_enabled:
             _maybe_sync(node_features.device, True)
             node_encode_end = time.perf_counter()

@@ -41,6 +41,7 @@ except ImportError:
     PreprocessedGraphDataset = None
     OptimizedGraphDataLoader = None
 from training import Trainer, BinaryBondLoss
+from training.checkpoint_selection import CheckpointSelection
 from evaluation import Evaluator
 from evaluation.metrics import metric_rows, metric_display_name
 
@@ -918,6 +919,77 @@ def create_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any]) -> opti
     return scheduler
 
 
+def save_checkpoint_with_selection(model, optimizer, epoch, loss, metrics,
+                                   filepath, selection, is_best=False):
+    """Keep the existing checkpoint schema and persist F1-selection progress.
+
+    Q-checkpoint selection/saving continues through CheckpointManager unchanged.
+    This extra state is for main and periodic checkpoints only.
+    """
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': loss,
+        'metrics': metrics,
+        'config': model.config.to_dict() if hasattr(model, 'config') else None,
+        CheckpointSelection.STATE_KEY: selection.state_dict(),
+    }
+    torch.save(checkpoint, filepath)
+    if is_best:
+        torch.save(checkpoint, filepath.replace('.pt', '_best.pt'))
+
+
+def restore_checkpoint_selection(selection, checkpoint, resume_path, has_validation,
+                                 logger):
+    """Restore selection state without mistaking training F1 for validation F1."""
+    start_epoch = int(checkpoint['epoch']) + 1
+    state = checkpoint.get(CheckpointSelection.STATE_KEY)
+    best_path = os.path.join(os.path.dirname(resume_path), 'best_model.pt')
+    if state is not None:
+        selection.load_state_dict(state)
+        if selection.last_validation_epoch > start_epoch:
+            raise ValueError("Resume checkpoint selection state is newer than its model epoch")
+        if has_validation and selection.best_epoch:
+            # A periodic checkpoint's state refers to the selected weights in
+            # best_model.pt. Do not silently mix it with a missing/newer run.
+            best_checkpoint = (checkpoint if os.path.abspath(resume_path) == os.path.abspath(best_path)
+                               else torch.load(best_path, map_location='cpu', weights_only=False))
+            saved_best_f1 = (best_checkpoint.get('metrics') or {}).get('f1')
+            if (int(best_checkpoint['epoch']) + 1 != selection.best_epoch
+                    or saved_best_f1 != selection.best_f1):
+                raise ValueError("Resume requires the matching best_model.pt for its saved selection state")
+        logger.info(
+            "Restored checkpoint selection: mode=%s best_f1=%.6f best_epoch=%d "
+            "early_stop_anchor=%.6f bad_validations=%d",
+            selection.mode, selection.best_f1, selection.best_epoch,
+            selection.early_stop_anchor, selection.bad_validations,
+        )
+        return
+    if not has_validation:
+        logger.warning("Old checkpoint has no F1-selection state; no validation selection to restore")
+        return
+
+    # Periodic checkpoints store train_metrics, so use the known main validation
+    # checkpoint instead. Old best_model.pt remains directly resumable.
+    best_checkpoint = (checkpoint if os.path.abspath(resume_path) == os.path.abspath(best_path)
+                       else torch.load(best_path, map_location='cpu', weights_only=False))
+    if int(best_checkpoint['epoch']) + 1 > start_epoch:
+        raise ValueError("Cannot seed selection from best_model.pt newer than the resumed model")
+    best_state = best_checkpoint.get(CheckpointSelection.STATE_KEY)
+    if best_state is not None:
+        selection.load_state_dict(best_state)
+        selection.bad_validations = 0
+    else:
+        selection.initialize_from_legacy_validation(best_checkpoint)
+    logger.warning(
+        "Resume checkpoint has no selection state: seeded from validation best_model.pt "
+        "at epoch %d; early-stopping count resets. Historical unsaved F1 maxima "
+        "cannot be recovered; max_f1 applies to this saved baseline and subsequent validations.",
+        selection.best_epoch,
+    )
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='训练图神经网络键级别二分类模型')
@@ -943,6 +1015,11 @@ def main():
 
     # 加载配置
     config = load_config(args.config, args)
+    training_config = config['training']
+    selection = CheckpointSelection(
+        training_config.get('checkpoint_selection', 'legacy'),
+        training_config.get('min_delta', 0.0),
+    )
     
     # 设置随机种子（--seed 0 是合法值，不能被 falsy 回退吞掉）
     seed = args.seed if args.seed is not None else config['experiment'].get('seed', 42)
@@ -1013,7 +1090,6 @@ def main():
     
     # 恢复训练（如果指定）
     start_epoch = 0
-    best_metric = 0.0
     if args.resume:
         checkpoint = CheckpointManager.load_checkpoint(
             filepath=args.resume,
@@ -1021,19 +1097,25 @@ def main():
             optimizer=optimizer
         )
         start_epoch = checkpoint['epoch'] + 1
-        best_metric = checkpoint['metrics'].get('f1', 0.0)
+        restore_checkpoint_selection(
+            selection, checkpoint, args.resume, val_loader is not None, logger,
+        )
         logger.info(f"Resumed training from epoch {start_epoch}")
+        logger.warning(
+            "Resume restores model/optimizer and available selection state; the existing "
+            "checkpoint format does not restore scheduler, AMP scaler or RNG state. "
+            "This is not an exact uninterrupted-training continuation."
+        )
     
     # 训练循环
     logger.info("Starting training loop...")
-    training_config = config['training']
     early_stopping_enabled = training_config.get('early_stopping', False)
     patience = training_config.get('patience', 10)
-    min_delta = training_config.get('min_delta', 0.0)
-    best_metric = best_metric if args.resume else float('-inf')
     best_q_metric = float('-inf')  # q 口径第二 checkpoint（best_model_q.pt）的选择分
-    best_epoch = start_epoch
-    no_improve_epochs = 0
+    logger.info(
+        "F1 checkpoint selection=%s; early stopping uses min_delta=%g, patience=%s validation checks",
+        selection.mode, selection.min_delta, patience,
+    )
     if args.resume:
         training_config['checkpoint_dir'] = os.path.dirname(args.resume)
     else:
@@ -1113,33 +1195,35 @@ def main():
             current_val_auc = val_metrics.get('auc_micro', val_metrics.get('auc'))
             log_metrics_to_tensorboard(tb_writers, 'val', val_metrics, epoch + 1)
             
-            # 保存最佳模型
+            # max_f1 saves every strict maximum; patience uses its own min_delta
+            # anchor. legacy keeps the historical min_delta-gated save behavior.
             current_f1 = val_metrics['f1']
-            if current_f1 > best_metric + min_delta:
-                best_metric = current_f1
-                best_epoch = epoch + 1
-                no_improve_epochs = 0
+            selection_decision = selection.update(current_f1, epoch + 1)
+            if selection_decision.save_best:
                 checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints/graph_transform')
                 os.makedirs(checkpoint_dir, exist_ok=True)
                 
                 checkpoint_path = os.path.join(checkpoint_dir, 'best_model.pt')
-                CheckpointManager.save_checkpoint(
+                save_checkpoint_with_selection(
                     model=model,
                     optimizer=optimizer,
                     epoch=epoch,
                     loss=val_metrics['loss'],
                     metrics=val_metrics,
                     filepath=checkpoint_path,
+                    selection=selection,
                     is_best=True
                 )
-                logger.info(f"Saved best model with F1: {best_metric:.4f}")
-            else:
-                no_improve_epochs += 1
-                logger.info(f"No improvement for {no_improve_epochs} epoch(s)")
+                logger.info(f"Saved best model with F1: {selection.best_f1:.6f}")
+            if not selection_decision.early_stopping_improved:
+                logger.info(
+                    "No min_delta improvement for %d validation check(s) (anchor=%.6f)",
+                    selection.bad_validations, selection.early_stop_anchor,
+                )
 
             # q 口径第二 checkpoint：val 的条件级 q 排序指标另存 best_model_q.pt。
-            # 早停/最终测试仍用 realized F1 选的 best_model.pt（口径与历史 run 严格
-            # 可比）；q 选中的模型由 evaluate_graph_model.py --checkpoint 单独评测，
+            # 最终测试仍用主 F1 策略选出的 best_model.pt；q 选择规则不随
+            # checkpoint_selection 改变，由 evaluate_graph_model.py --checkpoint 单独评测，
             # 避免改动 5fold 汇总管线。选择只依赖 val，不触碰 test。
             q_metric_name = training_config.get('q_checkpoint_metric', 'q_spearman_pep_cond')
             current_q = val_metrics.get(q_metric_name)
@@ -1159,10 +1243,10 @@ def main():
                     )
                     logger.info(f"Saved best-q model ({q_metric_name}): {best_q_metric:.4f}")
 
-            if early_stopping_enabled and no_improve_epochs >= patience:
+            if early_stopping_enabled and selection.bad_validations >= patience:
                 logger.info(
                     f"Early stopping triggered at epoch {epoch + 1}. "
-                    f"Best F1 {best_metric:.4f} at epoch {best_epoch}."
+                    f"Best saved F1 {selection.best_f1:.6f} at epoch {selection.best_epoch}."
                 )
                 history['val_loss'].append(current_val_loss)
                 history['val_f1'].append(current_val_f1)
@@ -1188,13 +1272,14 @@ def main():
             os.makedirs(checkpoint_dir, exist_ok=True)
             
             checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch + 1}.pt')
-            CheckpointManager.save_checkpoint(
+            save_checkpoint_with_selection(
                 model=model,
                 optimizer=optimizer,
                 epoch=epoch,
                 loss=train_metrics['loss'],
                 metrics=train_metrics,
                 filepath=checkpoint_path,
+                selection=selection,
                 is_best=False
             )
             logger.info(f"Saved checkpoint at epoch {epoch + 1}")
