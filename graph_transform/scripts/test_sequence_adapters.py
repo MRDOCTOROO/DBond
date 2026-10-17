@@ -32,6 +32,17 @@ class SequenceAdapterTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         torch.set_num_threads(1)
+        # Compare different batch shapes in full FP32, without TF32 rounding.
+        # This does not change the explicit FP16 autocast training check below.
+        cls.previous_cudnn_tf32 = torch.backends.cudnn.allow_tf32
+        cls.previous_matmul_tf32 = torch.backends.cuda.matmul.allow_tf32
+        torch.backends.cudnn.allow_tf32 = False
+        torch.backends.cuda.matmul.allow_tf32 = False
+
+    @classmethod
+    def tearDownClass(cls):
+        torch.backends.cudnn.allow_tf32 = cls.previous_cudnn_tf32
+        torch.backends.cuda.matmul.allow_tf32 = cls.previous_matmul_tf32
 
     def test_zero_start_preserves_shared_weights_outputs_and_rng(self):
         config = configuration('none')
@@ -51,7 +62,7 @@ class SequenceAdapterTests(unittest.TestCase):
     def test_padding_length_one_batch_order_and_active_gradients(self):
         for kind in ['multiscale', 'bigru']:
             torch.manual_seed(11)
-            adapter = SequenceAdapter(8, 16, kind, 12).to(DEVICE).eval()
+            adapter = SequenceAdapter(8, 16, kind, 12).to(DEVICE).train()
             with torch.no_grad():
                 adapter.output.weight.normal_(std=0.05)
             x = torch.randn(3, 7, 8, device=DEVICE, requires_grad=True)
@@ -76,7 +87,7 @@ class SequenceAdapterTests(unittest.TestCase):
         for kind in ['multiscale', 'bigru']:
             for global_node in [False, True]:
                 config = configuration(kind, global_node)
-                model = make_model(config).to(DEVICE)
+                model = make_model(config).to(DEVICE).train()
                 batch = batch_to_device(collate(make_samples(config)))
                 mask = batch['label_mask'].bool()
                 for active in [False, True]:
@@ -100,6 +111,7 @@ class SequenceAdapterTests(unittest.TestCase):
                 stream.seek(0)
                 restored = make_model(config, seed=17).to(DEVICE)
                 restored.load_state_dict(torch.load(stream, weights_only=True, map_location=DEVICE), strict=True)
+                model.eval()
                 with torch.no_grad():
                     torch.testing.assert_close(model(batch), restored(batch), rtol=0, atol=0)
 
