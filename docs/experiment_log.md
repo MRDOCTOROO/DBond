@@ -1507,4 +1507,103 @@ slow组精确为已验证transfer_provenance.fully_copied_keys减去四个contex
 
 实现核验：专用optimizer测试7/7、原checkpoint选择回归10/10、迁移provenance保存定点回归1/1，共18项通过。scale=1/缺省的原优化器数值、参数顺序和RNG一致；缺省不新增optimizer metadata或改变原q保存路径。新元数据仅对显式scale字段启用（本轮三臂均显式配置）。预训练SOURCE_FILES的12个文件均未修改。真实CUDA集成检查及运行版本待提交后追加。
 
-`project_goal`：实现并检验完整迁移编码层0.1×LR，完成push/pull、15次训练及事件触发判读。`completion_status`：协议与三份配置固定，实现与测试中，尚未提交正式训练。`target_kb`：kb:storage。`knowledge_used/source_records`：本节AlphaPeptDeep公共PDF证据链；分层LR为工程假设。`created_files/modified_files`：新增training/transfer_optimizer.py、专用测试、三份lr5配置和实验分析工具，最小接入train_graph_model.py，更新本台账。`unresolved_questions`：降低更新速率能否改善目标域分类与稳定性、域差和跨种子复验。`suggested_knowledge_writeback`：完成后可另行摄入实现与结果，本轮不写知识库。
+`project_goal`：实现并检验完整迁移编码层0.1×LR，完成push/pull、15次训练及事件触发判读。`completion_status`：三臂15次训练、完整审计和结果记录已完成，结果及预定判据结论见§15.26。`target_kb`：kb:storage。`knowledge_used/source_records`：本节AlphaPeptDeep公共PDF证据链；分层LR为工程假设。`created_files/modified_files`：新增training/transfer_optimizer.py、专用测试、三份lr5配置和实验分析工具，最小接入train_graph_model.py，更新本台账。`unresolved_questions`：降低更新速率能否改善目标域分类与稳定性、域差和跨种子复验。`suggested_knowledge_writeback`：完成后可另行摄入实现与结果，本轮不写知识库。
+
+## 15.26 完整迁移编码层低学习率第五轮结果（2026-10-18）
+
+**完整三臂15次训练及审计完成。Uniform 未通过全部四项门槛；Slow 未通过相对随机对照的全部四项门槛，也未通过相对 Uniform 的 method_support。冻结主表保持不变。** 所有判定使用预注册规则和未舍入值。
+
+### 完成、版本与审计
+
+训练代码`34466f27c0ba7cfcea0019d7d8e1d879cfd86bee`；北京时间2026-10-18 18:13:19至2026-10-18 19:12:15，耗时58分55秒，三臂均returncode=0；声明GPU分配`[0, 1, 2]`。远端根目录`/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/lr5_batch/20261018_101319`；本地证据`F:/codexout/dbond_lr5_finetune_results_20261018_101319`。
+
+实现阶段已完成专用optimizer测试7项、checkpoint选择回归10项、迁移provenance保存定点回归1项，共18项通过。已保存的CUDA集成检查`F:/codexout/lr5_cuda_smoke_result.json`（SHA256=`89aedd8d6376eeaf7ef36d741051f949ada21d51b0fbcd13ae0ab323d067e60d`）于北京时间2026-10-18 18:10:36至2026-10-18 18:10:54通过；uniform、slow各使用fold1222的前16条折叠训练样本执行一次生产Trainer AMP优化更新，模型参数量均1,706,153。两者载入相同源初始化，RNG保持不变，梯度和参数有限，partial AA/position/fusion与BOXZ仍使用正常LR；slow的48张量名单与全调度比例验证通过。smoke损失仅为集成检查，不作为模型效果。
+
+完成后只读审计460项全部通过、0失败：启动源码SHA与固定源12文件、manifest/配置、配对seed和内部train/val字节哈希、序列隔离、输入mask、阈值0.5、严格max-F1选点与独立早停重放、所有主/q/周期checkpoint迁移和optimizer provenance、参数组完整唯一覆盖/numel/48张量白名单、实际LR和floor比例、checkpoint extra与运行JSON一致。history第N轮记录该轮训练前实际LR；checkpoint保存的是该轮调度结束后的下一步LR，两种时点分别重放验证。预测来源只检查CSV首行，未重新推理或扫描全部模型权重数值。
+
+结果由`finish_lr5_analysis.py`从原始CSV重算，并核对summary、审计指标及来源哈希。本记录脚本再次验证decision与analysis_tables均对应当前完整输入。
+
+下表为主checkpoint epoch / 最终训练epoch（均为1-based）：
+
+| 实验臂 | 1222 | 2252 | 3514 | 6072 | 9075 |
+|---|---:|---:|---:|---:|---:|
+| control | 99 / 99 | 84 / 86 | 85 / 86 | 80 / 105 | 83 / 96 |
+| uniform | 99 / 124 | 61 / 86 | 40 / 65 | 80 / 105 | 51 / 76 |
+| slow | 101 / 102 | 74 / 99 | 98 / 107 | 62 / 87 | 70 / 75 |
+
+### 固定来源与实际干预
+
+Uniform与Slow共用第四轮固定源checkpoint，SHA256=`2754a6cf380a1a7cf7956a67a51969a0df9c48d7a62b078b2fdbf58732703e03`，没有本轮新预训练或按下游测试重选源epoch。两者均为bond_context迁移范围。Slow仅让已整张迁移的48个encoder张量以0.1×LR更新：GCN/GAT及完整迁移的physicochemical、node融合bias/LayerNorm；GCN/GAT内部边变换属于这48张量。部分迁移的AA embedding、position embedding、node融合weight整张保持正常LR，全部读出/条件、独立edge_encoder、global参数也保持正常LR。
+
+普通组峰值1e−4、cosine下限1e−5；slow组峰值1e−5、cosine下限1e−6，共用warmup40与同一cosine倍率。线性warmup初期可以低于cosine下限。使用真实AdamW参数组，未冻结参数或缩放梯度；weight_decay系数仍为1e−4，但降低LR同时减小解耦权重衰减的实际更新步长，因此结果只解释为较慢更新协议，不能单独归因于防止遗忘。
+
+代码版本：`34466f27c0ba7cfcea0019d7d8e1d879cfd86bee`；规则：`docs/experiment_log.md §15.25`。
+
+所有值由 15 份原始划分结果重算并与 summary 校验；下表为均值 ± 样本标准差（ddof=1）。
+
+| 指标 | Control | Uniform LR transfer | Slow encoder transfer |
+|---|---:|---:|---:|
+| 有效键 micro-F1（%） | 79.800 ± 0.661 | 80.063 ± 0.410 | 79.426 ± 0.567 |
+| 有效键 accuracy（%） | 80.087 ± 0.371 | 80.317 ± 0.233 | 79.649 ± 0.435 |
+| ROC-AUC | 0.882962 ± 0.003775 | 0.886593 ± 0.003083 | 0.879345 ± 0.004887 |
+| Ex-F1 调和口径（%） | 75.425 ± 0.240 | 75.592 ± 0.222 | 74.886 ± 0.213 |
+| q_seq（序列级 Spearman） | 0.63098 ± 0.04852 | 0.66685 ± 0.03673 | 0.64457 ± 0.06249 |
+| q-Brier（越低越好） | 0.066792 ± 0.002463 | 0.063871 ± 0.002185 | 0.068097 ± 0.002490 |
+
+### 相对同期 Control 的逐划分差
+
+| 划分 | Uniform LR transfer ΔF1（百分点） | Slow encoder transfer ΔF1（百分点） | Uniform LR transfer Δq_seq | Slow encoder transfer Δq_seq |
+|---|---:|---:|---:|---:|
+| 1222 | +0.49848 | -0.27980 | +0.063612 | -0.002548 |
+| 2252 | -0.03382 | -0.53474 | +0.004007 | -0.000431 |
+| 3514 | -0.11971 | -0.45879 | +0.033384 | +0.030953 |
+| 6072 | +0.31677 | -0.41096 | +0.020695 | +0.035171 |
+| 9075 | +0.65461 | -0.18485 | +0.057692 | +0.004821 |
+
+### 四项工程门槛
+
+判定使用未舍入值；F1 获胜要求 ΔF1 > 1e-12。四门槛须同时通过；Slow 还须通过下述相对 Uniform 的 method_support。
+
+| 实验臂 | 平均 ΔF1 ≥ +0.20 百分点 | F1 至少 4/5 获胜 | 平均 ΔAUC ≥ 0 | 平均 Δq-Brier ≤ 0 | 待复验候选 |
+|---|---:|---:|---:|---:|---|
+| Uniform LR transfer | +0.263269 (通过) | 3/5 (未通过) | +0.00363136 (通过) | -0.00292087 (通过) | 否 |
+| Slow encoder transfer | -0.373828 (未通过) | 0/5 (未通过) | -0.00361685 (未通过) | +0.00130494 (未通过) | 否 |
+
+待复验候选：无。Uniform 是迁移结果的同期复验；Slow 只有四门槛和 method_support 同时通过才保留，不据此指定论文主模型。
+
+### 方法支持比较：Slow encoder transfer − Uniform LR transfer
+
+F1、Accuracy、Ex-F1 差值以百分点表示；其余用原尺度。q-Brier 减少计为 Slow 获胜；其他指标增加计为获胜。
+
+| 指标差值 | 1222 | 2252 | 3514 | 6072 | 9075 | 均值 ± SD | Slow 获胜 / 平局 / 失利 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 有效键 micro-F1（百分点） | -0.7783 | -0.5009 | -0.3391 | -0.7277 | -0.8395 | -0.6371 ± 0.2100 | 0 / 0 / 5 |
+| 有效键 accuracy（百分点） | -0.7373 | -0.6944 | -0.0529 | -0.8960 | -0.9624 | -0.6686 ± 0.3614 | 0 / 0 / 5 |
+| ROC-AUC | -0.0087460 | -0.0065259 | -0.0011461 | -0.0103930 | -0.0094300 | -0.0072482 ± 0.0036963 | 0 / 0 / 5 |
+| Ex-F1 调和口径（百分点） | -0.8798 | -0.4893 | -0.5202 | -1.0829 | -0.5620 | -0.7068 ± 0.2620 | 0 / 0 / 5 |
+| q_seq（序列级 Spearman） | -0.066160 | -0.004438 | -0.002431 | +0.014475 | -0.052871 | -0.022285 ± 0.035087 | 1 / 0 / 4 |
+| q-Brier（越低越好） | +0.0048231 | +0.0039107 | +0.0017840 | +0.0046990 | +0.0059121 | +0.0042258 ± 0.0015400 | 0 / 0 / 5 |
+
+method_support：未通过。要求相对 Uniform 的平均 ΔF1 > 0 且至少 4/5 严格获胜；这里不要求 +0.20 个百分点。
+
+两臂共享源 checkpoint 和 bond_context 迁移范围；只有 48 张完整迁移 encoder 张量使用 0.1× LR，部分迁移 AA/位置/融合张量、读出与条件参数仍用正常 LR。相对随机初始化 Control 的差仍包含外部数据与预训练计算，下游容量保持一致。
+
+Ex-F1 先在每划分内由 ex_precision/ex_recall 求调和均值再取均值。q-Brier 是对条件组 q 的概率误差，并非纯校准误差。
+
+五组重复划分共享序列，未进行独立样本 t 检验，不作显著性或置信区间推断。每划分一次初始化不能证明跨种子稳定。
+
+多轮方法筛选已参考相同测试划分，本轮属于探索性实验；正结果仍需不同初始化及未用于方法筛选的数据复验。
+
+### 结论边界
+
+Uniform 相对随机 Control：ΔF1 +0.263269 个百分点、3/5 胜，ΔAUC +0.003631357、Δq_seq +0.035878144、Δq-Brier -0.002920865。
+
+Slow 相对随机 Control：ΔF1 -0.373828 个百分点、0/5 胜，ΔAUC -0.003616851、Δq_seq +0.013593180、Δq-Brier +0.001304938。
+
+Slow−Uniform：平均 ΔF1 -0.637096 个百分点、0/5 严格获胜，method_support 未通过。该比较只要求平均 ΔF1 > 0 且至少 4/5 胜，不额外要求提高 0.20 个百分点。
+
+Uniform 未通过全部四项门槛；Slow 未通过相对随机对照的全部四项门槛，也未通过相对 Uniform 的 method_support。冻结主表保持不变。 Uniform是原迁移方案的同期复验；Slow必须同时胜过随机对照的四门槛与上述method_support，不能只凭优于随机初始化声称降低LR有效。无论候选是否通过，五组重叠划分、单初始化和多轮已参考相同测试集的限制仍存在；没有独立样本t检验、显著性或跨种子稳定性结论，需要不同初始化及未参与筛选数据复验。
+
+知识依据沿用§15.25预注册时核验的storage公共证据：`ent_000004 → .registry/machine/entity_resource_map.yaml:33 → res_000119 → file_000119`，公共`Library/public_resources/res_000119/authoritative.pdf`，SHA256=`e87e5b9ee3d363c1308828c85d50d73520761cd3efd75e820db3fde8d02f993b`；旧映射无map_id，未补造。AlphaPeptDeep物理p5–6/Fig.4支持天然肽/PTM的少样本MS2适配；p10未提供分层LR或冻结优于统一LR的直接证据。0.1倍率仍为本项目工程假设。高电荷注释源库、缺失槽mask及标准L→特殊D化学域差仍限制外推；同源NIST序列留出不构成来源独立验证。本轮未写回知识库。
+
+`project_goal`：检验完整迁移编码层0.1×LR并完成训练与事件触发判读。`completion_status`：三臂15次训练与审计完成；Uniform 未通过全部四项门槛；Slow 未通过相对随机对照的全部四项门槛，也未通过相对 Uniform 的 method_support。冻结主表保持不变。`target_kb`：kb:storage。`knowledge_used/source_records`：§15.25及上述AlphaPeptDeep公共证据。`created_files/modified_files`：lr5实现/测试/三配置、审计分析产物、本台账和本地论文附注。`unresolved_questions`：跨种子与新数据复验、域差，以及较慢AdamW更新与衰减的共同作用。`suggested_knowledge_writeback`：可另行摄入完整实现及正/负结果；本轮不写知识库。
