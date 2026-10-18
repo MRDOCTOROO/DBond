@@ -1641,6 +1641,116 @@ Uniform 未通过全部四项门槛；Slow 未通过相对随机对照的全部�
 
 为后续目标域12通道监督，只读盘点本地项目和pod `/mnt/pvc/graphtrans`（跳过环境、缓存、模型/输出目录）目前仅找到PBCLA示例MGF；未找到完整目标域MGF/mzML。此有限范围结果不证明其他目录或压缩包中不存在原始数据。记录`F:/codexout/attn6_target_spectrum_inventory.json`。用户随后提供原始压缩包`D:/UserData/Downloads/pep_521_mgf.tar.gz`并授权本地检查/解压或传pod；正在独立核验归档内容和谱图字段。本轮attention协议保持不变，不从现有二元CSV伪造离子标签。
 
-实现核验：6项专用CPU测试和1项旧条件分支checkpoint回归均通过；实际参数量为1,706,153/1,705,641，共享参数及构造后CPU RNG逐位配对。独立代码审阅通过，原attention_layers.py未变。真实CUDA单步和正式训练待同步后执行。
+实现核验：6项专用CPU测试和1项旧条件分支checkpoint回归均通过；实际参数量为1,706,153/1,705,641，共享参数及构造后CPU RNG逐位配对。独立代码审阅通过，原attention_layers.py未变。真实CUDA单步与正式训练均已完成，实际结果见§15.28。
 
-`project_goal`：验证文献启发的共享投影GATv2变体，完成同步、10次训练及事件触发判读。`completion_status`：两臂协议与配置已固定，实现和验证中，尚未提交正式训练。`target_kb`：kb:storage。`knowledge_used/source_records`：本节ent_000028/res_000143/file_000143公共PDF身份、SHA和物理第5页。`created_files/modified_files`：新attention_v2模块与专用测试、两份attn6配置、最小模型接入、实验台账及外部审计/完成等待工具。`unresolved_questions`：该受限动态打分是否改善目标域泛化，跨种子/新数据稳定性，以及完整目标域原始谱图位置。`suggested_knowledge_writeback`：完成后可另行摄入工程实现及正负结果，本轮不写知识库。
+`project_goal`：验证文献启发的共享投影GATv2变体，完成同步、10次训练及事件触发判读。`completion_status`：两臂10次训练、完整审计和结果记录已完成，结果及预定判据结论见§15.28。`target_kb`：kb:storage。`knowledge_used/source_records`：本节ent_000028/res_000143/file_000143公共PDF身份、SHA和物理第5页。`created_files/modified_files`：新attention_v2模块与专用测试、两份attn6配置、最小模型接入、实验台账及外部审计/完成等待工具。`unresolved_questions`：该受限动态打分是否改善目标域泛化，跨种子/新数据稳定性，以及完整目标域原始谱图位置。`suggested_knowledge_writeback`：完成后可另行摄入工程实现及正负结果，本轮不写知识库。
+
+
+## 15.28 共享投影GATv2注意力第六轮结果（2026-10-18）
+
+**两臂10次训练与审计完成。GATv2未通过全部四项预定门槛，不列为待复验候选；冻结主表保持不变。** 判定使用§15.27预定规则和未舍入值，没有按测试结果修改阈值、epoch或划分。
+
+### 完成、版本与审计
+
+训练代码`9ae88307ae9801de75d36486d2cc7fb7f36d753b`；北京时间2026-10-18 20:32:08至2026-10-18 21:09:25，耗时37分18秒，两臂均returncode=0；声明GPU分配`[0, 1, 2]`。远端`/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/attn6_batch/20261018_123207`；分析与证据目录`/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/attn6_batch/20261018_123207`。
+
+实现阶段6项GATv2专用CPU测试与1项旧条件分支checkpoint回归均通过。生产CUDA检查`/mnt/pvc/graphtrans/attn6_ops/evidence/attn6_cuda_smoke_result.json`（SHA256=`d913ca6ef77b61b23ebcff6d7a9d210f4d5bbcb4da377c8c042c42eb6417347d`）于北京时间2026-10-18 20:31:40至2026-10-18 20:31:52通过：两臂各使用fold1222前16条折叠训练样本完成一次production Trainer AMP优化更新，attention score/projection及分类头更新、梯度/参数有限，观测输入保持屏蔽。共享初始张量与构造后CPU/CUDA RNG一致；参数量Control为1,706,153、GATv2为1,705,641。smoke损失只检查集成，不代表下游效果。
+
+完成后审计380项全部通过、0失败：启动源码SHA、manifest/两臂配置、同划分seed与train/val字节哈希、内部序列隔离、pre输入mask、0.5阈值、严格验证max-F1选点与独立早停重放、主/q/周期checkpoint的注意力模式和a/a_v2形状及参数量、单组optimizer与无迁移provenance、汇总行与原始指标文件/同evaluation_id归档SHA绑定、预测CSV首行来源及history有限值。预测来源仅检查CSV首行，没有重新推理或扫描全量权重数值。
+
+`finish_attn6_analysis.py`从10份原始结果重算并核对summary、审计指标和来源SHA；本记录脚本再次核对decision及analysis_tables与完整输入。
+
+主checkpoint epoch / 最终训练epoch（1-based）：
+
+| 实验臂 | 1222 | 2252 | 3514 | 6072 | 9075 |
+|---|---:|---:|---:|---:|---:|
+| control | 99 / 99 | 84 / 109 | 85 / 86 | 80 / 105 | 83 / 96 |
+| gatv2 | 74 / 99 | 61 / 86 | 61 / 69 | 71 / 76 | 83 / 96 |
+
+### 实际干预
+
+两臂均随机初始化，无外部预训练和分组学习率。仅两层注意力的内容打分改为`a_v2·LeakyReLU(Wh_src+Wh_dst)+edge_bias_ij`；W仍在source/target/message间共享，旧分数为`LeakyReLU(a_src·Wh_src+a_dst·Wh_dst+edge_bias_ij)`。标量edge bias后置也属于此次干预。边向量message gate、图结构、3层GCN、theory/FiLM、节点编码和键读出保持一致。每层a从[4,128,1]换为a_v2[4,64,1]，共少512参数；这是共享投影受限变体，不能称完整通用GATv2表达力复现或严格等参数比较。
+
+既有fragment/chemistry/sequence adapter/晚期条件分支关闭。训练仍是条件组q软标签、group_uniform、原AdamW单组LR和warmup40+cosine、最多300epoch、独立patience25/min_delta.001、主max_f1及固定0.5阈值。
+
+代码版本：`9ae88307ae9801de75d36486d2cc7fb7f36d753b`；规则：`docs/experiment_log.md §15.27`。
+
+两臂均随机初始化；所有值由 10 份原始划分结果重算并与 summary 校验。下表为均值 ± 样本标准差（ddof=1）。
+
+| 指标 | Control (GAT) | GATv2 |
+|---|---:|---:|
+| 有效键 micro-F1（%） | 79.769 ± 0.631 | 79.620 ± 0.304 |
+| 有效键 accuracy（%） | 80.042 ± 0.352 | 79.754 ± 0.249 |
+| ROC-AUC | 0.882735 ± 0.003578 | 0.879857 ± 0.002219 |
+| Ex-F1 调和口径（%） | 75.380 ± 0.261 | 75.205 ± 0.291 |
+| q_seq（序列级 Spearman） | 0.62984 ± 0.04629 | 0.62134 ± 0.03772 |
+| q-Brier（越低越好） | 0.066936 ± 0.002317 | 0.068487 ± 0.002013 |
+
+### 相对同期 Control 的逐划分差
+
+| 划分 | GATv2 ΔF1（百分点） | GATv2 Δq_seq |
+|---|---:|---:|
+| 1222 | -0.10495 | -0.011433 |
+| 2252 | -0.12297 | -0.014782 |
+| 3514 | -0.57165 | -0.044557 |
+| 6072 | -0.35149 | +0.003868 |
+| 9075 | +0.40234 | +0.024437 |
+
+### 四项工程门槛
+
+判定使用未舍入值；F1 获胜要求 ΔF1 > 1e-12。所有门槛必须同时通过。
+
+| 实验臂 | 平均 ΔF1 ≥ +0.20 百分点 | F1 至少 4/5 获胜 | 平均 ΔAUC ≥ 0 | 平均 Δq-Brier ≤ 0 | 待复验候选 |
+|---|---:|---:|---:|---:|---|
+| GATv2 | -0.149742 (未通过) | 1/5 (未通过) | -0.00287774 (未通过) | +0.00155102 (未通过) | 否 |
+
+待复验候选：无。不依据本次测试均值指定论文主模型。
+
+### 六指标配对差：GATv2 − Control
+
+三项百分比指标的差值以百分点表示；其余用原尺度。q-Brier 减少计为获胜；其他指标增加计为获胜。
+
+| 指标差值 | 1222 | 2252 | 3514 | 6072 | 9075 | 均值 ± SD | 获胜 / 平局 / 失利 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 有效键 micro-F1（百分点） | -0.1049 | -0.1230 | -0.5717 | -0.3515 | +0.4023 | -0.1497 ± 0.3627 | 1 / 0 / 4 |
+| 有效键 accuracy（百分点） | -0.5225 | -0.4242 | -0.5817 | -0.2314 | +0.3220 | -0.2876 ± 0.3657 | 1 / 0 / 4 |
+| ROC-AUC | -0.0046620 | -0.0040678 | -0.0057202 | -0.0018765 | +0.0019379 | -0.0028777 ± 0.0030361 | 1 / 0 / 4 |
+| Ex-F1 调和口径（百分点） | -0.1633 | +0.1412 | -0.3867 | -0.6581 | +0.1907 | -0.1753 ± 0.3578 | 2 / 0 / 3 |
+| q_seq（序列级 Spearman） | -0.011433 | -0.014782 | -0.044557 | +0.003868 | +0.024437 | -0.008494 ± 0.025426 | 2 / 0 / 3 |
+| q-Brier（越低越好） | +0.0036265 | +0.0019552 | +0.0030374 | +0.0002930 | -0.0011570 | +0.0015510 ± 0.0019746 | 1 / 0 / 4 |
+
+GATv2 改变打分非线性与边偏置的位置，共享 source/destination 投影保持不变。参数量为 GAT 1,706,153、GATv2 1,705,641，相差 −512，并非严格等参数。
+
+Ex-F1 先在每划分内由 ex_precision/ex_recall 求调和均值再取均值。q-Brier 是对条件组 q 的概率误差，并非纯校准误差。
+
+五组重复划分共享序列，未进行独立样本 t 检验，不作显著性或置信区间推断。每划分一次初始化不能证明跨种子稳定。
+
+多轮方法筛选已参考相同测试划分，本轮属于探索性实验；正结果仍需不同初始化及未用于方法筛选的数据复验。
+
+### 结论边界
+
+GATv2 相对随机 Control：ΔF1 -0.149742 个百分点、1/5 胜，ΔAUC -0.002877740、Δq_seq -0.008493531、Δq-Brier +0.001551025。
+
+GATv2未通过全部四项预定门槛，不列为待复验候选；冻结主表保持不变。 通过也只表示达到预设工程筛选门槛，不自动替换论文主模型。五组重复序列级划分共享序列、每划分一次初始化，且多轮方法筛选已参考相同测试集；不报告独立样本t检验、统计显著性或跨种子稳定性，需要未参与筛选数据及不同初始化复验。Ex-F1逐划分由谱平均P/R求调和均值再平均；SD为ddof1；q-Brier是对条件组q的概率误差，不是纯校准误差。
+
+文献证据沿用§15.27：`ent_000028 → .registry/machine/entity_resource_map.yaml → res_000143 → file_000143`，公共authoritative.pdf SHA256=`d316a7d23d735becf0c31d2b73c3426bb2aa5ec592705ce559d79a740abf53ec`，物理第5页§3.3公式(6)–(7)。旧映射缺map_id，未补造。现有edge bias/gate使整网不等同无边特征标准GAT，论文定理不直接作为本模型瓶颈证明。原始谱归档的只读核验是后续离子监督的数据准备，不改变本轮输入、标签或判据；本轮未写回知识库。
+
+### 后续目标域离子监督的数据准备
+
+此项是后续方法的数据准备，与上述attn6两臂结果分开记录。归档清单含2,049个MGF文件；每个文件前至多3谱的有界检查共读取6,126条谱，覆盖目标序列513/513。首部抽样覆盖不代表文件内全部谱均已核验。最初8条精确训练记录的PBCLA union核对为8/8一致，仅属小样本检查，不能替代全量校验。
+
+v1全量构建目标为原fold1222训练侧383,295行、410条序列、7,643个条件组，实际状态`failed`且未发布不完整缓存。首错训练行357546的重建/原始OR bits为125040380/125564668。局部诊断确认自定义解析器与pyteomics的float32峰数组完全相同；y9-NH3、碎片charge=1的理论m/z=994.52037824、已量化峰m/z=994.500488281，20ppm容差0.0198904075648；当前float32标量差-0.0198974609375未命中，同一量化峰的float64差-0.0198899591099命中，并恢复该条谱与原CSV的union一致。
+
+本次明确选择的v2 manifest为`/mnt/pvc/graphtrans/target_ion12_work/target_ion12_fold1222_v2_snapshot/manifest.json`，不会自动改用其他同名失败构建。v2采用固定float32峰量化后，将搜索数组显式提升到float64执行原二分查找；intensity仍为float32，20ppm/eps及PBCLA通道规则不变。这是明确声明的数值兼容方式，不是已核实的历史NumPy环境复原；单条谱和合成边界示例不能证明所有行均兼容。v2最终manifest状态为`passed`：原fold1222训练行383,295/383,295、410条序列、7,643个条件组；扫描归档记录477,669，其中94,374条未加入缓存。全部行的12通道OR与原true_multi精确一致，全部组计数/q重构及前体强度身份核对通过。这是逐行/逐组兼容性校验通过，不是新监督训练结果或化学真值证明。
+
+缓存成员范围只允许原fold1222训练CSV中的精确记录，不加入archive-only谱或使用测试标签；其他四划分未在此缓存准备中覆盖。新12通道监督尚未训练，未参与本轮attn6输入、损失、模型选择或四项门槛。通道匹配是可观测离子的操作性标签，不能直接等同化学断裂真值。
+
+数据准备证据（记录时读取的小型文件；未读取SQLite或原始归档）：
+
+- `attn6_target_archive_inspection.json`：SHA256=`c0a6a1fa9329cde6a33619e2760e3a0f520f5bb7ed0f31011cf047058868b2ff`。
+- `attn6_ion12_first_mismatch_diagnostic.json`：SHA256=`b8b6a33a1fe4dd6d4b83e9b495b3e6c5d9cb3511f1d2f3f44fd5785d7e6104d0`。
+- `target_ion12_fold1222_v1/manifest.json`：SHA256=`ffdec1c4f837a781cc459b31f0fb817d698f1c7e228ee8c4bf34e4236642e877`。
+- `target_ion12_fold1222_v2_snapshot/manifest.json`：SHA256=`19e9825247916b83cd0d78990303622e4da1763c26f3f03767b74051c00abcc7`。
+
+
+`project_goal`：检验共享投影GATv2并完成10次训练及事件触发判读。`completion_status`：训练、审计与结果记录完成；GATv2未通过全部四项预定门槛，不列为待复验候选；冻结主表保持不变。`target_kb`：kb:storage。`knowledge_used/source_records`：§15.27的ent_000028/res_000143/file_000143公开证据。`created_files/modified_files`：attention_v2与测试、两配置、最小模型接入、审计/分析工具及实验台账。`unresolved_questions`：受限变体的跨种子和新数据泛化，及目标域离子监督适用性。`suggested_knowledge_writeback`：可另行摄入完整工程结果，本轮未写知识库。
