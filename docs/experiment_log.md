@@ -1470,3 +1470,41 @@ Ex-F1 先在每划分内由 ex_precision/ex_recall 求调和均值再取均值�
 完整结果、判定表、逐划分PNG/PDF、源审计与CUDA检查保存在本地证据目录及pod批次review目录；本台账与论文表附注追加本轮结果，冻结主表未替换。预训练代码、迁移器、测试及三配置已经提交并推送，所有新行为通过显式配置启用。完成等待沿用事件触发，不实时读取epoch日志。
 
 `project_goal`：实现外部离子相对强度预训练及两种迁移范围，完成push/pull、训练与事件触发判读。`completion_status`：全部完成，两个范围均未通过全部分类采用门槛。`target_kb`：kb:storage。`knowledge_used/source_records`：§15.23 AlphaPeptDeep原始公共PDF及实体/资源映射证据。`created_files/modified_files`：§15.23代码与配置、本台账、论文本地附注和实验分析产物。`unresolved_questions`：域差、跨种子稳定性、较低骨干学习率能否保留迁移收益。`suggested_knowledge_writeback`：可另行摄入完整实现及正/负结果；本轮未写知识库。
+
+## 15.25 完整迁移编码层降低学习率：第五轮预定方案（2026-10-18）
+
+状态：用户要求继续下一轮优化，沿用代码实现、测试、commit/push、pod pull、训练和完成后分析授权。Valhalla project_work，base/kb:storage，只读；项目产物仍在DBond仓库及F:/codexout实验目录。本节在训练前固定方案、比较和判据；训练采用完成事件静默等待，不逐轮查询。
+
+### 研究问题与来源边界
+
+第四轮bond_context有F1及排序/概率误差改善，但未通过全部采用门槛。本轮检验同一预训练来源下，降低已完整迁移编码层的更新速率是否比等学习率微调更合适。不能由现有结果认定发生了灾难性遗忘，也不能预设减慢适配能解决标准L→特殊D及强度→分类的域差。
+
+再次核验storage证据：`ent_000004` active → `.registry/machine/entity_resource_map.yaml:33`（derived_from，无旧map_id，未补造）→ `res_000119` → `file_000119`，公共文件`Library/public_resources/res_000119/authoritative.pdf`，SHA256=`e87e5b9ee3d363c1308828c85d50d73520761cd3efd75e820db3fde8d02f993b`；local membership active、required/excluded/blacklist空、资源active/not_listed/present，注册SHA一致。物理p5–6、Fig.4支持天然肽/PTM的少样本MS2适配；p10 Methods/MS2 model中预训练phase1、phase2/3及21种PTM微调均为lr=1e−5，PTM10epoch、warmup5、dropout.1、L1及cosine warmup。该主文未提供分层学习率/冻结优于等学习率的直接证据。此次0.1倍率是本项目固定工程假设，不称文献已验证策略；未读取source_copies、未写回KB。
+
+### 三臂与唯一新变量
+
+1. lr5_control：随机初始化，与此前同期control相同协议。
+2. lr5_uniform：第四轮bond_context范围，所有参数统一原学习率，作为本轮迁移复验和速率比较的对照。
+3. lr5_slow：与uniform完全相同的预训练初始化，仅已整张迁移的encoder参数使用0.1×学习率。
+
+uniform与slow固定第四轮同一源：`checkpoints/graph_transform/ion4_pretraining/20261018_082558/best_ion_intensity.pt`，SHA256=`2754a6cf380a1a7cf7956a67a51969a0df9c48d7a62b078b2fdbf58732703e03`。不新增预训练、不按本轮测试重新选源。迁移白名单、全MiPD513/旧NIST排除及I/L身份隔离保持§15.23。两臂所有目标域参数可训练，没有冻结阶段。
+
+slow组精确为已验证transfer_provenance.fully_copied_keys减去四个context张量（bond_theory_proj的weight/bias及bond_head.0的weight/bias），共48张量：GCN/GAT及完全迁移的physicochemical/node融合bias/LayerNorm。只部分拷贝的AA embedding、position embedding、node融合第一层weight整张保持原LR，避免对未预训练的BOXZ/C/保留位置或条件列一起降速。全部读出、条件、独立edge_encoder/global参数保持原LR；GCN/GAT内部边变换属于已完整迁移的编码层，随该层使用低LR。故本轮不称“全部骨干统一降低LR”。
+
+采用真实AdamW参数组而非缩放梯度；普通组放index0，峰值1e−4、下限1e−5，slow组峰值1e−5、下限1e−6。两组共用原warmup40及cosine倍率，整个调度周期保持0.1比例，不能沿用统一绝对min_lr导致slow后程卡在1e−5。weight_decay系数仍1e−4；学习率降低也会降低AdamW解耦衰减的实际步长，效果解释为较慢更新协议，不单独归因为防遗忘。scale=1或缺省必须完全保持原单组optimizer、参数顺序、scheduler和RNG路径；scale<1与resume不混用。
+
+### 固定训练与验证协议
+
+三组模型结构与参数量相同，五组重复序列级80/20划分及内部val seed配对；training条件组折叠、group_uniform、q软标签、test行级、pre输入mask、theory+FiLM、固定阈值0.5不变。最多300epoch、batch128、warmup40、原cosine、max_f1主选点、独立earlystop min_delta=.001/patience25均不改。本轮仅0.1这一预定倍率，不扫0.3等网格，不增加训练预算补偿低LR，不按测试表现调整epoch/阈值。
+
+低LR参数分组、参数名/numel、峰值与floor LR写入optimizer_provenance.json及主/q/周期checkpoint；逐epoch记录实际各组LR供完成后重放核对。测试覆盖AdamW真实更新比例、完整唯一参数覆盖、部分迁移参数归普通组、全周期LR比例/下限、disabled原行为及错误配置失败。再于pod真实16行数据各执行uniform/slow一次CUDA训练步骤，成功后才提交完整15次训练。
+
+### 预定判据
+
+相对本轮随机control，uniform和slow分别沿用四项工程筛选：meanΔF1≥.002（+0.20个百分点）、F1至少4/5严格提高、meanΔAUC≥0、meanΔq-Brier≤0。此外slow要被作为“降低学习率方案”的待复验候选，必须相对同期uniform meanΔF1>0且F1至少4/5严格提高；这项速率收益判断不额外要求对uniform提高.002。报告slow−uniform所有六指标及逐划分配对差，不能用只胜随机control来声称降低LR有效。uniform若四项通过，仅记为原迁移方案复验候选。
+
+所有判定用未舍入值、1e−12平局容差，mean±sample SD(ddof1)；Ex-F1逐划分由谱平均P/R取调和后再均值，q-Brier是对q的概率误差。两种比较均属探索性，五组共享序列且单初始化，不能做独立样本显著性推断。多轮已参考相同测试划分；即使候选通过也不自动更新冻结主表，仍需不同初始化及未参与筛选数据复验。
+
+实现核验：专用optimizer测试7/7、原checkpoint选择回归10/10、迁移provenance保存定点回归1/1，共18项通过。scale=1/缺省的原优化器数值、参数顺序和RNG一致；缺省不新增optimizer metadata或改变原q保存路径。新元数据仅对显式scale字段启用（本轮三臂均显式配置）。预训练SOURCE_FILES的12个文件均未修改。真实CUDA集成检查及运行版本待提交后追加。
+
+`project_goal`：实现并检验完整迁移编码层0.1×LR，完成push/pull、15次训练及事件触发判读。`completion_status`：协议与三份配置固定，实现与测试中，尚未提交正式训练。`target_kb`：kb:storage。`knowledge_used/source_records`：本节AlphaPeptDeep公共PDF证据链；分层LR为工程假设。`created_files/modified_files`：新增training/transfer_optimizer.py、专用测试、三份lr5配置和实验分析工具，最小接入train_graph_model.py，更新本台账。`unresolved_questions`：降低更新速率能否改善目标域分类与稳定性、域差和跨种子复验。`suggested_knowledge_writeback`：完成后可另行摄入实现与结果，本轮不写知识库。

@@ -42,6 +42,10 @@ except ImportError:
     OptimizedGraphDataLoader = None
 from training import Trainer, BinaryBondLoss
 from training.checkpoint_selection import CheckpointSelection
+from training.transfer_optimizer import (
+    validate_transfer_optimizer_request, create_transfer_optimizer, create_transfer_scheduler,
+    get_optimizer_provenance, write_optimizer_provenance,
+)
 from evaluation import Evaluator
 from evaluation.metrics import metric_rows, metric_display_name
 
@@ -830,10 +834,12 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset,
     return train_loader, val_loader, test_loader
 
 
-def create_optimizer(model: nn.Module, config: Dict[str, Any]) -> optim.Optimizer:
+def create_optimizer(model: nn.Module, config: Dict[str, Any], transfer_provenance=None) -> optim.Optimizer:
     """创建优化器"""
     optimizer_config = config['optimizer']
     training_config = config['training']
+    if validate_transfer_optimizer_request(training_config) < 1:
+        return create_transfer_optimizer(model, config, transfer_provenance)
     
     optimizer_type = optimizer_config.get('type', 'adamw').lower()
     learning_rate = training_config['learning_rate']
@@ -883,6 +889,8 @@ def create_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any]) -> opti
     """创建学习率调度器"""
     training_config = config['training']
     optimizer_config = config['optimizer']
+    if validate_transfer_optimizer_request(training_config) < 1:
+        return create_transfer_scheduler(optimizer, config)
     
     scheduler_type = training_config.get('scheduler', 'cosine').lower()
     
@@ -1019,6 +1027,7 @@ def main():
     # 加载配置
     config = load_config(args.config, args)
     training_config = config['training']
+    transfer_encoder_lr_scale = validate_transfer_optimizer_request(training_config, args.resume)
     transfer_enabled = False
     if (training_config.get('pretrained_transfer_scope', 'none') != 'none'
             or training_config.get('pretrained_backbone_path')
@@ -1081,7 +1090,7 @@ def main():
         logger.info(f"Test samples: {len(test_dataset)}")
     
     # 创建优化器和调度器
-    optimizer = create_optimizer(model, config)
+    optimizer = create_optimizer(model, config, transfer_provenance)
     scheduler = create_scheduler(optimizer, config)
     
     # 创建损失函数
@@ -1128,6 +1137,10 @@ def main():
             "This is not an exact uninterrupted-training continuation."
         )
     
+    optimizer_provenance = get_optimizer_provenance(
+        model, optimizer, config, transfer_provenance, checkpoint if args.resume else None,
+    )
+
     # 训练循环
     logger.info("Starting training loop...")
     early_stopping_enabled = training_config.get('early_stopping', False)
@@ -1145,10 +1158,13 @@ def main():
         training_config['checkpoint_dir'] = os.path.join(base_checkpoint_dir, run_id)
     os.makedirs(training_config['checkpoint_dir'], exist_ok=True)
     transfer_extra_state = None
+    if optimizer_provenance is not None:
+        write_optimizer_provenance(optimizer_provenance, training_config['checkpoint_dir'])
+        transfer_extra_state = {'optimizer_provenance': optimizer_provenance}
     if transfer_provenance is not None:
         from pretraining.transfer import write_transfer_provenance
         write_transfer_provenance(transfer_provenance, training_config['checkpoint_dir'])
-        transfer_extra_state = {'pretrained_transfer_provenance': transfer_provenance}
+        transfer_extra_state = dict(transfer_extra_state or {}, pretrained_transfer_provenance=transfer_provenance)
     logger.info(f"Checkpoint dir: {training_config['checkpoint_dir']}")
     log_config = config.get('logging', {})
     tb_writers: Dict[str, SummaryWriter] = {}
@@ -1176,11 +1192,14 @@ def main():
         'val_recall': [],
         'val_auc': [],
     }
+    if transfer_encoder_lr_scale < 1:
+        history['learning_rate_pretrained_encoder'] = []
     
     for epoch in range(start_epoch, epochs):
         logger.info(f"Epoch {epoch + 1}/{epochs}")
         epoch_start = time.perf_counter()
         epoch_lr = optimizer.param_groups[0]['lr']
+        epoch_encoder_lr = optimizer.param_groups[1]['lr'] if transfer_encoder_lr_scale < 1 else None
         
         # 训练阶段
         train_metrics = trainer.train_epoch(train_loader, epoch + 1)
@@ -1203,6 +1222,8 @@ def main():
         history['train_avg_backward_time'].append(train_metrics.get('avg_backward_time'))
         history['train_avg_fetch_wait_time'].append(train_metrics.get('avg_fetch_wait_time'))
         history['learning_rate'].append(epoch_lr)
+        if transfer_encoder_lr_scale < 1:
+            history['learning_rate_pretrained_encoder'].append(epoch_encoder_lr)
         current_val_loss: Optional[float] = None
         current_val_f1: Optional[float] = None
         current_val_precision: Optional[float] = None
