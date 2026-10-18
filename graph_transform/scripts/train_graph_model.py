@@ -920,11 +920,11 @@ def create_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any]) -> opti
 
 
 def save_checkpoint_with_selection(model, optimizer, epoch, loss, metrics,
-                                   filepath, selection, is_best=False):
+                                   filepath, selection, is_best=False, extra_state=None):
     """Keep the existing checkpoint schema and persist F1-selection progress.
 
-    Q-checkpoint selection/saving continues through CheckpointManager unchanged.
-    This extra state is for main and periodic checkpoints only.
+    Disabled controls retain the previous checkpoint fields. A transfer run also
+    records its initialization provenance, including on its q checkpoint.
     """
     checkpoint = {
         'epoch': epoch,
@@ -933,8 +933,11 @@ def save_checkpoint_with_selection(model, optimizer, epoch, loss, metrics,
         'loss': loss,
         'metrics': metrics,
         'config': model.config.to_dict() if hasattr(model, 'config') else None,
-        CheckpointSelection.STATE_KEY: selection.state_dict(),
     }
+    if selection is not None:
+        checkpoint[CheckpointSelection.STATE_KEY] = selection.state_dict()
+    if extra_state is not None:
+        checkpoint['extra_state'] = extra_state
     torch.save(checkpoint, filepath)
     if is_best:
         torch.save(checkpoint, filepath.replace('.pt', '_best.pt'))
@@ -1016,6 +1019,12 @@ def main():
     # 加载配置
     config = load_config(args.config, args)
     training_config = config['training']
+    transfer_enabled = False
+    if (training_config.get('pretrained_transfer_scope', 'none') != 'none'
+            or training_config.get('pretrained_backbone_path')
+            or training_config.get('pretrained_backbone_sha256')):
+        from pretraining.transfer import validate_transfer_request
+        transfer_enabled = validate_transfer_request(training_config, args.resume)
     selection = CheckpointSelection(
         training_config.get('checkpoint_selection', 'legacy'),
         training_config.get('min_delta', 0.0),
@@ -1043,6 +1052,16 @@ def main():
     model_start = time.perf_counter()
     model = create_model(config, device)
     logger.info(f"Model creation took {time.perf_counter() - model_start:.2f}s")
+    transfer_provenance = None
+    if transfer_enabled:
+        from pretraining.transfer import load_pretrained_backbone
+        transfer_provenance = load_pretrained_backbone(
+            model, training_config,
+            {split: config['data'].get(split + '_csv_path') for split in ('train', 'val', 'test')},
+            resume=args.resume,
+        )
+        logger.info("Initialized pretrained %s from SHA256 %s",
+                    transfer_provenance['scope'], transfer_provenance['checkpoint_sha256'])
     
     # 创建数据集和数据加载器
     dataset_start = time.perf_counter()
@@ -1096,6 +1115,8 @@ def main():
             model=model,
             optimizer=optimizer
         )
+        # A resume without new initialization keeps any original provenance.
+        transfer_provenance = (checkpoint.get('extra_state') or {}).get('pretrained_transfer_provenance')
         start_epoch = checkpoint['epoch'] + 1
         restore_checkpoint_selection(
             selection, checkpoint, args.resume, val_loader is not None, logger,
@@ -1123,6 +1144,11 @@ def main():
         run_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         training_config['checkpoint_dir'] = os.path.join(base_checkpoint_dir, run_id)
     os.makedirs(training_config['checkpoint_dir'], exist_ok=True)
+    transfer_extra_state = None
+    if transfer_provenance is not None:
+        from pretraining.transfer import write_transfer_provenance
+        write_transfer_provenance(transfer_provenance, training_config['checkpoint_dir'])
+        transfer_extra_state = {'pretrained_transfer_provenance': transfer_provenance}
     logger.info(f"Checkpoint dir: {training_config['checkpoint_dir']}")
     log_config = config.get('logging', {})
     tb_writers: Dict[str, SummaryWriter] = {}
@@ -1212,7 +1238,8 @@ def main():
                     metrics=val_metrics,
                     filepath=checkpoint_path,
                     selection=selection,
-                    is_best=True
+                    is_best=True,
+                    extra_state=transfer_extra_state,
                 )
                 logger.info(f"Saved best model with F1: {selection.best_f1:.6f}")
             if not selection_decision.early_stopping_improved:
@@ -1232,14 +1259,19 @@ def main():
                     best_q_metric = current_q
                     q_checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints/graph_transform')
                     os.makedirs(q_checkpoint_dir, exist_ok=True)
-                    CheckpointManager.save_checkpoint(
+                    q_save = (CheckpointManager.save_checkpoint if transfer_extra_state is None
+                              else save_checkpoint_with_selection)
+                    q_extra = ({} if transfer_extra_state is None else
+                               {'selection': None, 'extra_state': transfer_extra_state})
+                    q_save(
                         model=model,
                         optimizer=optimizer,
                         epoch=epoch,
                         loss=val_metrics['loss'],
                         metrics=val_metrics,
                         filepath=os.path.join(q_checkpoint_dir, 'best_model_q.pt'),
-                        is_best=False
+                        is_best=False,
+                        **q_extra,
                     )
                     logger.info(f"Saved best-q model ({q_metric_name}): {best_q_metric:.4f}")
 
@@ -1280,7 +1312,8 @@ def main():
                 metrics=train_metrics,
                 filepath=checkpoint_path,
                 selection=selection,
-                is_best=False
+                is_best=False,
+                extra_state=transfer_extra_state,
             )
             logger.info(f"Saved checkpoint at epoch {epoch + 1}")
 

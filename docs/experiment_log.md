@@ -1317,3 +1317,55 @@ Ex-F1 先在每划分内由 ex_precision/ex_recall 求调和均值再取均值�
 证据入口：三臂各自的`cv/5fold_metrics.csv`、`summary/summary.json`、`audit.json`、`decision.json`、`analysis_tables.md`及`summary/figures/cond3_paired_differences.png`/同名PDF。数据路线的可行性诊断保存在`F:/codexout/dbond_cond3_data_feasibility.json`；该诊断不等于穷尽搜索全部原始谱图，也未将质量过滤失败的MSP记录转为训练样本。
 
 `project_goal`：完成两个同容量晚期条件融合方案的实现、push/pull、pod训练和自动判读。`completion_status`：全部完成；性能结论见本节。`target_kb`：kb:storage。`knowledge_used/source_records`：§15.21所列Prosit/AlphaPeptDeep的实体、机器映射、公共资源身份和PDF页。`created_files/modified_files`：见§15.21，另更新本台账与本地论文表附注。`unresolved_questions`：跨种子及未参与筛选的数据上的复验、原始谱图与离子标签来源；多轮结果不构成性能上限证明。`suggested_knowledge_writeback`：可另行摄入完整实现与正/负结果；本轮没有写回知识库。
+
+## 15.23 离子相对强度预训练与迁移：第四轮预定方案（2026-10-18）
+
+状态：用户要求继续优化，沿用本地实现/测试/commit/push、pod pull、训练与完成后分析的授权。使用Valhalla project_work，base/kb:storage，只读。训练提交后采用完成事件静默等待，不逐轮读取日志，不向模型重复报告epoch。当前先冻结数据用途、训练目标和迁移比较，再构建数据及执行验证；实际产物、版本与结果后续追加。
+
+### 研究问题和文献边界
+
+前三轮六种小型结构扩展没有达到采用门槛。本轮检验新增外部离子强度监督能否提供可迁移表征，而非继续增加下游模型容量。一个外部预训练模型供两种迁移范围使用，目标域均保留现有模型结构、参数量和全参数微调协议。外部预训练同时跨标准L肽/特殊D残基化学域及强度/肽键分类任务，收益是待检验假设。
+
+知识库根目录`G:/valhalla/valhalla_storage_share_root_20260830`。机器映射`Wiki/Wiki_storage/.registry/machine/entity_resource_map.yaml`核验`ent_000004 → res_000119 → file_000119`（旧map缺map_id，未补造）；有效local membership、entity及resource lifecycle均active，未excluded/blacklisted，authoritative公共副本present且SHA匹配。实际读取`Library/public_resources/res_000119/authoritative.pdf`：物理第5–6页、Fig.4是AlphaPeptDeep对21类PTM的少样本MS2迁移实证；第10页MS2 model说明逐断裂位b+/b++/y+/y++及修饰中性丢失通道、按每谱最高匹配强度归一、L1损失。该文没有证明本项目的跨化学域/跨输出任务迁移，也没有使用本轮的缺失注释mask规则。
+
+同时核验Prosit（ent_000036→res_000151/file_000151）和PredFull（ent_000048→res_000204/file_000204）的有效公共来源；Prosit第12页具体transfer示例是iRT，不冒充MS2迁移证据；三篇没有找到EMA/SWA做法。未读source_copies，未写回知识库。
+
+### 外部数据用途与固定质量规则
+
+源文件`G:/msp-demo/FTMS_HCD_20_annotated_2019-11-12.msp`。本轮新建独立的library-annotation auxiliary数据集，不改旧NIST外测CSV或既有转换器。仅保留无修饰、标准20AA、长度7–30、报告charge为2–6的候选；从现有NIST外测和原始10份MiPD CSV仅读seq列排除全部序列，并采用I/L合并key作保守隔离与分组。B/O/X/Z是特殊化学残基，不映射成标准氨基酸或通配符。
+
+输入为序列、库中报告charge及序列推导的理论前体m/z。Parent字段不参与监督、过滤或模型输入；这不是确认其约定正确。NCE未知，只用0占位并在node/global/edge全路径屏蔽，预训练关闭FiLM与晚期条件模块。强度/scan/rt不作输入。数据用途明确为库内条件混合下的注释相对强度，不能称已校准NCE下的原始实验谱预测。
+
+逐条核验唯一标准无中性丢失b/y、碎片电荷1+/2+的理论m/z，要求正有限强度和绝对质量误差≤50ppm。输出按N端到C端肽键排列的(L−1)×4数组，通道[b1,b2,y1,y2]；yN映射到0-based键位L−N−1。同槽重复取有效峰最高强度并记录计数，缺失或歧义槽mask=false，绝不当作不存在的负例；每谱按有效匹配槽最高强度归一。无有效槽或无法安全隔离的歧义记录拒绝，所有拒绝原因计数。原`true_multi`仅为GraphDataset兼容占位，不能用于预训练损失或分类评估。
+
+同(seq,charge)重复选择文件中第一条通过固定QA的谱；按保守序列key固定hash划分约90%训练/10%验证，不按模型效果选样本。构建器输出train.csv/val.csv、manifest和QA报告，绑定源MSP SHA256、排除集、CSV哈希、通道mask与序列分组。数据集大小须以完整构建结果为准，不能把先前8,270候选当作已通过全部QA的训练序列数。
+
+### 外部预训练协议
+
+采用现有GraphTransformer共享骨干，四通道临时强度头接原bond_head隐藏表征；输出sigmoid，按有效mask计算L1，每谱先平均有效槽再按谱平均。外部validation loss只用于预训练选点；不使用MiPD测试标签、旧NIST测试标签或其预测。记录未训练初始validation loss，以及仅由外部train拟合的通道常数预测器作为诊断，不据其调参。
+
+固定seed42、batch128、AdamW学习率1e−4、weight_decay1e−4、dropout0.1、5epoch warmup+cosine、最多60epoch；validation maskedL1严格最小者保存，patience10。共一个源预训练模型，不根据下游测试结果选择源epoch。保存可安全weights_only读取的源checkpoint及配置、CSV/manifest SHA、源train/val序列身份、history和epoch。
+
+### 下游三臂与公平比较
+
+1. ion4_control：原模型随机初始化，全部新增分支关闭。
+2. ion4_encoder：按白名单迁移经学习的共享序列/图表征，保留条件编码器、FiLM和分类读出的各划分初始化。
+3. ion4_bond_context：在encoder范围上增加理论特征投影和bond_head第一隐藏层，最终分类logit层仍保留各划分初始化。
+
+两候选共享同一个预训练checkpoint及SHA，迁移不加载optimizer。标准AA按token语义拷贝，B/O/X/Z、padding及未训练行保留目标初始化；位置编码仅迁移源训练覆盖位置。条件相关的未训练输入列不得随整矩阵静默覆盖，白名单和部分张量范围写入迁移provenance。未知键、形状、模式、SHA或序列隔离不符时失败。来源hash和provenance保存在每划分主/q checkpoint及输出文件，恢复训练与新预训练初始化不得混用。
+
+下游保持此前五组重复序列级80/20划分、内部val seed、group_uniform、q软标签、theory+FiLM、3GCN+2GAT、学习率/损失/调度及全部其他设置一致；有效键口径、固定0.5阈值、max_f1选点、独立earlystop min_delta=.001/patience25，不选择测试epoch或阈值。所有臂下游参数量一致。迁移与control的差包含额外数据和预训练计算；两迁移范围之间的差不混入新的源训练。
+
+主要判据沿用：相对同期control的五划分平均ΔF1≥.002（+0.20个百分点）、F1至少4/5严格提高、平均ΔAUC≥0、平均Δq-Brier≤0；使用未舍入值，差≤1e−12视为平局。附accuracy、Ex-F1调和口径、q_seq，报告mean±sample SD(ddof1)及逐划分配对差；两个候选同时通过时均保留待复验，不按本轮测试均值选择论文主模型。
+
+本项目多轮已参考相同测试划分，本轮属探索性方法筛选。五组共享序列，单初始化不能证明跨种子稳定，不做独立样本t检验。外部预训练排除旧NIST测试序列并不使同源谱库外测成为source-independent验证；未来描述须区分序列留出与来源独立。历史冻结论文值保持不变。
+
+### 数据构建与迁移实现核验
+
+独立目录`dataset/ion4_pretraining_v1`已完成唯一正式构建，原MSP 469,898条、481,006,710 bytes，SHA256=`1c1a8c7ba5299a0312b26f5eb5f8e4974c5a3339cdb4253869067b8e9b4102f1`。原候选8,674谱中额外排除1条I/L等质量序列，留下8,673谱、8,269序列，全部通过冻结的片段质量/强度QA。训练7,817谱/7,447序列，验证856谱/822序列；I/L身份三方交集为0。保留181,766个监督槽，51,804个中性丢失峰不参与监督。独立绝对质量误差median=2.08818、p95=10.22106、max=21.19655 ppm，全部≤50ppm；无非有限/非正强度、歧义、质量失败及同(seq,charge)重复。完整分布与排除计数见manifest.json/build_report.json。实际报告charge分布4+/5+/6+=7,920/706/47；这是高电荷库子集，不声称代表目标域分布。
+
+训练CSV SHA256=`43692bf8b86d3210100e6cf737315df3e7f9fe6db9a5dcafa1ddd4a8d6639efc`；验证CSV SHA256=`2933098b2d1171e3f4f8b95495db5094139cc79edbb85e95af31cc7e5cce6dbd`。数据构建13项合成测试、预训练7项CPU测试通过，正式manifest强化后相关2项复测通过。只读交叉审查确认y对齐、缺失槽mask、位置覆盖及序列隔离；另以全源精确文本查找确认不存在`Mods=0/`矛盾token，通用解析器的该边界不影响本固定源。
+
+encoder白名单为标准AA语义行、实际训练残基位置[0,max_train_length)、physicochemical_encoder、node_encoder融合层的AA/position/physico前128列及共享bias/LayerNorm、GCN和GAT。node融合最后64个条件输入列保持目标初始化；edge_encoder整体、global节点/投影、state/env、FiLM及最终bond_head.3不迁移。bond_context仅额外迁移bond_theory_proj与bond_head.0。位置不包含global节点或未被使用的padding位置。迁移前复核safe checkpoint、固定SHA、代码与数据manifest、全MiPD513排除集及实际下游各split序列，完成全部校验后才拷贝参数；两候选按run保存transfer_provenance.json并写入各类checkpoint。
+
+`project_goal`：实现并验证离子相对强度预训练及两个迁移范围，完成push/pull、pod训练与事件触发分析。`completion_status`：方案及数据固定，代码验证中，正式训练尚未提交。`target_kb`：kb:storage。`knowledge_used/source_records`：本节AlphaPeptDeep公共证据链。`created_files/modified_files`：新增pretraining模块、数据构建/训练/迁移测试脚本，最小接入train_graph_model.py并更新本台账；三份ion4配置在源模型选点后冻结相同checkpoint SHA。`unresolved_questions`：迁移收益与跨种子泛化，缺失注释和标准L→特殊D域差。`suggested_knowledge_writeback`：完成后可摄入实现与正/负结果，本轮不写知识库。
