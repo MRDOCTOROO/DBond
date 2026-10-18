@@ -1792,4 +1792,69 @@ storage公共来源沿用已核验的实体—资源链：Prosit `ent_000036→r
 
 实现验证包括：head关闭的兼容路径、λ0共享初始化/RNG/主输出与梯度、辅助梯度进入主干、条件归一/padding、checkpoint模式拒绝、完整sidecar绑定、普通/边缓存/全图缓存、test排除及history记录。核心8项及数据接入15项测试在pod通过；五份sidecar已全部passed。真实1222内部train前16组、417有效键的两臂生产Trainer AMP单步均通过：共享初始化/RNG配对、梯度/参数有限、主干及分类头更新，辅助头仅λ=0.1更新。GPU非确定性聚合时同初始化主loss曾差3.93e−5；仅在单步核验启用确定性算法后，两臂主/辅助loss完全一致，正式训练的原deterministic=false协议不变。检查回执`/mnt/pvc/graphtrans/target_ion12_work/ion12_cuda_smoke_result.json`；单步损失不作为效果结果。完成后按固定来源和选点核验再判读，不实时监控训练。
 
-`project_goal`：实现目标域12通道辅助监督，完成push/pull、配对训练与事件触发判读。`completion_status`：代码、预定方案、全部目标数据和生产CUDA检查完成，提交同步后启动两臂10次训练并等待完成事件。`target_kb`：kb:storage，只读。`knowledge_used/source_records`：本节Prosit/AlphaPeptDeep公共证据及项目PBCLA操作性定义。`created_files/modified_files`：ion12 dataset/loss/head、显式训练接入和两配置、专用测试、pod数据准备与完成分析脚本、本台账。`unresolved_questions`：目标域细分监督能否改善主任务、独立数据与初始化泛化。`suggested_knowledge_writeback`：可另行摄入完整实现与结果，本轮未写知识库。
+`project_goal`：实现目标域12通道辅助监督，完成push/pull、配对训练与事件触发判读。`completion_status`：代码和数据已同步，配对10次训练及完成分析均成功结束；结果未通过全部预定门槛，详见§15.30。`target_kb`：kb:storage，只读。`knowledge_used/source_records`：本节Prosit/AlphaPeptDeep公共证据及项目PBCLA操作性定义。`created_files/modified_files`：ion12 dataset/loss/head、显式训练接入和两配置、专用测试、pod数据准备与完成分析脚本、本台账。`unresolved_questions`：目标域细分监督能否改善主任务、独立数据与初始化泛化。`suggested_knowledge_writeback`：可另行摄入完整实现与结果，本轮未写知识库。
+
+
+## 15.30 目标域12通道辅助监督：第七轮配对结果（2026-10-18）
+
+完成：10/10 runs，自动完整性分析通过。训练开始 2026-10-18 21:44:19 +08:00，结束 2026-10-18 22:22:45 +08:00；后处理完成 2026-10-18 22:22:56 +08:00。代码 `265dd6f9e13498136b1fdaf01055b4e1f7113627`，GPU 0,1,2。
+
+Aux 相对同期 control 的平均 ΔF1 为 -0.031643 个百分点，严格获胜 3/5 划分；ΔAUC=-0.000027，Δq-Brier=-0.000493，Δq_seq=+0.004042。未满足全部四项预定门槛，本轮不采纳该候选。不自动替换冻结论文主表。
+
+按§15.29，两臂均为 GAT+theory/FiLM 和同一个 Linear(256,12) 辅助头，均1,709,237参数、随机初始化；唯一训练干预为 λ=0 / 0.1。辅助 BCE 先平均12通道与有效键、再按条件组平均；主损失保持有效键均值。离子目标不作为输入，eval 不运行辅助头；无预训练/迁移。主checkpoint严格按验证最大F1选取，测试阈值固定0.5。
+
+### 六项指标与配对差
+
+| 指标 | Control λ=0 | Aux λ=0.1 | 配对均值差 |
+|---|---:|---:|---:|
+| micro-F1 (%) | 79.838 ± 0.607 | 79.806 ± 0.625 | -0.032 |
+| 有效键 accuracy (%) | 80.013 ± 0.361 | 80.024 ± 0.329 | +0.011 |
+| ROC-AUC | 0.882399 ± 0.003525 | 0.882371 ± 0.003172 | -0.000027 |
+| Ex-F1 调和口径 (%) | 75.450 ± 0.284 | 75.436 ± 0.242 | -0.014 |
+| q_seq | 0.62385 ± 0.05932 | 0.62789 ± 0.04505 | +0.00404 |
+| q-Brier (越低越好) | 0.067226 ± 0.002230 | 0.066733 ± 0.002295 | -0.000493 |
+
+F1、accuracy、Ex-F1 差使用百分点，其余原尺度。Ex-F1在每划分先由谱平均P/R求调和均值，再汇总；accuracy仅有效键。q_seq只作描述，不替代四项门槛。
+
+| 划分 | Control F1 (%) | Aux F1 (%) | ΔF1 (pp) |
+|---|---:|---:|---:|
+| 1222 | 79.7812 | 79.2343 | -0.5469 |
+| 2252 | 79.7319 | 79.9856 | +0.2537 |
+| 3514 | 80.7799 | 80.7351 | -0.0448 |
+| 6072 | 79.8166 | 79.8510 | +0.0344 |
+| 9075 | 79.0803 | 79.2257 | +0.1453 |
+
+| 预定工程门槛 | 已验证判定 |
+|---|---|
+| 平均 ΔF1 ≥ +0.20 pp | 未通过 |
+| F1 严格改善至少 4/5 划分 | 未通过 |
+| 平均 ΔAUC ≥ 0 | 未通过 |
+| 平均 Δq-Brier ≤ 0 | 通过 |
+
+选中epoch/终止epoch（按1222/2252/3514/6072/9075）：control：1222=74/99 / 2252=84/109 / 3514=85/86 / 6072=80/105 / 9075=82/96；aux：1222=59/71 / 2252=84/109 / 3514=76/86 / 6072=83/88 / 9075=83/102。
+
+### 数据、验证与来源
+
+五份原训练集合并集为 477,669 谱 / 513 序列 / 9,552 条件组；各模型仅使用本划分训练白名单 sidecar。内部train/val序列隔离、两臂同fold split字节一致，外部test不加载辅助目标。
+
+并集manifest SHA256：`20ad4e2edf52a392794ebce0f1c847a6f7197f45715449dbaeaca30aa8bd5d8f`。每fold目标绑定如下：
+
+| 划分 | 条件组 | manifest SHA256 | targets SHA256 |
+|---|---:|---|---|
+| 1222 | 7,643 | `9b02237fc0da11f4b9dcb5fa3cd5f48dece4f9ed5eec9d880a5bf206abbc9625` | `8bc3508b0702c72d6b50b7cae4b394fda04dd410f67ff86e6bafb0d6e6310f87` |
+| 2252 | 7,721 | `ac969af3406809a5b6d4ef5c7fd3f73a7f96ef3f1a244501ec69e0c902ca5793` | `d3a7579c75268cde7cbcd7a8da36a5eabea1e7702cfa81d12114c1e0386e273d` |
+| 3514 | 7,649 | `3caf31e12e7593383ee61b0356fb89f4b0e124ed676384b6bbc413791970287e` | `2e187855cf266a53337dfe655bfb517bb99b2a70cddcf7b63bf10ade645698a8` |
+| 6072 | 7,650 | `e600b487b7ff5f0dc8edb7148fd2a83f5964e18ac5a63bd95a0ac7c1a17515a7` | `c9a806b900d00626917f2096d43dbe0d691c2476d34ad67326eb46a90344af1a` |
+| 9075 | 7,605 | `ce0572dcd2651bce83164bcc17f40593cdf1c446d2364b9f82f19b88f9f55fb9` | `88aa1a67d5dee1ec4d1edd5a1f8f4f1fb718c3d237d1ea399bd4144621e7f2b0` |
+
+实施验证：核心8项、数据接入15项（共23项），另有数据构建4项；这些不是新增训练重复。真实训练组上的两臂CUDA AMP单步检查通过，共享初始化/RNG配对；仅smoke启用确定性算法，正式训练仍采用原deterministic=false设置。smoke两份源文件与生产gitblob的差异已严格证明仅为CRLF→LF，其余24份源字节一致；不推广为一般代码等价。本次渲染未重跑测试、推理或独立统计复算。
+
+完成分析绑定launch/全部源码与配置/五fold目标SHA、10run终态、严格max-F1选点、主/辅助损失日志、主/q/periodic目标provenance及原始metric路径/版本化SHA；仅使用已验证decision与analysis_tables生成本节。
+
+结果根：`/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/ion12_batch/20261018_134417`。`integrity.json` SHA256=`2bce026ad3e638c85ae1dab3bf686ec0d27f9d538ea04b818b5c9e07da85c02e`；`decision.json` SHA256=`434be44576cdc1b0e5d0e3c9c188294cce5e7970367c824731c11f28a970371c`；`analysis_tables.md` SHA256=`07673ca7c2d060f10ed10f666de246822c0a80f8f50ea5164bb9ac83a96caed8`。完整输入/输出绑定见rendering_receipt.json。
+
+这五组是共享序列的重复序列级 80/20 随机划分，每划分仅一次初始化；此前已多轮查看同一测试集合，本轮属于探索性筛选。mean±样本 SD（ddof=1）与配对差均为描述性统计，工程门槛不等于统计显著性，不能据此断言跨种子稳定或对独立新序列、其他采集条件/数据集的泛化。离子目标是原峰匹配算法的操作性事件，不等同物理离子存在/不存在或化学断裂真值。
+
+运行补记：两个完成监听器共用固定临时文件，导致其中一个写入完成通知时出现FileNotFoundError；另一个监听器及正文渲染正常exit 0，训练和统计分析均已成功完成。仅修复后续使用的未冻结helper，使各写入者使用独立临时文件；pod针对性并发写及异常清理验证通过。冻结启动快照和全部分析/渲染结果SHA未变，没有重跑训练或复算统计。修复回执为`/mnt/pvc/graphtrans/ion12_ops/corrections/atomic_notification_race_20261018/correction_receipt.json`，SHA256=`c7df24cc2185b97bb9c265ad02f494fd145d0860dd7cbf79023203e5f2795ecf`。
+
+`project_goal`：完成目标域12通道辅助监督的配对训练与预定判读。`completion_status`：10次训练和完成分析已结束；本候选未通过全部门槛，冻结主表不变。`target_kb`：kb:storage，只读。`knowledge_used/source_records`：§15.29的Prosit/AlphaPeptDeep公开证据及PBCLA操作性定义。`unresolved_questions`：独立数据与初始化泛化。`suggested_knowledge_writeback`：可另行摄入工程结果，本轮未写知识库。
