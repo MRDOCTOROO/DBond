@@ -167,29 +167,39 @@ class IonIntensityTests(unittest.TestCase):
             parse_ion_targets('[[0,0,0,0]]', '[[0,0,0,0]]', 1)
 
     def test_forward_padding_batch_order_and_unknown_condition_invariance(self):
-        for global_node in (False, True):
-            config = tiny_config(global_node)
-            dataset = IonIntensityDataset(self.train_path, config)
-            model = IonIntensityModel(config).to(DEVICE).eval()
-            batch = self.batch(dataset=dataset)
-            with torch.no_grad():
-                actual = model(batch)
-                single = model(self.batch((0,), dataset=dataset))
-                reversed_batch = model(self.batch((1, 0), dataset=dataset))
-                changed = copy.deepcopy(batch)
-                for key in ("nces", "intensities", "rts", "secondary_envs", "env_vars"):
-                    changed[key].fill_(float("nan"))
-                changed["state_vars"][:, 2] = float("nan")
-                changed["labels"] = torch.full(actual.shape[:2], float("nan"), device=DEVICE)
-                changed["soft_labels"] = torch.ones(actual.shape[:2], device=DEVICE)
-                perturbed = model(changed)
-            self.assertEqual(actual.shape, (2, 6, 4))
-            self.assertTrue(torch.isfinite(actual).all())
-            self.assertEqual(int(torch.count_nonzero(actual[0, 2:])), 0)
-            torch.testing.assert_close(actual[0, :2], single[0], rtol=1e-4, atol=1e-6)
-            torch.testing.assert_close(actual, reversed_batch.flip(0), rtol=1e-4, atol=1e-6)
-            torch.testing.assert_close(actual, perturbed, rtol=0, atol=0)
-            self.assertIsNone(model._bond_hidden)
+        # TF32 GEMM rounding depends on batch shape. Compare structural invariance
+        # in FP32 without changing the production precision or AMP smoke test.
+        old_matmul = torch.backends.cuda.matmul.allow_tf32
+        old_cudnn = torch.backends.cudnn.allow_tf32
+        try:
+            torch.backends.cuda.matmul.allow_tf32 = False
+            torch.backends.cudnn.allow_tf32 = False
+            for global_node in (False, True):
+                config = tiny_config(global_node)
+                dataset = IonIntensityDataset(self.train_path, config)
+                model = IonIntensityModel(config).to(DEVICE).eval()
+                batch = self.batch(dataset=dataset)
+                with torch.no_grad():
+                    actual = model(batch)
+                    single = model(self.batch((0,), dataset=dataset))
+                    reversed_batch = model(self.batch((1, 0), dataset=dataset))
+                    changed = copy.deepcopy(batch)
+                    for key in ("nces", "intensities", "rts", "secondary_envs", "env_vars"):
+                        changed[key].fill_(float("nan"))
+                    changed["state_vars"][:, 2] = float("nan")
+                    changed["labels"] = torch.full(actual.shape[:2], float("nan"), device=DEVICE)
+                    changed["soft_labels"] = torch.ones(actual.shape[:2], device=DEVICE)
+                    perturbed = model(changed)
+                self.assertEqual(actual.shape, (2, 6, 4))
+                self.assertTrue(torch.isfinite(actual).all())
+                self.assertEqual(int(torch.count_nonzero(actual[0, 2:])), 0)
+                torch.testing.assert_close(actual[0, :2], single[0], rtol=1e-4, atol=1e-6)
+                torch.testing.assert_close(actual, reversed_batch.flip(0), rtol=1e-4, atol=1e-6)
+                torch.testing.assert_close(actual, perturbed, rtol=0, atol=0)
+                self.assertIsNone(model._bond_hidden)
+        finally:
+            torch.backends.cuda.matmul.allow_tf32 = old_matmul
+            torch.backends.cudnn.allow_tf32 = old_cudnn
 
     def test_real_backbone_and_ion_head_gradients_amp(self):
         model = IonIntensityModel(self.config).to(DEVICE).train()
