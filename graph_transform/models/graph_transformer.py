@@ -589,6 +589,17 @@ class GraphTransformer(nn.Module):
                     config.aa_embedding_dim, self.hidden_dim, self.sequence_adapter_type,
                     getattr(config, 'sequence_adapter_dim', 96),
                     getattr(config, 'sequence_conv_kernels', [3, 5, 7]))
+        self.bond_condition_mode = getattr(config, 'bond_condition_mode', 'none')
+        if self.bond_condition_mode not in ('none', 'concat', 'gated'):
+            raise ValueError(f'Unknown bond_condition_mode: {self.bond_condition_mode}')
+        if self.bond_condition_mode != 'none':
+            with torch.random.fork_rng(devices=[]):
+                from .condition_readout import BondConditionReadout
+                self.bond_condition_readout = BondConditionReadout(
+                    self.hidden_dim, self.bond_condition_mode,
+                    getattr(config, 'bond_condition_dim', 32),
+                    use_charge=self.use_state_features and bool(self.node_encoder.state_feature_mask[0]),
+                    use_nce=self.use_env_features and bool(self.node_encoder.env_feature_mask[0]))
     
     def _init_weights(self):
         """初始化模型权重"""
@@ -809,7 +820,17 @@ class GraphTransformer(nn.Module):
                 theory_flat = batch_data['bond_theory'][valid_bond_mask]
                 bond_feature_parts.append(self.bond_theory_proj(theory_flat.to(h_src.dtype)))
             bond_features = torch.cat(bond_feature_parts, dim=-1)
-            bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
+            if self.bond_condition_mode == 'none':
+                bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
+            else:
+                # Reuse the original Linear/ReLU activation before its dropout.
+                # Keep parameter names and the old dropout call/RNG unchanged.
+                bond_hidden = self.bond_head[1](self.bond_head[0](bond_features))
+                bond_logits_flat = self.bond_head[3](self.bond_head[2](bond_hidden)).squeeze(-1)
+                bond_sample_indices = torch.arange(batch_size, device=node_features.device)
+                bond_sample_indices = bond_sample_indices[:, None].expand_as(valid_bond_mask)[valid_bond_mask]
+                bond_logits_flat = bond_logits_flat + self.bond_condition_readout(
+                    bond_hidden, batch_data['charges'], batch_data['nces'], bond_sample_indices)
             if self.use_fragment_readout:
                 bond_logits_flat = bond_logits_flat + self.fragment_readout(
                     node_features, seq_lens_tensor, node_offsets, max_seq_len,

@@ -62,6 +62,8 @@ class ModelConfig:
         self.sequence_adapter_type = 'none'
         self.sequence_adapter_dim = 96
         self.sequence_conv_kernels = [3, 5, 7]
+        self.bond_condition_mode = 'none'
+        self.bond_condition_dim = 32
         # Deep supervision 辅助头：指定 GAT 层索引（0-based）的输出各接一个轻量
         # bond 预测头，仅训练期参与损失（eval/inference 不计算，不影响推理路径）。
         self.use_deep_supervision = False
@@ -432,7 +434,8 @@ class CheckpointManager:
         # checkpoints without serialized config metadata.
         saved_keys = set(checkpoint['model_state_dict'])
         requested_keys = set(model.state_dict())
-        for prefix in ('residue_chemistry.', 'fragment_readout.', 'sequence_adapter.'):
+        for prefix in ('residue_chemistry.', 'fragment_readout.', 'sequence_adapter.',
+                       'bond_condition_readout.'):
             saved_branch = {key for key in saved_keys if key.startswith(prefix)}
             requested_branch = {key for key in requested_keys if key.startswith(prefix)}
             if saved_branch != requested_branch:
@@ -442,6 +445,16 @@ class CheckpointManager:
                     f"missing={sorted(requested_branch - saved_branch)}, "
                     f"unexpected={sorted(saved_branch - requested_branch)}"
                 )
+
+        mode_key = 'bond_condition_readout.mode_code'
+        if mode_key in requested_keys:
+            saved_mode = checkpoint['model_state_dict'][mode_key]
+            requested_mode = model.state_dict()[mode_key]
+            if not torch.is_tensor(saved_mode) or not torch.equal(
+                    saved_mode.detach().cpu(), requested_mode.detach().cpu()):
+                raise ValueError(
+                    'Checkpoint bond_condition_mode mismatch: concat and gated '
+                    'share shapes but must use their original mode for inference')
 
         # strict=False：容忍结构差异（例如已移除未使用的 layer_norms 字段），打印缺失/多余键以便排查。
         missing, unexpected = model.load_state_dict(checkpoint['model_state_dict'], strict=False)

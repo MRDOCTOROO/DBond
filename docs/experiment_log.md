@@ -1142,3 +1142,54 @@ BiGRU：F1 −0.0312个百分点、accuracy −0.1964个百分点、AUC −0.001
 本地证据入口：`summary/summary.json`、`audit.json`（379项）、`decision.json`（预定规则逐项判定）、`summary/figures/seq2_paired_differences.png`及同名矢量PDF。图仅显示五组配对差及均值，不绘制独立样本置信区间；已查看最终PNG确认标签完整。论文表文件仅追加本轮实验附注，不替换历史冻结主表。
 
 `unresolved_questions`：跨初始化种子稳定性未复验；未验证更大/不同位置的序列编码器；离子级监督需要原始谱图、通道匹配和数据隔离；当前结论不构成性能上限估计。`suggested_knowledge_writeback`：可将这两轮完整负结果与checkpoint选择修正作为后续工程摄入候选；本次没有写回Valhalla知识库。
+
+## 15.21 读出阶段的条件融合：第三轮配对实验（2026-10-18）
+
+状态：用户要求继续尝试，沿用此前代码实现、本地push、pod pull、启动训练和完成后分析的授权；本节先固定方案与判据，实际验证/启动/结果将在完成后追加。知识库操作仍为project_work，仅使用kb:storage，只读。
+
+### 假设、对照与来源
+
+本轮检验charge/NCE在最终键判别特征上的直接非线性交互。现有FiLM位于GNN前，global/state/env/edge路径也已携带条件信息，因此不是增加新观测、不是声称原条件信号消失。上一轮序列CNN/GRU、此前fragment均值和固定化学分支均关闭，旧FiLM的历史初始化行为保持不变。
+
+新模块接在原bond_head第一层Linear→ReLU之后、原Dropout之前的256维键隐表示h上。令x=SiLU(Linear(256,32)(h))，c=Linear(32,32)(SiLU(Linear(2,32)([0.1×charge,0.01×NCE])))。concat与gated分支分别将[x,c]与[x×(1+tanh(c)),c]送入相同的Linear(64,32)→SiLU→Linear(32,1)，输出作为原logit的残差。门值范围为(0,2)，这是本项目对乘性交互的有界实现，不是原论文的原样复制。
+
+| 实验臂 | bond_condition_mode | 新增参数 | 比较问题 |
+|---|---|---:|---|
+| cond3_control | none | 0 | 同期原模型、重跑统一协议 |
+| cond3_concat | concat | 11,489 | 在读出时显式拼接条件是否有收益 |
+| cond3_gated | gated | 11,489 | 同容量下乘性调节是否优于拼接 |
+
+末层零初始化，不增加dropout；分支在legacy初始化结束后通过fork_rng构造，预期初始函数、共享权重和主随机状态与control一致，待测试核验。旧bond_head参数名和默认关闭路径不变。两种模式参数形状相同，checkpoint必须另行核对融合模式，禁止仅凭state_dict形状静默加载。
+
+知识库根目录 `G:/valhalla/valhalla_storage_share_root_20260830`，证据均为公开authoritative PDF的物理页码：
+
+| 实体→资源→文件 | 机器映射与原文定位 | 支持的事实及边界 |
+|---|---|---|
+| ent_000036→res_000151→file_000151 | `Wiki/Wiki_storage/.registry/machine/entity_resource_map.yaml`对应条目；`Library/public_resources/res_000151/authoritative.pdf`第11页，Fragmentation model—Model architecture | Prosit把序列latent与charge/NCE编码逐元素相乘后交给decoder。支持条件乘法融合的先例，没有单独证明本项目的晚期gated优于concat。 |
+| ent_000004→res_000119→file_000119 | 同机器map对应条目；`Library/public_resources/res_000119/authoritative.pdf`第10页，MS2 model | AlphaPeptDeep将序列/PTM与charge、NCE、instrument embedding拼接。将其改为DBond最终键读出残差是项目假设，不是该论文的实证结果。 |
+
+实体active；资源为local active、未excluded/blacklisted、registry lifecycle active、公共副本present。旧map缺map_id/evidence_type/locator，未伪造；原文证据位置以上述实际PDF核验补足。未读取source_copies、未写入知识库。
+
+只读检查上一轮control缓存的五份内部train.csv（仅读seq/charge/nce）：每份6098–6179条件组、328–330序列，均覆盖charge={2,3,4,5,6}与NCE={20,30,40,50}全部20个组合；每格至少271–282条序列（各划分的最小值），每序列条件数中位数20。这支持现有数据可训练条件交互，但不保证新分支有效；未用测试标签选择条件划分或函数形式。
+
+### 训练与结果判读预先约定
+
+三份配置：`graph_transform/config/pre_synthesis_theory_film_cond3_{control,concat,gated}.yaml`。沿用seq2_control全部数据/损失/优化参数：五组重复序列级80/20划分、内部验证划分与seed规则、q软标签、group_uniform、theory+FiLM、3GCN+2GAT、pre输入屏蔽、固定阈值0.5、max_f1主checkpoint与独立早停min_delta=0.001/patience=25。各臂仅改变声明的条件模块模式和实验/产物名称；两新臂相同参数量。使用空闲GPU、同臂每划分一个训练；不修改其他作业。
+
+主要指标为有效键micro-F1五组均值和相对同期control的逐划分差；附有效键accuracy、ROC-AUC、Ex-F1调和口径、q_seq与q-Brier，标准差ddof=1。候选筛选规则仍要求同时满足：平均ΔF1≥0.002（+0.20个百分点）、至少4/5划分ΔF1>1e-12、五划分平均ΔAUC≥0、五划分平均Δq-Brier≤0；全部使用未四舍五入值。差值绝对值≤1e-12视为平局。两臂同时通过时均列为待复验候选，不根据本次测试均值指定论文主模型。
+
+另报告gated−concat的逐划分差，作为同容量不同融合函数的描述性比较；各自−control同时包含增加容量/路径的影响，不能全归因为乘法。q-Brier指现有对条件组q的概率误差，并非纯校准误差。五组共享序列，不做独立样本t检验，不称统计显著；单划分单次初始化不能说明跨种子稳定。
+
+本项目多轮筛选已经参考相同测试划分，因此此轮即使预先固定方案，也属于探索性实验；正结果仍需不同初始化及未参与方法筛选的数据验证。训练仅凭内部val选checkpoint，不在test上选epoch、阈值或融合维数；历史冻结论文值保持不变。
+
+### 数据路线的可行性边界
+
+继续检查未发现现有MiPD训练CSV有可直接使用的离子通道；tb/fb/mb/fbr是true_multi的派生统计，不作为新监督来源。此前找到的完整外部MSP有较多序列已被NIST外测使用；按基础序列隔离后，剩余无修饰候选未通过既有质量一致性规则，不能为了预训练跳过质量检查。还有修饰肽候选，但须保留并解析PTM质量和峰注释、重新进行质量与序列隔离审计，不能简单删去修饰当成天然肽。故本轮先运行不需要新标签的条件融合；原始MiPD谱图路径已向用户询问，后续有完整数据再规划离子级监督。
+
+### 实现与验证记录
+
+`created_files`：`graph_transform/models/condition_readout.py`、`graph_transform/scripts/test_condition_readout.py`及三份cond3 YAML。`modified_files`：`graph_transform/models/graph_transformer.py`、`graph_transform/models/utils.py`、本台账。新增模块须验证初始等价/RNG、条件敏感性、屏蔽输入与观测字段不变性、异长/padding/global/批次顺序、梯度与AMP、checkpoint模式匹配；使用真实数据小批验证后才启动正式训练。现有FiLM本身未遵守charge/NCE ablation mask，本轮不混入其修复；新分支单独保证mask语义，完整模型掩码测试需关闭旧FiLM以隔离这一既有边界。
+
+本机Windows/Python3.12/PyTorch CPU：专用测试8项、既有架构回归13项、上一轮序列分支回归5项，共26项通过。覆盖上述行为、CPU BF16前后向、正式三配置仅声明差异及参数量。control=1,706,153参数，concat/gated均为1,717,642。模式标识写入state_dict，CheckpointManager在加载前检查，直接state_dict载入也会拒绝错误/缺失模式标识。git diff --check与四份变更Python语法解析通过；CUDA及真实数据单步验证待pod执行。
+
+`project_goal`：验证两个同容量的晚期条件融合方案并自动完成训练与结果判读。`completion_status`：方案、实现及本机验证完成，pod验证与训练待执行。`target_kb`：kb:storage。`unresolved_questions`：新融合是否有总体/跨划分收益、跨种子与新留出数据泛化、离子监督的数据来源。`suggested_knowledge_writeback`：完成审计后再建议是否摄入工程记录；本轮不自动写回知识库。
