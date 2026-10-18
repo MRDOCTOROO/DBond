@@ -1368,6 +1368,6 @@ Ex-F1 先在每划分内由 ex_precision/ex_recall 求调和均值再取均值�
 
 encoder白名单为标准AA语义行、实际训练残基位置[0,max_train_length)、physicochemical_encoder、node_encoder融合层的AA/position/physico前128列及共享bias/LayerNorm、GCN和GAT。node融合最后64个条件输入列保持目标初始化；edge_encoder整体、global节点/投影、state/env、FiLM及最终bond_head.3不迁移。bond_context仅额外迁移bond_theory_proj与bond_head.0。位置不包含global节点或未被使用的padding位置。迁移前复核safe checkpoint、固定SHA、代码与数据manifest、全MiPD513排除集及实际下游各split序列，完成全部校验后才拷贝参数；两候选按run保存transfer_provenance.json并写入各类checkpoint。
 
-迁移8项专用测试（含拒绝子场景）与原checkpoint selection 10项测试通过；正式数据经实际loader/driver serializer/transfer的无训练跨模块检查通过。首次CUDA测试中批次大小一致性受TF32影响：同seed关闭TF32后两类global设置最大差由1.01e−4/7.93e−5降至2.98e−8/5.96e−8，原严格容差通过。仅该一致性测试关闭并恢复TF32，不修改正式训练精度或放宽容差；其他CUDA测试首次均通过，完整修后检查记录随后追加。
+迁移8项专用测试（含拒绝子场景）与原checkpoint selection 10项测试通过；正式数据经实际loader/driver serializer/transfer的无训练跨模块检查通过。首次CUDA测试中批次大小一致性受TF32影响：同seed关闭TF32后两类global设置最大差由1.01e−4/7.93e−5降至2.98e−8/5.96e−8，原批次比较容差通过。仅该一致性测试关闭并恢复TF32，正式训练精度不改。随后同输入条件扰动测试的bitwise比较出现5.96e−8量级的CUDA scatter归约差：为此增加sanitized输入逐位相等、被屏蔽位精确0和同输入重复对照，CPU输出仍要求bitwise，CUDA输出按rtol1e−6/atol1e−7检验。其余6项CUDA测试通过；仅复测修订单项及真实数据单步，不重复已通过项目。
 
 `project_goal`：实现并验证离子相对强度预训练及两个迁移范围，完成push/pull、pod训练与事件触发分析。`completion_status`：方案及数据固定，代码验证中，正式训练尚未提交。`target_kb`：kb:storage。`knowledge_used/source_records`：本节AlphaPeptDeep公共证据链。`created_files/modified_files`：新增pretraining模块、数据构建/训练/迁移测试脚本，最小接入train_graph_model.py并更新本台账；三份ion4配置在源模型选点后冻结相同checkpoint SHA。`unresolved_questions`：迁移收益与跨种子泛化，缺失注释和标准L→特殊D域差。`suggested_knowledge_writeback`：完成后可摄入实现与正/负结果，本轮不写知识库。

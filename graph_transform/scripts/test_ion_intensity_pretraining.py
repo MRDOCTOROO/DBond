@@ -181,6 +181,7 @@ class IonIntensityTests(unittest.TestCase):
                 batch = self.batch(dataset=dataset)
                 with torch.no_grad():
                     actual = model(batch)
+                    repeated = model(batch)
                     single = model(self.batch((0,), dataset=dataset))
                     reversed_batch = model(self.batch((1, 0), dataset=dataset))
                     changed = copy.deepcopy(batch)
@@ -189,13 +190,23 @@ class IonIntensityTests(unittest.TestCase):
                     changed["state_vars"][:, 2] = float("nan")
                     changed["labels"] = torch.full(actual.shape[:2], float("nan"), device=DEVICE)
                     changed["soft_labels"] = torch.ones(actual.shape[:2], device=DEVICE)
+                    clean = model._sanitize_inputs(batch)
+                    clean_changed = model._sanitize_inputs(changed)
+                    for key in ("nces", "intensities", "rts", "secondary_envs", "env_vars", "state_vars"):
+                        self.assertTrue(torch.equal(clean[key], clean_changed[key]), key)
+                        masked_values = clean_changed[key][..., 2] if key == "state_vars" else clean_changed[key]
+                        self.assertTrue(torch.equal(masked_values, torch.zeros_like(masked_values)), key)
                     perturbed = model(changed)
                 self.assertEqual(actual.shape, (2, 6, 4))
                 self.assertTrue(torch.isfinite(actual).all())
                 self.assertEqual(int(torch.count_nonzero(actual[0, 2:])), 0)
                 torch.testing.assert_close(actual[0, :2], single[0], rtol=1e-4, atol=1e-6)
                 torch.testing.assert_close(actual, reversed_batch.flip(0), rtol=1e-4, atol=1e-6)
-                torch.testing.assert_close(actual, perturbed, rtol=0, atol=0)
+                # GPU scatter/index_add reductions can round differently even
+                # for identical inputs; the sanitized inputs above remain exact.
+                tolerance = {"rtol": 1e-6, "atol": 1e-7} if actual.is_cuda else {"rtol": 0, "atol": 0}
+                torch.testing.assert_close(actual, repeated, **tolerance)
+                torch.testing.assert_close(actual, perturbed, **tolerance)
                 self.assertIsNone(model._bond_hidden)
         finally:
             torch.backends.cuda.matmul.allow_tf32 = old_matmul
