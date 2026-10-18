@@ -607,6 +607,14 @@ class GraphTransformer(nn.Module):
                     getattr(config, 'bond_condition_dim', 32),
                     use_charge=self.use_state_features and bool(self.node_encoder.state_feature_mask[0]),
                     use_nce=self.use_env_features and bool(self.node_encoder.env_feature_mask[0]))
+
+        self.use_ion12_aux_head = bool(getattr(config, 'use_ion12_aux_head', False))
+        if self.use_ion12_aux_head:
+            # Do not change shared initialization or the subsequent dropout RNG.
+            with torch.random.fork_rng(devices=[]):
+                self.ion12_head = nn.Linear(self.hidden_dim, 12)
+                nn.init.xavier_uniform_(self.ion12_head.weight)
+                nn.init.zeros_(self.ion12_head.bias)
     
     def load_state_dict(self, state_dict, strict=True, assign=False):
         # Validate before PyTorch starts copying any shared tensors. This also
@@ -616,6 +624,10 @@ class GraphTransformer(nn.Module):
             validate_attention_checkpoint(self, state_dict)
         except ValueError as error:
             raise RuntimeError(str(error)) from error
+        saved_ion = {k for k in state_dict if k.startswith('ion12_head.')}
+        expected_ion = {k for k in self.state_dict() if k.startswith('ion12_head.')}
+        if saved_ion != expected_ion:
+            raise RuntimeError('Checkpoint ion12 auxiliary-head configuration mismatch')
         return super().load_state_dict(state_dict, strict=strict, assign=assign)
 
     def _init_weights(self):
@@ -837,17 +849,24 @@ class GraphTransformer(nn.Module):
                 theory_flat = batch_data['bond_theory'][valid_bond_mask]
                 bond_feature_parts.append(self.bond_theory_proj(theory_flat.to(h_src.dtype)))
             bond_features = torch.cat(bond_feature_parts, dim=-1)
-            if self.bond_condition_mode == 'none':
+            ion12_active = self.use_ion12_aux_head and self.training
+            if self.bond_condition_mode == 'none' and not ion12_active:
                 bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
             else:
                 # Reuse the original Linear/ReLU activation before its dropout.
                 # Keep parameter names and the old dropout call/RNG unchanged.
                 bond_hidden = self.bond_head[1](self.bond_head[0](bond_features))
                 bond_logits_flat = self.bond_head[3](self.bond_head[2](bond_hidden)).squeeze(-1)
-                bond_sample_indices = torch.arange(batch_size, device=node_features.device)
-                bond_sample_indices = bond_sample_indices[:, None].expand_as(valid_bond_mask)[valid_bond_mask]
-                bond_logits_flat = bond_logits_flat + self.bond_condition_readout(
-                    bond_hidden, batch_data['charges'], batch_data['nces'], bond_sample_indices)
+                if self.bond_condition_mode != 'none':
+                    bond_sample_indices = torch.arange(batch_size, device=node_features.device)
+                    bond_sample_indices = bond_sample_indices[:, None].expand_as(valid_bond_mask)[valid_bond_mask]
+                    bond_logits_flat = bond_logits_flat + self.bond_condition_readout(
+                        bond_hidden, batch_data['charges'], batch_data['nces'], bond_sample_indices)
+                if ion12_active:
+                    if self.last_aux_outputs is None:
+                        self.last_aux_outputs = {}
+                    # Flattened valid-bond order is identical to the main output.
+                    self.last_aux_outputs['ion12_logits'] = self.ion12_head(bond_hidden)
             if self.use_fragment_readout:
                 bond_logits_flat = bond_logits_flat + self.fragment_readout(
                     node_features, seq_lens_tensor, node_offsets, max_seq_len,

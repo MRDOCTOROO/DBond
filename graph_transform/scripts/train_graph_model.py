@@ -12,6 +12,8 @@ import argparse
 import re
 import yaml
 import logging
+import json
+import math
 import time
 from datetime import datetime
 from typing import Dict, Any, Optional, List
@@ -655,6 +657,16 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
     model_config = build_model_config(config)
 
     dataset_cls = CachedGraphDataset if data_config.get('cache_graphs', False) else GraphDataset
+    ion12_store = None
+    ion12_manifest = data_config.get('ion12_targets_manifest')
+    if ion12_manifest is not None:
+        if data_config.get('preprocessed', False) or data_config.get('augmentation', False):
+            raise ValueError('ion12 targets do not support preprocessed datasets or augmentation')
+        if not data_config.get('use_soft_labels', False):
+            raise ValueError('ion12 targets require condition-folded soft labels')
+        from data.ion12_dataset import Ion12TargetStore, Ion12GraphDataset, resolve_ion12_manifest
+        manifest_path, target_fold = resolve_ion12_manifest(ion12_manifest, data_config['train_csv_path'])
+        ion12_store = Ion12TargetStore(manifest_path, target_fold, data_config['train_csv_path'])
 
     def _build(csv_path, split, augmentation):
         """构造单个 split 的数据集；当 data.preprocessed=True 时走离线预处理路径。"""
@@ -686,7 +698,10 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
                 'rebuild_cache': data_config.get('rebuild_cache', False),
                 'cache_full_graphs': data_config.get('cache_full_graphs', False),
             })
-        return dataset_cls(**kwargs)
+        dataset = dataset_cls(**kwargs)
+        if ion12_store is not None and split in ('train', 'val'):
+            return Ion12GraphDataset(dataset, ion12_store)
+        return dataset
 
     # 训练数据集
     train_dataset = _build(data_config['train_csv_path'], 'train', data_config.get('augmentation', False))
@@ -745,6 +760,11 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
             val_dataset = _build(val_split_csv, 'val', False)
         else:
             val_dataset = None
+
+    if ion12_store is not None and val_dataset is not None:
+        overlap = set(train_dataset.data['seq'].astype(str)) & set(val_dataset.data['seq'].astype(str))
+        if overlap:
+            raise ValueError('ion12 train/validation sequences overlap')
     
     # 测试数据集
     test_dataset = None
@@ -1001,6 +1021,33 @@ def restore_checkpoint_selection(selection, checkpoint, resume_path, has_validat
     )
 
 
+def _reject_ion12_resume(config, resume):
+    enabled = (config.get('model', {}).get('use_ion12_aux_head', False)
+               or config.get('data', {}).get('ion12_targets_manifest') is not None)
+    if enabled and resume:
+        raise ValueError('ion12 resume is unsupported: target source and auxiliary weight must remain fixed')
+
+
+def _write_ion12_targets_provenance(train_dataset, config, checkpoint_dir):
+    if not config.get('model', {}).get('use_ion12_aux_head', False):
+        return None
+    source = getattr(train_dataset, 'ion12_provenance', None)
+    if not isinstance(source, dict):
+        raise ValueError('ion12 head requires a manifest-bound training dataset')
+    provenance = dict(source)
+    weight = float(config.get('loss', {}).get('ion12_aux_weight', 0.0))
+    if not math.isfinite(weight) or weight < 0:
+        raise ValueError('ion12 auxiliary weight must be finite and nonnegative')
+    provenance['ion12_aux_weight'] = weight
+    path = os.path.join(checkpoint_dir, 'ion12_targets_provenance.json')
+    temporary = path + '.tmp'
+    with open(temporary, 'w', encoding='utf-8') as stream:
+        json.dump(provenance, stream, ensure_ascii=False, indent=2, allow_nan=False)
+        stream.write('\n')
+    os.replace(temporary, path)
+    return provenance
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='训练图神经网络键级别二分类模型')
@@ -1026,6 +1073,7 @@ def main():
 
     # 加载配置
     config = load_config(args.config, args)
+    _reject_ion12_resume(config, args.resume)
     training_config = config['training']
     transfer_encoder_lr_scale = validate_transfer_optimizer_request(training_config, args.resume)
     transfer_enabled = False
@@ -1165,6 +1213,9 @@ def main():
         from pretraining.transfer import write_transfer_provenance
         write_transfer_provenance(transfer_provenance, training_config['checkpoint_dir'])
         transfer_extra_state = dict(transfer_extra_state or {}, pretrained_transfer_provenance=transfer_provenance)
+    ion12_provenance = _write_ion12_targets_provenance(train_dataset, config, training_config['checkpoint_dir'])
+    if ion12_provenance is not None:
+        transfer_extra_state = dict(transfer_extra_state or {}, ion12_targets_provenance=ion12_provenance)
     logger.info(f"Checkpoint dir: {training_config['checkpoint_dir']}")
     log_config = config.get('logging', {})
     tb_writers: Dict[str, SummaryWriter] = {}
@@ -1194,6 +1245,10 @@ def main():
     }
     if transfer_encoder_lr_scale < 1:
         history['learning_rate_pretrained_encoder'] = []
+    if config.get('model', {}).get('use_ion12_aux_head', False):
+        history['train_main_loss'] = []
+        history['train_ion12_aux_loss'] = []
+        history['ion12_aux_weight'] = []
     
     for epoch in range(start_epoch, epochs):
         logger.info(f"Epoch {epoch + 1}/{epochs}")
@@ -1211,6 +1266,10 @@ def main():
             train_writer.add_scalar('learning_rate', epoch_lr, epoch + 1)
         history['epoch'].append(epoch + 1)
         history['train_loss'].append(train_metrics.get('loss'))
+        if config.get('model', {}).get('use_ion12_aux_head', False):
+            history['train_main_loss'].append(train_metrics['main_loss'])
+            history['train_ion12_aux_loss'].append(train_metrics['ion12_aux_loss'])
+            history['ion12_aux_weight'].append(float(config.get('loss', {}).get('ion12_aux_weight', 0.0)))
         history['train_f1'].append(train_metrics.get('f1'))
         history['train_precision'].append(train_metrics.get('precision_micro', train_metrics.get('precision')))
         history['train_recall'].append(train_metrics.get('recall_micro', train_metrics.get('recall')))

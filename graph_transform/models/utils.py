@@ -65,6 +65,8 @@ class ModelConfig:
         self.sequence_conv_kernels = [3, 5, 7]
         self.bond_condition_mode = 'none'
         self.bond_condition_dim = 32
+        # Target-domain operational fragment matches, used only as training targets.
+        self.use_ion12_aux_head = False
         # Deep supervision 辅助头：指定 GAT 层索引（0-based）的输出各接一个轻量
         # bond 预测头，仅训练期参与损失（eval/inference 不计算，不影响推理路径）。
         self.use_deep_supervision = False
@@ -442,7 +444,7 @@ class CheckpointManager:
         saved_keys = set(checkpoint['model_state_dict'])
         requested_keys = set(model.state_dict())
         for prefix in ('residue_chemistry.', 'fragment_readout.', 'sequence_adapter.',
-                       'bond_condition_readout.'):
+                       'bond_condition_readout.', 'ion12_head.'):
             saved_branch = {key for key in saved_keys if key.startswith(prefix)}
             requested_branch = {key for key in requested_keys if key.startswith(prefix)}
             if saved_branch != requested_branch:

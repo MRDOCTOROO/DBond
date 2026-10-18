@@ -13,6 +13,7 @@ import logging
 import os
 import json
 import gc
+import math
 from typing import Dict, Any, List, Optional
 from tqdm import tqdm
 
@@ -49,6 +50,15 @@ class Trainer:
         self.device = device
         self.config = config or {}
         self.logger = logger or logging.getLogger(__name__)
+        self.ion12_enabled = bool(getattr(self.model, 'use_ion12_aux_head', False))
+        ion12_weight = self.config.get('loss', {}).get('ion12_aux_weight', None)
+        if self.ion12_enabled and ion12_weight is None:
+            raise ValueError('use_ion12_aux_head requires an explicit loss.ion12_aux_weight')
+        self.ion12_aux_weight = float(ion12_weight or 0.0)
+        if not math.isfinite(self.ion12_aux_weight) or self.ion12_aux_weight < 0:
+            raise ValueError('ion12_aux_weight must be finite and nonnegative')
+        if self.ion12_aux_weight > 0 and not self.ion12_enabled:
+            raise ValueError('Positive ion12_aux_weight requires use_ion12_aux_head')
         
         # 训练配置
         self.training_config = self.config.get('training', {})
@@ -112,6 +122,9 @@ class Trainer:
         total_dbond_style_loss = 0.0
         total_aux_bond_loss = 0.0
         total_peptide_aux_loss = 0.0
+        total_ion12_loss = 0.0
+        total_ion12_bond_loss = 0.0
+        total_main_loss = 0.0
         total_samples = 0
         num_batches = 0
         total_fetch_wait_time = 0.0
@@ -161,6 +174,10 @@ class Trainer:
             total_dbond_style_loss += loss_stats['dbond_style_loss'] * sample_count
             total_aux_bond_loss += loss_stats.get('aux_bond_loss', 0.0) * sample_count
             total_peptide_aux_loss += loss_stats.get('peptide_aux_loss', 0.0) * sample_count
+            if self.ion12_enabled:
+                total_ion12_loss += loss_stats['ion12_aux_loss'] * sample_count
+                total_ion12_bond_loss += loss_stats['ion12_aux_loss'] * valid_bond_count
+                total_main_loss += loss_stats['main_loss'] * valid_bond_count
             total_samples += sample_count
             num_batches += 1
             total_move_time += move_time
@@ -173,6 +190,9 @@ class Trainer:
             # 更新进度条（速度优化：loss.item() 是 GPU 同步点，仅在 log_interval
             # 的 batch 更新，避免每 batch 打断流水线；数值口径不变）
             avg_loss = total_weighted_loss / total_valid_bonds if total_valid_bonds > 0 else 0.0
+            if self.ion12_enabled and total_valid_bonds > 0 and total_samples > 0:
+                avg_loss += self.ion12_aux_weight * (
+                    total_ion12_loss / total_samples - total_ion12_bond_loss / total_valid_bonds)
             if batch_idx % self.training_config.get('log_interval', 10) == 0:
                 pbar.set_postfix({
                     'Loss': f'{loss.item():.4f}',
@@ -234,6 +254,11 @@ class Trainer:
         
         # 计算平均损失
         avg_loss = total_weighted_loss / total_valid_bonds if total_valid_bonds > 0 else 0.0
+        if self.ion12_enabled and total_valid_bonds > 0 and total_samples > 0:
+            # Main task retains its original bond-weighted epoch mean. Replace
+            # only the auxiliary part by its condition-weighted epoch mean.
+            avg_loss += self.ion12_aux_weight * (
+                total_ion12_loss / total_samples - total_ion12_bond_loss / total_valid_bonds)
         
         # 计算指标
         metrics = self.metrics_calculator.compute()
@@ -241,6 +266,9 @@ class Trainer:
         metrics['dbond_style_loss'] = total_dbond_style_loss / total_samples if total_samples > 0 else 0.0
         metrics['aux_bond_loss'] = total_aux_bond_loss / total_samples if total_samples > 0 else 0.0
         metrics['peptide_aux_loss'] = total_peptide_aux_loss / total_samples if total_samples > 0 else 0.0
+        if self.ion12_enabled:
+            metrics['ion12_aux_loss'] = total_ion12_loss / total_samples if total_samples > 0 else 0.0
+            metrics['main_loss'] = total_main_loss / total_valid_bonds if total_valid_bonds > 0 else 0.0
         if num_batches > 0:
             metrics['avg_fetch_wait_time'] = total_fetch_wait_time / num_batches
             metrics['avg_move_time'] = total_move_time / num_batches
@@ -415,6 +443,8 @@ class Trainer:
             self._ensure_finite_tensor(predictions, "predictions", batch_data)
             loss = self.criterion(predictions, self._soft_targets(batch_data, targets), weights=row_weights)
 
+        main_loss_value = float(loss.detach().item()) if self.ion12_enabled else 0.0
+
         # 辅助头损失（deep supervision + 肽级回归）：模型仅在 train 模式暂存输出；
         # bond 辅助头同样吃软目标（BCE/Focal/ASL 逐元素项天然支持 [0,1] 目标），
         # 加权训练时 bond 辅助头用同一份行级权重（与主损失同序展平）
@@ -451,6 +481,8 @@ class Trainer:
             'dbond_style_loss': float(dbond_style_loss.item()),
             'aux_bond_loss': aux_stats.get('aux_bond_loss', 0.0),
             'peptide_aux_loss': aux_stats.get('peptide_aux_loss', 0.0),
+            'ion12_aux_loss': aux_stats.get('ion12_aux_loss', 0.0),
+            'main_loss': main_loss_value,
             'ranking_loss': ranking_loss_val,
         }
 
@@ -535,10 +567,24 @@ class Trainer:
         直接返回原 loss（val loss 口径与无辅助头基线严格可比）。
         """
         aux = getattr(self.model, 'last_aux_outputs', None)
+        if self.ion12_enabled and self.model.training:
+            if not aux or 'ion12_logits' not in aux:
+                raise ValueError('Enabled ion12 training head did not return logits')
         if not aux:
             return loss, {}
         loss_config = self.config.get('loss', {})
         stats: Dict[str, float] = {}
+
+        ion12_logits = aux.get('ion12_logits')
+        if ion12_logits is not None:
+            if 'ion12_targets' not in batch_data:
+                raise ValueError('Enabled ion12 head requires verified training targets')
+            from .ion12_loss import ion12_condition_bce
+            ion12_loss = ion12_condition_bce(
+                ion12_logits, batch_data['ion12_targets'], batch_data.get('label_mask'))
+            if self.ion12_aux_weight > 0:
+                loss = loss + self.ion12_aux_weight * ion12_loss
+            stats['ion12_aux_loss'] = float(ion12_loss.detach().item())
 
         bond_logits = aux.get('bond_logits') or {}
         if bond_logits and batch_data.get('label_mask') is not None and targets.numel() > 0:

@@ -1754,3 +1754,42 @@ v1全量构建目标为原fold1222训练侧383,295行、410条序列、7,643个�
 
 
 `project_goal`：检验共享投影GATv2并完成10次训练及事件触发判读。`completion_status`：训练、审计与结果记录完成；GATv2未通过全部四项预定门槛，不列为待复验候选；冻结主表保持不变。`target_kb`：kb:storage。`knowledge_used/source_records`：§15.27的ent_000028/res_000143/file_000143公开证据。`created_files/modified_files`：attention_v2与测试、两配置、最小模型接入、审计/分析工具及实验台账。`unresolved_questions`：受限变体的跨种子和新数据泛化，及目标域离子监督适用性。`suggested_knowledge_writeback`：可另行摄入完整工程结果，本轮未写知识库。
+
+## 15.29 目标域12通道碎片匹配辅助监督：第七轮预定方案（2026-10-18）
+
+状态：用户继续优化授权下实现；本节在正式训练前固定目标、两臂、训练及判据。数据处理、数值核验和训练均在pod，本机仅编辑和同步。采用完成事件，不实时读取epoch状态。冻结论文主表不变。
+
+### 依据与研究问题
+
+storage公共来源沿用已核验的实体—资源链：Prosit `ent_000036→res_000151→file_000151`，`Library/public_resources/res_000151/authoritative.pdf`物理第11页，按位置/b-y/电荷组织碎片输出；AlphaPeptDeep `ent_000004→res_000119→file_000119`，同目录`res_000119/authoritative.pdf`物理第10页，MS2模型预测碎片通道及中性丢失（文件SHA见§15.25）。这些工作支持使用碎片层级监督的思路，并未验证本项目的12通道BCE或λ=0.1。此前结构小分支、受限GATv2及外部离子强度迁移没有通过全部采用门槛；不能据此证明监督粒度是唯一瓶颈。本轮检验同一目标域原始谱图提供的细分监督是否改善既有断键任务，不复制文献完整网络，不增加外部预训练。
+
+### 数据与目标
+
+原始来源为用户提供的`pep_521_mgf.tar.gz`，压缩字节SHA256=`1b2172d00f1aa39b13e8aa6e2e7ed4ab64b822aa685fded807b17e8733d3e805`。完整1222训练侧重构已经通过§15.28逐行核验。五份原训练CSV的身份盘点并集为477,669谱/513序列；其中383,295谱/410序列已覆盖，另94,374谱来自103个新增序列。同一序列在其出现的各训练划分中，完整记录集合、多重性和条件组计数完全一致。因此仅补匹配新增记录，按各划分自己的训练条件白名单导出sidecar；不读测试CSV参与目标构建。
+
+每条记录按原TITLE/name、SEQ、scan、charge、NCE、PEPMASS、RT精确身份匹配，并另核对前体强度。B/O/X/Z使用项目PBCLA质量表。峰先量化float32，再用float64搜索运算；仍为原nearest-peak、20ppm、eps=1e−6、最近峰强度>0规则。这是§15.28显式数值兼容方案，不声称恢复了历史NumPy环境。每条原训练谱的12槽OR必须与冻结true_multi逐键一致；不一致即停止，不改主标签或容差。
+
+固定通道顺序：`b1,b2,y1,y2,b1-H2O,b2-H2O,y1-H2O,y2-H2O,b1-NH3,b2-NH3,y1-NH3,y2-NH3`。这里预测的是原算法在导出峰表上的匹配事件，未匹配为操作性0，不能解释为物理离子不存在。一个峰满足多个槽时保留全部命中，不强加一对一匹配；padding以外不按损失或预测删槽。每个条件组 `(seq,charge,NCE)` 的辅助目标为逐键逐通道命中计数除以原group_n。主任务q继续使用原soft_multi，不用OR/独立性假设从通道均值重算q。
+
+五份sidecar分别绑定该fold原始train及folded train SHA，校验完整条件集合、group_n及原union计数。folded soft_multi原来只保留4位小数，因此与未舍入union频率的允许差固定为5.0001e−5；这只用于序列化一致性检查，不改动已存主任务q或逐谱OR的严格一致要求。加载器仅为该fold train及内部序列隔离val附加目标，test保持原行级数据且不加载辅助目标。内部train/val同序列不跨侧；各划分模型独立训练。
+
+### 两臂与唯一干预
+
+- control：原GAT+theory/FiLM随机初始化，增加同样的`Linear(256,12)`辅助头，λ=0。
+- aux：完全相同模型与初始化，λ=0.1。
+
+两者均1,709,237参数，比原主模型增加3,084。辅助头作用于原bond_head第一层Linear/ReLU之后、原Dropout之前的隐藏表示；不新增Dropout，初始化位于旧初始化之后并隔离RNG。主输出仍走原Dropout和二分类Linear；训练态辅助logits单独暂存，eval/inference不经过辅助头。原峰、离子目标、匹配强度都不作为模型输入。旧fragment/chemistry/sequence adapter/晚期条件/GATv2分支关闭，无预训练或冻结阶段。
+
+目标为 `L = L_main + 0.1 * mean_condition(mean_valid_bond(mean_12channels(BCEWithLogits(z_ion, q_ion))))`。主loss和原group_uniform权重语义不变（主loss仍按有效键平均）；辅助loss按条件组平均，不乘group_n。control仍计算同头输出/诊断loss，但λ=0时不把辅助loss接入反向图。每epoch单独记录主loss、辅助loss和λ；合成日志保留主有效键均值与辅助条件均值各自分母。辅助验证指标不用于选点；本轮不支持ion12 resume。
+
+### 固定训练与采用门槛
+
+两臂各跑1222/2252/3514/6072/9075五组重复序列级80/20划分，seed42配对、内部序列val20%、训练条件组折叠、测试行级不变。pre输入mask为state[charge,m/z,intensity]=[T,T,F]、env[NCE,scan]=[T,F]；R=5距离图、3GCN+2GAT、hidden256/H4、原15维理论特征和FiLM不变。batch128/drop_last、AdamW lr1e−4/wd1e−4、warmup40、cosine floor1e−5、最多300epoch、patience25/min_delta.001不变。主checkpoint严格验证max-F1，测试阈值固定0.5。λ=0.1只作为一个预先固定工程假设，不扫描网格或按测试结果调阈值/训练时长。
+
+相对本轮control，四项须同时满足：平均ΔF1≥.002（+0.20个百分点）、至少4/5划分严格F1获胜（差>1e−12）、平均ΔAUC≥0、平均Δq-Brier≤0。使用未舍入值，均值±样本SD(ddof=1)；Ex-F1仍为每划分谱平均P/R调和后再均值；报告全部六指标及配对差。仅表示待独立复验候选，不自动替换论文主表。五组划分共享序列、每划分一次初始化且多轮已查看相同测试数据，本轮是探索性筛选；不做独立样本t检验、不宣称显著性或跨种子稳定。
+
+数据准备已完成：`/mnt/pvc/graphtrans/target_ion12_work/ion12_five_train/manifest.json` SHA256=`20ad4e2edf52a392794ebce0f1c847a6f7197f45715449dbaeaca30aa8bd5d8f`，477,669条谱/513序列/9,552个并集条件；新增94,374条全部逐行OR一致，各fold侧条件数依次7,643/7,721/7,649/7,650/7,605，缺失0、原整数计数/n完全一致。训练只使用各自`fold_{fold}/targets.json`和manifest，不直接加载并集谱级SQLite。五份sidecar最大q差均为5e−5，符合既有四位序列化精度。
+
+实现验证包括：head关闭的兼容路径、λ0共享初始化/RNG/主输出与梯度、辅助梯度进入主干、条件归一/padding、checkpoint模式拒绝、完整sidecar绑定、普通/边缓存/全图缓存、test排除及history记录。核心8项及数据接入15项测试在pod通过；五份sidecar已全部passed。真实1222内部train前16组、417有效键的两臂生产Trainer AMP单步均通过：共享初始化/RNG配对、梯度/参数有限、主干及分类头更新，辅助头仅λ=0.1更新。GPU非确定性聚合时同初始化主loss曾差3.93e−5；仅在单步核验启用确定性算法后，两臂主/辅助loss完全一致，正式训练的原deterministic=false协议不变。检查回执`/mnt/pvc/graphtrans/target_ion12_work/ion12_cuda_smoke_result.json`；单步损失不作为效果结果。完成后按固定来源和选点核验再判读，不实时监控训练。
+
+`project_goal`：实现目标域12通道辅助监督，完成push/pull、配对训练与事件触发判读。`completion_status`：代码、预定方案、全部目标数据和生产CUDA检查完成，提交同步后启动两臂10次训练并等待完成事件。`target_kb`：kb:storage，只读。`knowledge_used/source_records`：本节Prosit/AlphaPeptDeep公共证据及项目PBCLA操作性定义。`created_files/modified_files`：ion12 dataset/loss/head、显式训练接入和两配置、专用测试、pod数据准备与完成分析脚本、本台账。`unresolved_questions`：目标域细分监督能否改善主任务、独立数据与初始化泛化。`suggested_knowledge_writeback`：可另行摄入完整实现与结果，本轮未写知识库。

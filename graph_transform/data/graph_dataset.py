@@ -474,6 +474,22 @@ class GraphDataLoader:
         if batch_soft_labels is not None:
             batch_data['soft_labels'] = batch_soft_labels
 
+        # Operational ion-channel targets stay separate from every model input.
+        has_ion12 = ['ion12_targets' in item for item in batch]
+        if any(has_ion12):
+            if not all(has_ion12):
+                raise ValueError('batch mixes samples with and without ion12_targets')
+            ion12 = []
+            for item in batch:
+                target = item['ion12_targets']
+                if (not isinstance(target, torch.Tensor) or not target.is_floating_point()
+                        or tuple(target.shape) != (int(item['seq_len']) - 1, 12)
+                        or not torch.isfinite(target).all()
+                        or not ((target >= 0) & (target <= 1)).all()):
+                    raise ValueError('invalid ion12_targets shape/value')
+                ion12.append(target)
+            batch_data['ion12_targets'] = pad_sequence(ion12, batch_first=True, padding_value=0.0)
+
         # 条件组权重（weighting_scheme 激活时逐行携带）；混合批视为数据错误
         weight_list = [item.get('sample_weight') for item in batch]
         has_weight = [w is not None for w in weight_list]
