@@ -1370,4 +1370,12 @@ encoder白名单为标准AA语义行、实际训练残基位置[0,max_train_leng
 
 迁移8项专用测试（含拒绝子场景）与原checkpoint selection 10项测试通过；正式数据经实际loader/driver serializer/transfer的无训练跨模块检查通过。首次CUDA测试中批次大小一致性受TF32影响：同seed关闭TF32后两类global设置最大差由1.01e−4/7.93e−5降至2.98e−8/5.96e−8，原批次比较容差通过。仅该一致性测试关闭并恢复TF32，正式训练精度不改。随后同输入条件扰动测试的bitwise比较出现5.96e−8量级的CUDA scatter归约差：为此增加sanitized输入逐位相等、被屏蔽位精确0和同输入重复对照，CPU输出仍要求bitwise，CUDA输出按rtol1e−6/atol1e−7检验。其余6项CUDA测试通过；仅复测修订单项及真实数据单步，不重复已通过项目。
 
-`project_goal`：实现并验证离子相对强度预训练及两个迁移范围，完成push/pull、pod训练与事件触发分析。`completion_status`：方案及数据固定，代码验证中，正式训练尚未提交。`target_kb`：kb:storage。`knowledge_used/source_records`：本节AlphaPeptDeep公共证据链。`created_files/modified_files`：新增pretraining模块、数据构建/训练/迁移测试脚本，最小接入train_graph_model.py并更新本台账；三份ion4配置在源模型选点后冻结相同checkpoint SHA。`unresolved_questions`：迁移收益与跨种子泛化，缺失注释和标准L→特殊D域差。`suggested_knowledge_writeback`：完成后可摄入实现与正/负结果，本轮不写知识库。
+### 外部预训练完成，固定下游初始化来源
+
+CUDA失败单项修复后通过，真实外部数据16谱完成AMP前向/反向/更新，梯度有限、骨干梯度非零、辅助头权重发生更新。源训练代码版本`57824da9a354cea613dee1bc2adb72c8a747a19d`，已push并在pod pull；运行目录`checkpoints/graph_transform/ion4_pretraining/20261018_082558`，北京时间16:26:00–16:28:19完成60epoch、3,720次optimizer更新，无AMP跳步。完成事件触发后才下载及审计，未读取逐轮进度。
+
+外部验证masked L1初始0.4048580051，train通道median常数预测器0.1765313008，严格最小点第56epoch为0.1228186764。该改善仅说明本辅助任务学到了信号，不构成MiPD分类提高的证据。权重、配置、代码、CSV/manifest、序列身份、逐轮选点与早停重放检查通过；本地审计见`F:/codexout/dbond_ion4_pretrain_results_20261018_082558/pretraining_audit.json`。
+
+两候选固定同一`best_ion_intensity.pt`，SHA256=`2754a6cf380a1a7cf7956a67a51969a0df9c48d7a62b078b2fdbf58732703e03`。新增三份`pre_synthesis_theory_film_ion4_{control,encoder,bond_context}.yaml`，由同期cond3_control克隆，模型字段完全一致；仅实验名/输出目录与三项pretrained初始化配置不同。下游测试结果未参与源checkpoint选择。
+
+`project_goal`：实现并验证离子相对强度预训练及两个迁移范围，完成push/pull、pod训练与事件触发分析。`completion_status`：外部预训练与源审计完成，下游三臂配置已固定，待CUDA单步及15次完整训练。`target_kb`：kb:storage。`knowledge_used/source_records`：本节AlphaPeptDeep公共证据链。`created_files/modified_files`：新增pretraining模块、数据构建/训练/迁移测试脚本、三份ion4配置，最小接入train_graph_model.py并更新本台账。`unresolved_questions`：迁移收益与跨种子泛化，缺失注释和标准L→特殊D域差。`suggested_knowledge_writeback`：完成后可摄入实现与正/负结果，本轮不写知识库。
