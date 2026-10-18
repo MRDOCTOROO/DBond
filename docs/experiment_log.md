@@ -1607,3 +1607,40 @@ Uniform 未通过全部四项门槛；Slow 未通过相对随机对照的全部�
 知识依据沿用§15.25预注册时核验的storage公共证据：`ent_000004 → .registry/machine/entity_resource_map.yaml:33 → res_000119 → file_000119`，公共`Library/public_resources/res_000119/authoritative.pdf`，SHA256=`e87e5b9ee3d363c1308828c85d50d73520761cd3efd75e820db3fde8d02f993b`；旧映射无map_id，未补造。AlphaPeptDeep物理p5–6/Fig.4支持天然肽/PTM的少样本MS2适配；p10未提供分层LR或冻结优于统一LR的直接证据。0.1倍率仍为本项目工程假设。高电荷注释源库、缺失槽mask及标准L→特殊D化学域差仍限制外推；同源NIST序列留出不构成来源独立验证。本轮未写回知识库。
 
 `project_goal`：检验完整迁移编码层0.1×LR并完成训练与事件触发判读。`completion_status`：三臂15次训练与审计完成；Uniform 未通过全部四项门槛；Slow 未通过相对随机对照的全部四项门槛，也未通过相对 Uniform 的 method_support。冻结主表保持不变。`target_kb`：kb:storage。`knowledge_used/source_records`：§15.25及上述AlphaPeptDeep公共证据。`created_files/modified_files`：lr5实现/测试/三配置、审计分析产物、本台账和本地论文附注。`unresolved_questions`：跨种子与新数据复验、域差，以及较慢AdamW更新与衰减的共同作用。`suggested_knowledge_writeback`：可另行摄入完整实现及正/负结果；本轮不写知识库。
+
+## 15.27 共享投影 GATv2 注意力第六轮预定方案（2026-10-18）
+
+用户要求借鉴storage文献继续实现和训练，沿用本地commit/push、pod pull、CUDA检查、提交训练及完成事件触发判读的授权。Valhalla project_work为base/kb:storage，只读知识库。本轮检验一个注意力机制变体，不联合改动输入特征、图半径、读出头、标签或预训练方式；两臂随机初始化，各五组重复序列级80/20划分，共10次训练。
+
+### 文献证据及工程假设
+
+依据《How Attentive are Graph Attention Networks?》(ICLR2022)。知识库机器身份链：`ent_000028 → .registry/machine/entity_resource_map.yaml → res_000143 → file_000143`，relation=derived_from；旧映射没有map_id，未补造。entity/local membership/resource均active、无excluded/blacklist；公共`G:/valhalla/valhalla_storage_share_root_20260830/Library/public_resources/res_000143/authoritative.pdf`为authoritative/present，实际SHA256与登记一致：`d316a7d23d735becf0c31d2b73c3426bb2aa5ec592705ce559d79a740abf53ec`。物理第5页§3.3、公式(6)–(7)说明将attention向量投影放到向量非线性之后，使邻居内容排序能依赖query。追溯记录`F:/codexout/attn6_kb_source.json`。
+
+现有score为`LeakyReLU(a_src·Wh_src + a_dst·Wh_dst + edge_bias_ij)`。已有边偏置、向量message gate及条件化节点，因此不能把整网完全等同原文的无边特征标准GAT；对相同关系特征，当前节点内容打分仍可分离。本轮选择保留原共享投影W的受限GATv2变体：`a_v2·LeakyReLU(Wh_src + Wh_dst) + edge_bias_ij`。保持W在source/target/message间共享；这是具体工程适配，不声称复现论文所有参数化或其完整通用表达力定理。标量edge bias移至内容分数之后，区别于旧版位于标量LeakyReLU内部；这个放置变化也是本轮机制干预的一部分。
+
+### 固定实验臂与实现范围
+
+| 实验臂 | 配置 | 模式 | 预期参数量 |
+|---|---|---|---:|
+| Control | `pre_synthesis_theory_film_attn6_control.yaml` | gat | 1,706,153 |
+| GATv2 shared projection | `pre_synthesis_theory_film_attn6_gatv2.yaml` | gatv2 | 1,705,641 |
+
+两份配置基于lr5随机control，移除所有pretrained/transfer设置；只在`model.gat_attention_type`、实验描述及输出/cache路径不同。仅替换两层GAT，保留3层GCN、256维/4头、既有图、理论15维特征、FiLM、边bias/message gate、残差/LayerNorm/dropout及原键级读出。先前fragment、chemistry、CNN/GRU及晚期条件分支均关闭，不使用源预训练checkpoint。
+
+每层原`a[4,128,1]`换为`a_v2[4,64,1]`，共少512参数；无新增死参数，不以扩容解释收益。拟新增`models/attention_v2.py`并最小接入GraphTransformer/ModelConfig，旧`attention_layers.py`保持不变。先执行与旧层一致的构造，再在隔离RNG上下文内创建新的attention向量；核验同seed其余共享权重及后续随机状态一致。默认gat不新增state键，gatv2独有顶层int64标量`gat_attention_mode_code=1`；配置与状态模式不一致、缺失/伪造标志或混合a/a_v2应在加载前拒绝。正式参数量和测试结果以完成记录为准。
+
+### 数据、训练与判据
+
+五组划分固定为1222/2252/3514/6072/9075，各自内部序列级验证划分与seed规则不变。训练使用condition-group folded q软标签和group_uniform，测试保留逐谱标签。pre-synthesis运行时mask为state[T,T,F]、env[T,F]，不输入观测intensity/scan/RT。训练batch128、AdamW学习率1e−4、weight_decay1e−4、warmup40+cosine/min_lr1e−5、最多300epoch、patience25/min_delta.001。主checkpoint严格按验证F1最大保存；早停仍独立按min_delta；测试阈值固定0.5。所有optimizer保持原legacy路径，不新增分组LR。
+
+采用门槛沿用：相对同期Control，五划分平均ΔF1≥.002（+0.20个百分点），至少4/5严格F1提高，平均ΔAUC≥0，平均Δq-Brier≤0；四项须同时满足。使用未舍入数值，差≤1e−12为平局。报告有效键F1/accuracy/AUC、逐fold由ex_precision/ex_recall调和得到的Ex-F1、q_seq和q-Brier，mean±样本SD(ddof1)及逐划分配对差。不调测试阈值、源epoch、划分子集或事后采用门槛。五次划分共享序列且本轮单初始化，多轮方法筛选已参考同一测试划分；不作独立样本显著性或跨种子稳定性结论。即使通过，也只列待复验候选，不自动替换冻结主表。
+
+### 执行、核验及后续数据可用性
+
+先完成CPU针对性测试（真实排名反转、旧默认兼容与共享初始化、梯度/掩码、保存加载模式拒绝），再push/pod pull后做两臂各一次真实fold1222前16行的production Trainer AMP更新。完整批次仅在CUDA检查通过后提交。启动绑定源码/配置SHA与gitrev，选择空闲GPU，不干预其他任务。完成等待使用inotify终态事件，不逐epoch读取训练日志；完成后审计完整10份输出、配对train/val、选点、模式和参数形状，再分析、作图及独立CSV复算。
+
+为后续目标域12通道监督，只读盘点本地项目和pod `/mnt/pvc/graphtrans`（跳过环境、缓存、模型/输出目录）目前仅找到PBCLA示例MGF；未找到完整目标域MGF/mzML。此有限范围结果不证明其他目录或压缩包中不存在原始数据。记录`F:/codexout/attn6_target_spectrum_inventory.json`。用户随后提供原始压缩包`D:/UserData/Downloads/pep_521_mgf.tar.gz`并授权本地检查/解压或传pod；正在独立核验归档内容和谱图字段。本轮attention协议保持不变，不从现有二元CSV伪造离子标签。
+
+实现核验：6项专用CPU测试和1项旧条件分支checkpoint回归均通过；实际参数量为1,706,153/1,705,641，共享参数及构造后CPU RNG逐位配对。独立代码审阅通过，原attention_layers.py未变。真实CUDA单步和正式训练待同步后执行。
+
+`project_goal`：验证文献启发的共享投影GATv2变体，完成同步、10次训练及事件触发判读。`completion_status`：两臂协议与配置已固定，实现和验证中，尚未提交正式训练。`target_kb`：kb:storage。`knowledge_used/source_records`：本节ent_000028/res_000143/file_000143公共PDF身份、SHA和物理第5页。`created_files/modified_files`：新attention_v2模块与专用测试、两份attn6配置、最小模型接入、实验台账及外部审计/完成等待工具。`unresolved_questions`：该受限动态打分是否改善目标域泛化，跨种子/新数据稳定性，以及完整目标域原始谱图位置。`suggested_knowledge_writeback`：完成后可另行摄入工程实现及正负结果，本轮不写知识库。

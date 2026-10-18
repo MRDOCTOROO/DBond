@@ -32,6 +32,7 @@ class ModelConfig:
         # 网络结构配置
         self.num_gcn_layers = 3
         self.num_gat_layers = 2
+        self.gat_attention_type = 'gat'
         
         # 序列配置
         self.max_seq_len = 100
@@ -111,6 +112,8 @@ class ModelConfig:
         # 更新配置
         if config_dict:
             self.update_config(config_dict)
+        from .attention_v2 import validate_attention_type
+        validate_attention_type(self.gat_attention_type)
     
     def update_config(self, config_dict: Dict):
         """更新配置参数"""
@@ -427,6 +430,10 @@ class CheckpointManager:
             device = next(model.parameters()).device
         
         checkpoint = torch.load(filepath, map_location=device, weights_only=False)
+
+        if hasattr(model, 'gat_attention_type'):
+            from .attention_v2 import validate_attention_checkpoint
+            validate_attention_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
 
         # New experimental branches must never be silently dropped/left random
         # by strict=False. Legacy checkpoints have neither prefix and remain

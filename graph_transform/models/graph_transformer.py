@@ -449,6 +449,8 @@ class GraphTransformer(nn.Module):
         
         self.config = config
         self.hidden_dim = config.hidden_dim
+        from .attention_v2 import validate_attention_type
+        self.gat_attention_type = validate_attention_type(getattr(config, 'gat_attention_type', 'gat'))
         self.use_state_features = getattr(config, 'use_state_features', True)
         self.use_env_features = getattr(config, 'use_env_features', True)
         self.bond_use_edge_repr = getattr(config, 'bond_use_edge_repr', True)
@@ -498,8 +500,13 @@ class GraphTransformer(nn.Module):
         ])
         
         # 图注意力层
+        attention_layer = GraphAttentionLayer
+        if self.gat_attention_type == 'gatv2':
+            from .attention_v2 import GraphAttentionV2Layer
+            attention_layer = GraphAttentionV2Layer
+            self.register_buffer('gat_attention_mode_code', torch.tensor(1, dtype=torch.int64))
         self.gat_layers = nn.ModuleList([
-            GraphAttentionLayer(config) for _ in range(config.num_gat_layers)
+            attention_layer(config) for _ in range(config.num_gat_layers)
         ])
 
         # 辅助头（deep supervision / 肽级）：仅训练前向计算并暂存于 last_aux_outputs，
@@ -601,6 +608,16 @@ class GraphTransformer(nn.Module):
                     use_charge=self.use_state_features and bool(self.node_encoder.state_feature_mask[0]),
                     use_nce=self.use_env_features and bool(self.node_encoder.env_feature_mask[0]))
     
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        # Validate before PyTorch starts copying any shared tensors. This also
+        # protects direct loads and repeated attempts after a rejected load.
+        from .attention_v2 import validate_attention_checkpoint
+        try:
+            validate_attention_checkpoint(self, state_dict)
+        except ValueError as error:
+            raise RuntimeError(str(error)) from error
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
+
     def _init_weights(self):
         """初始化模型权重"""
         for module in self.modules():
