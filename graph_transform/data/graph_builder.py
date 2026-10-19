@@ -185,10 +185,11 @@ class GraphBuilder:
             max_j = min(seq_len - 1, i + max_seq_dist)
             for j in range(i + 1, max_j + 1):
                 seq_dist = j - i
-                # folding_factor 为无出处的启发式（非物理推导，无消融支撑）。在主模型
-                # max_distance=6 下恰为 no-op：包含集恰为 |i-j|<=5，且 d<=5 的
-                # int(distance)==d（距离嵌入取到精确整数）；唯一可见差异是 d=2 落入
-                # remote 边型（2.337>2）。其余 max_distance 的有效半径非直觉：
+                # folding_factor 为无出处的历史启发式（非物理推导，无消融支撑）。
+                # 主模型 max_distance=6 的有效语义是 |i-j|<=5、整数距离为 d、
+                # 仅 d=1 属于 near 边型。它并非可直接删除的 no-op：删除后会新增
+                # d=6 连边，并将 d=2 从 remote 改成 near。为保持历史对照保留算法。
+                # 其余 max_distance 的有效半径非直觉：
                 # md3/4/5/7/8 -> R=2/3/4/8/9（d=7,8 的嵌入距离均被抹为 6）。
                 # 论文按有效语义描述：|i-j|<=5 连边，相邻边独占边型。
                 folding_factor = 1.0 + 0.2 * np.sin(seq_dist * 0.5)
@@ -321,10 +322,10 @@ class GraphBuilder:
             edge_distances.extend([0, 0])
     
     def _predict_distance_matrix(self, seq_len: int) -> np.ndarray:
-        """预测氨基酸距离矩阵"""
+        """历史序列距离启发式矩阵；非物理距离，当前连边路径不调用。"""
         distance_matrix = np.zeros((seq_len, seq_len))
         
-        # 简化的距离预测（实际应用中应使用更复杂的方法）
+        # 仅为历史启发式表达，不代表已验证的空间距离预测。
         for i in range(seq_len):
             for j in range(seq_len):
                 if i == j:
@@ -332,7 +333,7 @@ class GraphBuilder:
                 else:
                     # 基于序列距离的简化预测
                     seq_dist = abs(i - j)
-                    # 添加一些随机性来模拟蛋白质折叠
+                    # 确定性的历史正弦项，无物理折叠依据。
                     folding_factor = 1.0 + 0.2 * np.sin(seq_dist * 0.5)
                     distance_matrix[i, j] = seq_dist * folding_factor
         
