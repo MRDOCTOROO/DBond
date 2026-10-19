@@ -103,6 +103,10 @@ def analyze(info):
     summary = json.loads((root / 'summary/summary.json').read_text())
     if manifest['gitrev'] != info['gitrev'] or len(manifest['arms']) != 2:
         raise RuntimeError('Batch manifest/revision mismatch')
+    if (any(file_sha(config(a)) != info['configs'][a] for a in ARMS)
+            or file_sha(TARGETS / 'preparation.json') != info['target_preparation_sha256']
+            or any(file_sha(TARGETS / f'fold_{f}/manifest.json') != info['target_manifests'][f] for f in FOLDS)):
+        raise RuntimeError('Config or target provenance changed after launch')
     source_changed = [p for p, h in info['source_sha256'].items() if file_sha(REPO / p) != h]
     if source_changed:
         raise RuntimeError(f'Training source changed: {source_changed}')
@@ -141,6 +145,10 @@ def analyze(info):
             provenance[arm['name']][fold] = {k: prov[k] for k in ('val_rows', 'val_sequences', 'source_sha256', 'split_seed')}
             if file_sha(prov['split_val_csv']) != json.loads((OPS / 'smoke.json').read_text())['folds'][fold]['val_sha256']:
                 raise RuntimeError('Runtime validation rows differ from preflight')
+            if arm == manifest['arms'][1]:
+                state_proof = json.loads(paths[0].with_name('four_state_provenance.json').read_text())
+                if state_proof['manifest_sha256'] != info['target_manifests'][fold]:
+                    raise RuntimeError('Runtime joint targets differ from launched manifest')
     names = list(data)
     if provenance[names[0]] != provenance[names[1]]:
         raise RuntimeError('Paired validation source/split differs')

@@ -25,6 +25,8 @@ from training.four_state_loss import four_state_cross_entropy
 from training.loss_functions import BinaryBondLoss
 from training.trainer import Trainer
 from train_graph_model import load_config, create_datasets, create_optimizer, create_scheduler
+import train_graph_model as training_script
+training_script.logger = logging.getLogger('four_state_test')
 from train_5fold import make_fold_config, _stable_fold_seed
 
 FOLDS = ('1222', '2252', '3514', '6072', '9075')
