@@ -1858,3 +1858,13 @@ F1、accuracy、Ex-F1 差使用百分点，其余原尺度。Ex-F1在每划分�
 运行补记：两个完成监听器共用固定临时文件，导致其中一个写入完成通知时出现FileNotFoundError；另一个监听器及正文渲染正常exit 0，训练和统计分析均已成功完成。仅修复后续使用的未冻结helper，使各写入者使用独立临时文件；pod针对性并发写及异常清理验证通过。冻结启动快照和全部分析/渲染结果SHA未变，没有重跑训练或复算统计。修复回执为`/mnt/pvc/graphtrans/ion12_ops/corrections/atomic_notification_race_20261018/correction_receipt.json`，SHA256=`c7df24cc2185b97bb9c265ad02f494fd145d0860dd7cbf79023203e5f2795ecf`。
 
 `project_goal`：完成目标域12通道辅助监督的配对训练与预定判读。`completion_status`：10次训练和完成分析已结束；本候选未通过全部门槛，冻结主表不变。`target_kb`：kb:storage，只读。`knowledge_used/source_records`：§15.29的Prosit/AlphaPeptDeep公开证据及PBCLA操作性定义。`unresolved_questions`：独立数据与初始化泛化。`suggested_knowledge_writeback`：可另行摄入工程结果，本轮未写知识库。
+
+### 15.31 结构精简预注册（2026-10-19，待结果）
+
+假设：重复的读出表示及过深的图传播可能增加小样本方差；这是假设，尚无因果证据。
+四臂为 `pre_synthesis_slim_{control,lean_head,shallow,no_global}.yaml`：
+control 原始 3GCN+2GAT；lean_head 只保留 h_i、h_j 和理论特征（同时删除读出块的 edge/diff/product，图层仍使用边）；shallow 改为 2GCN+1GAT；no_global 仅关闭全局节点。每臂独立随机初始化，不迁移权重；相同种子不代表不同结构的共享参数逐位相同。读出和深度臂是模块级删减，不能区分模块内部各成分的贡献。
+沿用原始优化器、学习率、早停、5 组重叠的序列级80/20划分与 padding-free 评价；对照重新训练，不与历史最优直接作配对。
+提升标准沿用 ΔF1≥0.002、至少4/5划分严格提高、ΔAUC≥0、ΔqBrier≤0，四项均需满足。
+另预注册描述性压缩筛选：参数减少≥10%、平均F1下降≤0.001、至少4/5划分F1下降≤0.002、平均AUC下降≤0.001、平均qBrier增加≤0.001。此标准只产生待独立确认的压缩候选，不等于统计学非劣效证明，也不替换冻结主表。所有臂全部报告，不按最佳测试臂修改阈值。
+训练在 pod；完成/失败事件后统一分析，不读取 epoch 进度。
