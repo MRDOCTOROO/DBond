@@ -1945,3 +1945,7 @@ pod核验启动源码SHA、配置快照SHA、原始metric绑定SHA，并从保�
 代码检查确认 `1+0.2*sin(d/2)` 仍在 `data/graph_builder.py` 的活动距离连边路径及一个当前未被调用的历史矩阵方法中。没有在模型激活中发现该正弦项；GAT的 `leaky_relu_slope=0.2` 是另一个参数。本次仅修正文档注释：旧注释将正弦项描述为no-op不严谨。现有md6预期等价于显式R5、仅相邻边为near；直接删除公式且保留md6会增加距离6的边，同时改变距离2的边型。是否完全等价、变化边数及实际模型层数/AMP更新将在pod审计并保存 `pure_gat_ops/distance_audit.json` 和 `smoke.json`。本批保持原连边算法，避免把骨干和图定义混为一个干预；不为0.2补造物理来源。
 
 训练与数值验证仅pod。helper使用独立 `/mnt/pvc/graphtrans/pure_gat_ops/`，绑定源码/配置SHA，成功或失败写匹配的launch.json和terminal.json，由已有dbond完成提醒读取；不反复查看epoch。结果尚待训练，不能预判纯GAT是否改善。
+
+启动与审计回执：源码 `77dfd4694cb3031713ccf94a1426607788b7a374`，批次 `checkpoints/graph_transform/pure_gat_batch/20261019_082206`，GPU 0/1/2，已提交后台worker，尚无效果结论。pod成功smoke显示control为1,706,153参数、3GCN+2GAT；gat5为1,315,253参数、0GCN+5GAT。两臂各完成真实16组、417有效键的生产Trainer CUDA AMP单步，全部GAT层前向执行且梯度非零、参数更新；有效输入屏蔽、图与标签一致。此次只改配置和注释，未改模型计算；不因单步损失差异判断优劣。
+
+图审计在长度1–32及全局节点开/关的64种情形逐张量验证：活动历史公式与显式R5/相邻独占near规则的edge_index、edge_types、edge_distances、bond_edge_map完全一致，含边缓存路径。长度32且含全局节点时，直接删除公式并保持阈值6会使有向边354→406（新增52条距离6的边），另外60条距离2的已有边改变类型。模型模块未发现sin调用；两处sin位于graph_builder的活动连边和历史矩阵方法。回执 `/mnt/pvc/graphtrans/pure_gat_ops/{distance_audit,smoke,launch}.json`；本地小回执 `F:/codexout/dbond_pure_gat_launch_20261019/`。smoke首次外层SSH包装的退出码转义有误，但pod内smoke已成功保存passed收据；未重复计算，launcher独立核验收据、源码提交和配置SHA后成功提交。完成/失败事件仍由原dbond提醒扫描，不读取epoch进度。
