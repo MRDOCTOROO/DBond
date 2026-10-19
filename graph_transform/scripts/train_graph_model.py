@@ -657,6 +657,19 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
     model_config = build_model_config(config)
 
     dataset_cls = CachedGraphDataset if data_config.get('cache_graphs', False) else GraphDataset
+    four_state_store = None
+    state_manifest = data_config.get('four_state_targets_manifest')
+    state_enabled = model_config.bond_head_type == 'four_state_mlp'
+    if bool(state_manifest) != state_enabled:
+        raise ValueError('four_state_mlp requires exactly one manifest-bound training target source')
+    if state_enabled:
+        if data_config.get('preprocessed', False) or data_config.get('augmentation', False) or not data_config.get('use_soft_labels', False):
+            raise ValueError('four-state targets require unaugmented, folded soft-label graph training')
+        from data.four_state_dataset import FourStateStore, FourStateDataset
+        four_state_store = FourStateStore(state_manifest, data_config['train_csv_path'])
+    validation_source = data_config.get('validation_source_csv_path')
+    if validation_source and (data_config.get('val_csv_path') or data_config.get('preprocessed', False)):
+        raise ValueError('Full-row internal validation requires an internal sequence split and graph datasets')
     ion12_store = None
     ion12_manifest = data_config.get('ion12_targets_manifest')
     if ion12_manifest is not None:
@@ -699,6 +712,9 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
                 'cache_full_graphs': data_config.get('cache_full_graphs', False),
             })
         dataset = dataset_cls(**kwargs)
+        if four_state_store is not None and split == 'train':
+            return FourStateDataset(dataset, four_state_store,
+                require_all=os.path.abspath(csv_path) == os.path.abspath(data_config['train_csv_path']))
         if ion12_store is not None and split in ('train', 'val'):
             return Ion12GraphDataset(dataset, ion12_store)
         return dataset
@@ -729,6 +745,12 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
             is_val = full_frame['seq'].astype(str).isin(val_seqs)
             train_frame = full_frame[~is_val].reset_index(drop=True)
             val_frame = full_frame[is_val].reset_index(drop=True)
+            validation_provenance = None
+            if validation_source:
+                from data.row_validation import restore_row_validation, file_sha
+                val_frame, validation_provenance = restore_row_validation(full_frame, val_seqs, validation_source)
+                validation_provenance['folded_source_sha256'] = file_sha(data_config['train_csv_path'])
+                validation_provenance['split_seed'] = split_seed
 
             overlap = len(set(train_frame['seq'].astype(str)) & set(val_frame['seq'].astype(str)))
             if overlap != 0:
@@ -758,7 +780,13 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
 
             train_dataset = _build(train_split_csv, 'train', data_config.get('augmentation', False))
             val_dataset = _build(val_split_csv, 'val', False)
+            if validation_provenance is not None:
+                validation_provenance['split_val_csv'] = os.path.abspath(val_split_csv)
+                validation_provenance['split_train_csv'] = os.path.abspath(train_split_csv)
+                val_dataset.row_validation_provenance = validation_provenance
         else:
+            if validation_source:
+                raise ValueError('Full-row validation requires a positive validation_split')
             val_dataset = None
 
     if ion12_store is not None and val_dataset is not None:
@@ -812,6 +840,8 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset,
         persistent_workers=persistent_workers,
         prefetch_factor=prefetch_factor,
     )
+    eval_kwargs = dict(common_kwargs)
+    eval_kwargs['batch_size'] = config.get('evaluation', {}).get('batch_size', training_config['batch_size'])
 
     # 训练数据加载器
     train_loader = loader_cls(
@@ -828,7 +858,7 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset,
             dataset=val_dataset,
             shuffle=False,
             drop_last=False,
-            **common_kwargs,
+            **eval_kwargs,
         )
 
     # 测试数据加载器
@@ -838,7 +868,7 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset,
             dataset=test_dataset,
             shuffle=False,
             drop_last=False,
-            **common_kwargs,
+            **eval_kwargs,
         )
     
     logger.info(
@@ -1216,6 +1246,13 @@ def main():
     ion12_provenance = _write_ion12_targets_provenance(train_dataset, config, training_config['checkpoint_dir'])
     if ion12_provenance is not None:
         transfer_extra_state = dict(transfer_extra_state or {}, ion12_targets_provenance=ion12_provenance)
+    for name, dataset in (('four_state_provenance', train_dataset), ('row_validation_provenance', val_dataset)):
+        provenance = getattr(dataset, name, None)
+        if provenance is not None:
+            path = os.path.join(training_config['checkpoint_dir'], name + '.json')
+            with open(path, 'w', encoding='utf-8') as stream:
+                json.dump(provenance, stream, ensure_ascii=False, indent=2, allow_nan=False)
+            transfer_extra_state = dict(transfer_extra_state or {}, **{name: provenance})
     logger.info(f"Checkpoint dir: {training_config['checkpoint_dir']}")
     log_config = config.get('logging', {})
     tb_writers: Dict[str, SummaryWriter] = {}

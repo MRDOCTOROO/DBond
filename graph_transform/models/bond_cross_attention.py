@@ -4,7 +4,7 @@ from torch import nn
 
 
 def validate_bond_head_type(value):
-    if value not in ('concat_mlp', 'cross_attention_mlp'):
+    if value not in ('concat_mlp', 'cross_attention_mlp', 'four_state_mlp'):
         raise ValueError(f'Unknown bond_head_type: {value!r}')
     return value
 
@@ -56,6 +56,15 @@ class BondCrossAttentionHead(nn.Module):
 
 def validate_bond_head_checkpoint(model, state_dict):
     """Prevent strict=False from silently leaving a fusion head uninitialized."""
+    joint_key = 'four_state_mode_code'
+    joint = model.bond_head_type == 'four_state_mlp'
+    if (joint_key in state_dict) != joint:
+        raise ValueError('Checkpoint four-state bond head mismatch')
+    if joint:
+        marker = state_dict[joint_key]
+        if (not torch.is_tensor(marker) or marker.dtype != torch.int64
+                or marker.shape != torch.Size([]) or marker.item() != 4):
+            raise ValueError('Invalid four-state checkpoint state order marker')
     key = 'bond_head_mode_code'
     if key in state_dict:
         marker = state_dict[key]

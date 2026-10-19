@@ -475,6 +475,18 @@ class GraphDataLoader:
             batch_data['soft_labels'] = batch_soft_labels
 
         # Operational ion-channel targets stay separate from every model input.
+        has_four_state = ['four_state_targets' in item for item in batch]
+        if any(has_four_state):
+            if not all(has_four_state):
+                raise ValueError('batch mixes samples with/without four-state targets')
+            state_targets = []
+            for item in batch:
+                target = item['four_state_targets']
+                if target.shape != (len(item['sequence']) - 1, 4):
+                    raise ValueError('four-state sample target length mismatch')
+                state_targets.append(target)
+            batch_data['four_state_targets'] = pad_sequence(state_targets, batch_first=True, padding_value=0.0)
+
         has_ion12 = ['ion12_targets' in item for item in batch]
         if any(has_ion12):
             if not all(has_ion12):

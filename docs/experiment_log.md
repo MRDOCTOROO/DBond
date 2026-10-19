@@ -1978,3 +1978,18 @@ pod读取完成报告并独立从保存CSV复算16项臂×指标的均值、样�
 输入相同前提也需修正：原始7,643组中7,554组的pep_mass并非常数；组内范围中位0.00193846、P90=0.00476394、P99=0.01159223，最大2.83969814，原始唯一(seq,charge,nce,pep_mass)为356,417。多数差异很小且模型将pep_mass除以2000，可能是测量抖动；是否存在有用信息或异常尚未验证，不能直接据此归因。组内q字符串均一致（0组变化）。`fold_condition_groups.fold_frame`关于pep_mass恒定的历史文档假设不适用于当前实测数据，故真实行级输入不能严格视为完全相同；本轮未修代码/重做数据。
 
 目前结论：压缩行数本身不等于丢失监督，但当前折叠流程同时涉及权重、实际输入保留、训练动力学和验证选点，尚无因果证据排除这些影响。建议先保持架构和训练折叠方式，只恢复内部验证序列的全量谱图；随后固定同一序列划分、全量验证与优化步预算，对比逐谱hard BCE、折叠+spectrum及折叠+group_uniform。此处仅记录诊断，不视为用户授权启动新批次，未开新训练，不修改冻结主表。
+
+
+### 15.41 完整谱图内部验证 + 四状态主预测头：配对实验协议（2026-10-19）
+
+用户明确授权本地实现、commit/push、pod pull、提交训练及完成提醒，覆盖本地AGENTS旧有“只交命令不启动”规则。本轮在原版3GCN+2GAT、FiLM、输入拼接位置编码、全局节点、理论特征及原1536→256 MLP基础上比较binary control与four_state_mlp，不叠加纯GAT、交叉注意力、位置相加或其他近轮结构；保留历史距离连边公式，不改变PBCLA标签定义或峰过滤。
+
+共同验证修复：内部序列划分仍按原稳定fold seed产生，训练继续使用对应折叠条件组和group_uniform（有效键平均，并非纯序列平均）。验证改为dataset/5fold_soft中该外部训练集合、该内部验证序列的全部原始谱图，保留逐谱pep_mass及hard true_multi。恢复前逐条件核验外部训练seq/key集合、group_n、hard均值与四位soft_multi、组内q及文件SHA；外部测试不参与内部验证。两臂均使用完整验证的padding-free micro F1选严格最大值best_model.pt；min_delta=0.001仅用于patience=25早停。每臂最多300 epochs、batch128、lr1e-4、AdamW wd1e-4、warmup40、cosine300，与原训练预算配置一致；实际停止epoch及优化步数可能因早停而异，不宣称实际步数强制相等。eval batch512、worker4、persistent_workers启用为两臂相同吞吐设置，训练drop_last原样、验证/测试drop_last=False。按臂/fold隔离缓存与落盘split。
+
+四状态标签从已逐谱OR核验的ion12只读SQLite恢复，状态固定[none,b_only,y_only,both]；b/y各OR其1+/2+及无/H2O/NH3六通道。逐谱状态>0须等于历史union_bits；逐条件四状态计数之和须等于n，正状态和须与本fold原训练CSV的true_multi整数计数完全一致。每份sidecar只导出该fold训练白名单；并集缓存不作为模型输入，不导出测试监督。没有对现有峰歧义或电荷通道另行过滤，以避免改变任务。目标保留原折叠q的四位序列化值：p0=1-q，三个正状态按原整数计数在正样本中的比例分配q；原始精确计数及序列化误差一并审计。
+
+四状态头仅将原MLP最后Linear(256,1)替换为Linear(256,4)，q-logit=logsumexp(L1:L3)-L0，所以sigmoid(q-logit)=1-softmax(L)[0]。训练使用有效键均值的soft四类CE，等价于原union BCE加上按q加权的正状态条件CE；不再是独立ion12辅助头，无额外loss权重搜索。初始化在原版随机初始化完成后，令L0=0、L1=L2=L3=z-log(3)，保持初始union q、共享骨干参数及后续随机流一致（浮点误差允许范围由pod核验）；没有迁移已训练权重。新checkpoint有模式/状态顺序标记，跨头加载在参数复制前拒绝。val/test只依赖序列和预设/现有条件输入，不加载四状态目标。
+
+5组重叠序列级随机80/20划分，两臂共10次训练，固定test阈值0.5，沿用有效键mask与谱图平均P/R调和F1。提升筛选仍为平均ΔF1≥0.002、至少4/5 F1严格提高、平均ΔAUC≥0、平均ΔqBrier≤0，全部满足才列待确认候选；不是统计显著性门槛。只与本轮修正验证的control对照，不用历史原版替代同轮对照；两臂实验不能单独估计验证修复的因果收益。冻结论文主表保持原数值，尚无本轮效果结论。
+
+所有数据恢复、QA、CUDA smoke及训练在pod。代码含prepare_four_state_targets.py、test_four_state.py、four_state_ops.py；后者在后台训练终止后复算保存CSV的小报告并输出配对launch.json/terminal.json，接入既有dbond完成提醒。运行中不反复读epoch/状态，不自动追加实验。正式启动需pod的全量标签QA、五划分配对验证SHA、loss/mask/初始化/跨模式加载与CUDA更新核验通过。

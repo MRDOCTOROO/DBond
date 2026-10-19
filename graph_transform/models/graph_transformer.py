@@ -637,6 +637,15 @@ class GraphTransformer(nn.Module):
                 nn.init.xavier_uniform_(self.pre_attention_position_proj.weight)
             self.register_buffer('position_embedding_mode_code', torch.tensor(1, dtype=torch.int64))
 
+        self.last_four_state_logits = None
+        if self.bond_head_type == 'four_state_mlp':
+            if (self.bond_condition_mode != 'none' or self.use_ion12_aux_head
+                    or self.use_fragment_readout or self.use_deep_supervision or self.use_peptide_aux_head):
+                raise ValueError('four_state_mlp requires the original backbone without optional readout/auxiliary heads')
+            from .four_state import replace_binary_output
+            self.bond_head[3] = replace_binary_output(self.bond_head[3])
+            self.register_buffer('four_state_mode_code', torch.tensor(4, dtype=torch.int64))
+
         if self.bond_head_type == 'cross_attention_mlp':
             if self.bond_condition_mode != 'none' or self.use_ion12_aux_head:
                 raise ValueError('cross_attention_mlp does not support condition readout or ion12 auxiliary head')
@@ -878,6 +887,7 @@ class GraphTransformer(nn.Module):
         # 构建相邻键的特征并预测断裂（簿记已在层前计算，直接复用）
         # predictions 容器固定 float32；AMP 下 bond_logits 在赋值处用 .to() 对齐。
         predictions = torch.zeros(batch_size, max_bonds, device=node_features.device)
+        self.last_four_state_logits = None
 
         if max_bonds > 0:
             h_src = node_features[bond_src]
@@ -897,7 +907,13 @@ class GraphTransformer(nn.Module):
             bond_features = (bond_feature_parts if self.bond_head_type == 'cross_attention_mlp'
                              else torch.cat(bond_feature_parts, dim=-1))
             ion12_active = self.use_ion12_aux_head and self.training
-            if self.bond_condition_mode == 'none' and not ion12_active:
+            if self.bond_head_type == 'four_state_mlp':
+                from .four_state import union_logit
+                state_logits = self.bond_head(bond_features).float()
+                bond_logits_flat = union_logit(state_logits)
+                if self.training:
+                    self.last_four_state_logits = state_logits
+            elif self.bond_condition_mode == 'none' and not ion12_active:
                 bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
             else:
                 # Reuse the original Linear/ReLU activation before its dropout.

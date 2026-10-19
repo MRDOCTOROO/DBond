@@ -79,6 +79,15 @@ def make_fold_config(base_config, fold_id: str, fold_dir: str, cv_root: str, fol
     config["data"]["train_csv_path"] = train_csv
     config["data"]["test_csv_path"] = test_csv
     config["data"]["val_csv_path"] = None
+    template = config['data'].get('cache_dir_template')
+    if template:
+        config['data']['cache_dir'] = template.format(fold=fold_id)
+    template = config['data'].get('validation_source_csv_template')
+    if template:
+        config['data']['validation_source_csv_path'] = template.format(fold=fold_id)
+    template = config['data'].get('four_state_targets_manifest_template')
+    if template:
+        config['data']['four_state_targets_manifest'] = template.format(fold=fold_id)
     config["training"]["checkpoint_dir"] = checkpoint_root
     config.setdefault("logging", {})["log_dir"] = os.path.join(run_root, "logs")
     config["logging"]["tensorboard_log_dir"] = os.path.join(run_root, "tensorboard")
