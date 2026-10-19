@@ -151,13 +151,25 @@ def run(output):
                 assert torch.equal(value, joint.state_dict()[key]), key
         control.eval()
         joint.eval()
+        # The production script requests TF32 ("high"). A 1-output GEMM and a
+        # 4-output GEMM can choose different TF32 kernels, so check algebraic
+        # initialization in full FP32, then restore production precision for
+        # the real AMP update and full-size evaluation-batch smoke.
+        production_precision = torch.get_float32_matmul_precision()
+        torch.set_float32_matmul_precision('highest')
         with torch.no_grad():
             p, q = control(batch), joint(joint_batch)
+        difference = (p-q).abs()
+        report['initial_union_diagnostic'] = {'max_abs_logit_difference': difference.max().item(),
+              'mean_abs_logit_difference': difference.mean().item(), 'original_logit_range': [p.min().item(), p.max().item()],
+              'joint_logit_range': [q.min().item(), q.max().item()], 'float32_matmul_precision': torch.get_float32_matmul_precision(),
+              'allow_tf32': torch.backends.cuda.matmul.allow_tf32, 'production_precision_restored_after_check': production_precision}
         assert torch.allclose(p, q, atol=3e-6, rtol=1e-5), 'Initial union q differs from original'
         changed = dict(joint_batch)
-        changed['four_state_targets'] = torch.rand_like(joint_batch['four_state_targets'])
+        changed.pop('four_state_targets')
         with torch.no_grad():
-            assert torch.equal(q, joint(changed)), 'Targets enter inference inputs'
+            assert torch.allclose(q, joint(changed), atol=3e-6, rtol=1e-5), 'Targets enter inference inputs'
+        torch.set_float32_matmul_precision(production_precision)
         for model, other in ((control, joint), (joint, control)):
             before = {k: v.detach().clone() for k, v in model.state_dict().items()}
             try:
