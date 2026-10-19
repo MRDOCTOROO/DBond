@@ -1910,3 +1910,11 @@ control 原始 3GCN+2GAT；lean_head 只保留 h_i、h_j 和理论特征（同�
 此前仅在pod生成终态和报告，没有建立应用回到对话的提醒，导致用户必须追问。现已创建原对话heartbeat `dbond`（名称DBond训练完成提醒），每60分钟仅检查完成/失败收据，不读epoch进度。扫描器 `/mnt/pvc/graphtrans/dbond_completion_events.py`，去重状态 `/mnt/pvc/graphtrans/dbond_completion_notified.json`。已手工验证终态扫描、当前两轮已报告登记、空队列；应用确认ACTIVE。尚未声称验证过后续定时主动投递；本机应用与SSH可用是运行条件。
 
 后续本对话批次的launcher应在独立 `/mnt/pvc/graphtrans/*_ops/` 目录写 `launch.json`（含root）和 `terminal.json`（含同一root及completed/failed，成功含result/report，失败含error）；root必须位于 `/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/` 下。旧运行文件保留，不复用已完成路径。heartbeat只对scan返回的新终态读小报告并汇报，随后ack去重；无新结果不发进度，禁止自动启动新实验。此机制是每小时补查终态，不是pod事件直接唤醒应用。
+
+### 15.36 融合头交叉注意力后接MLP（2026-10-19，预注册）
+
+用户指定更换逐肽键融合头。原版底座保持3GCN+2GAT、输入端拼接位置编码、FiLM、全局节点、理论特征；不叠加位置相加或结构删减。配置 `pre_synthesis_cross_fusion_{control,cross_attention}.yaml`。对照为原6路拼接1536→256→1。实验为每条有效键的2个端点表示h_i/h_j作为Q，4路e_ij、h_i−h_j、h_i*h_j、theory_proj作为K/V，四头交叉注意力（hidden256，dropout0.1）后做端点残差加LayerNorm，保留有序左右两路展开512，再接MLP512→256→ReLU→Dropout0.1→1。K/V含学习式来源类型向量；Q长度2、K/V长度4，注意力只在该肽键内部的特征来源间计算，不跨键或跨样本。不是用单个K/V的退化注意力，也不是对全部6路做自注意力。
+
+旧配置默认为concat_mlp，不改变原计算、参数名或初始化；交叉头在旧版初始化后替换临时拼接头并使用独立RNG上下文，因此两臂同种子时骨干共享初始化逐位一致，拼接头不留在实验参数中。checkpoint记录头类型、注意力头数和K/V来源，跨结构/语义错配应在加载修改权重前失败。当前不与旧condition_readout或ion12辅助头叠加。
+
+每臂5组重复序列级80/20划分，从头训练，预算、优化器、早停和F1选点一致；指标去除padding，Ex-F1沿用谱图P/R调和口径。预注册采用门槛沿用平均ΔF1≥0.002、F1≥4/5严格改善、平均ΔAUC≥0、平均ΔqBrier≤0，四项均需通过，探索性结果不替换冻结主表。计算和核验仅pod；完成/失败后自动汇总，用已启用heartbeat检查终态提醒，不读取epoch进度。

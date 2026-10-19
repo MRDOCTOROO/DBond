@@ -67,6 +67,8 @@ class ModelConfig:
         self.sequence_conv_kernels = [3, 5, 7]
         self.bond_condition_mode = 'none'
         self.bond_condition_dim = 32
+        self.bond_head_type = 'concat_mlp'
+        self.bond_cross_attention_heads = 4
         # Target-domain operational fragment matches, used only as training targets.
         self.use_ion12_aux_head = False
         # Deep supervision 辅助头：指定 GAT 层索引（0-based）的输出各接一个轻量
@@ -120,6 +122,8 @@ class ModelConfig:
         validate_attention_type(self.gat_attention_type)
         from .position_encoding import validate_position_mode
         validate_position_mode(self.position_embedding_mode)
+        from .bond_cross_attention import validate_bond_head_type
+        validate_bond_head_type(self.bond_head_type)
     
     def update_config(self, config_dict: Dict):
         """更新配置参数"""

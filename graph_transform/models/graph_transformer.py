@@ -462,6 +462,8 @@ class GraphTransformer(nn.Module):
         self.bond_use_edge_repr = getattr(config, 'bond_use_edge_repr', True)
         self.bond_use_diff_feature = getattr(config, 'bond_use_diff_feature', True)
         self.bond_use_product_feature = getattr(config, 'bond_use_product_feature', True)
+        from .bond_cross_attention import validate_bond_head_type
+        self.bond_head_type = validate_bond_head_type(getattr(config, 'bond_head_type', 'concat_mlp'))
         
         # 编码器
         self.node_encoder = NodeEncoder(config)
@@ -634,15 +636,31 @@ class GraphTransformer(nn.Module):
                     config.position_embedding_dim, self.hidden_dim, bias=False)
                 nn.init.xavier_uniform_(self.pre_attention_position_proj.weight)
             self.register_buffer('position_embedding_mode_code', torch.tensor(1, dtype=torch.int64))
+
+        if self.bond_head_type == 'cross_attention_mlp':
+            if self.bond_condition_mode != 'none' or self.use_ion12_aux_head:
+                raise ValueError('cross_attention_mlp does not support condition readout or ion12 auxiliary head')
+            roles = [i for i, enabled in enumerate((self.bond_use_edge_repr,
+                self.bond_use_diff_feature, self.bond_use_product_feature, self.use_theory_features)) if enabled]
+            # Replace the temporary legacy head only after legacy initialization.
+            # This preserves all backbone tensors and the subsequent RNG stream;
+            # the discarded concat head is absent from parameters/checkpoints.
+            with torch.random.fork_rng(devices=[]):
+                from .bond_cross_attention import BondCrossAttentionHead
+                self.bond_head = BondCrossAttentionHead(self.hidden_dim,
+                    getattr(config, 'bond_cross_attention_heads', 4), config.dropout, roles)
+            self.register_buffer('bond_head_mode_code', torch.tensor(1, dtype=torch.int64))
     
     def load_state_dict(self, state_dict, strict=True, assign=False):
         # Validate before PyTorch starts copying any shared tensors. This also
         # protects direct loads and repeated attempts after a rejected load.
         from .attention_v2 import validate_attention_checkpoint
         from .position_encoding import validate_position_checkpoint
+        from .bond_cross_attention import validate_bond_head_checkpoint
         try:
             validate_attention_checkpoint(self, state_dict)
             validate_position_checkpoint(self, state_dict)
+            validate_bond_head_checkpoint(self, state_dict)
         except ValueError as error:
             raise RuntimeError(str(error)) from error
         saved_ion = {k for k in state_dict if k.startswith('ion12_head.')}
@@ -876,7 +894,8 @@ class GraphTransformer(nn.Module):
                 # 行序与 bond_src/bond_dst 的行主序展开一致
                 theory_flat = batch_data['bond_theory'][valid_bond_mask]
                 bond_feature_parts.append(self.bond_theory_proj(theory_flat.to(h_src.dtype)))
-            bond_features = torch.cat(bond_feature_parts, dim=-1)
+            bond_features = (bond_feature_parts if self.bond_head_type == 'cross_attention_mlp'
+                             else torch.cat(bond_feature_parts, dim=-1))
             ion12_active = self.use_ion12_aux_head and self.training
             if self.bond_condition_mode == 'none' and not ion12_active:
                 bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
