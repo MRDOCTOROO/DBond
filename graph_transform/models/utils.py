@@ -49,6 +49,8 @@ class ModelConfig:
         self.env_feature_name = 'rt'
         self.env_feature_scale = 0.01
         self.use_position_embedding = True
+        # Legacy input concatenation, or add positions once before the first GAT.
+        self.position_embedding_mode = 'input_concat'
         self.use_physicochemical_features = True
         self.use_state_features = True
         self.use_env_features = True
@@ -116,6 +118,8 @@ class ModelConfig:
             self.update_config(config_dict)
         from .attention_v2 import validate_attention_type
         validate_attention_type(self.gat_attention_type)
+        from .position_encoding import validate_position_mode
+        validate_position_mode(self.position_embedding_mode)
     
     def update_config(self, config_dict: Dict):
         """更新配置参数"""

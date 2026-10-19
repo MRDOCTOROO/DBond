@@ -42,6 +42,9 @@ class NodeEncoder(nn.Module):
         self.position_embedding_dim = config.position_embedding_dim
         self.physicochemical_dim = config.physicochemical_dim
         self.use_position_embedding = getattr(config, 'use_position_embedding', True)
+        from .position_encoding import validate_position_mode
+        self.position_embedding_mode = validate_position_mode(
+            getattr(config, 'position_embedding_mode', 'input_concat'))
         self.use_physicochemical_features = getattr(config, 'use_physicochemical_features', True)
         self.use_state_features = getattr(config, 'use_state_features', True)
         self.use_env_features = getattr(config, 'use_env_features', True)
@@ -107,7 +110,7 @@ class NodeEncoder(nn.Module):
         # 输出维度
         self.output_dim = (
             self.aa_embedding_dim + 
-            self.position_embedding_dim + 
+            (self.position_embedding_dim if self.position_embedding_mode == 'input_concat' else 0) +
             self.physicochemical_dim + 32
             + 32
         )
@@ -159,7 +162,9 @@ class NodeEncoder(nn.Module):
             seq_tokens.size(1), 
             device=seq_tokens.device
         ).unsqueeze(0).expand(seq_tokens.size(0), -1)
-        if self.use_position_embedding:
+        if self.position_embedding_mode != 'input_concat':
+            pos_features = None  # No positional input reaches the node encoder / GCN.
+        elif self.use_position_embedding:
             pos_features = self.position_embedding(positions)
         else:
             pos_features = aa_features.new_zeros(
@@ -195,9 +200,10 @@ class NodeEncoder(nn.Module):
         env_features = env_features.unsqueeze(1).expand(-1, seq_tokens.size(1), -1)
         
         # 拼接所有特征
-        combined_features = torch.cat([
-            aa_features, pos_features, physico_features, state_features, env_features
-        ], dim=-1)
+        feature_groups = [aa_features, physico_features, state_features, env_features]
+        if self.position_embedding_mode == 'input_concat':
+            feature_groups.insert(1, pos_features)
+        combined_features = torch.cat(feature_groups, dim=-1)
         
         # 最终编码
         node_features = self.node_encoder(combined_features)
@@ -459,6 +465,10 @@ class GraphTransformer(nn.Module):
         
         # 编码器
         self.node_encoder = NodeEncoder(config)
+        self.position_embedding_mode = self.node_encoder.position_embedding_mode
+        if self.position_embedding_mode == 'pre_attention_add':
+            if not self.node_encoder.use_position_embedding or config.num_gat_layers < 1:
+                raise ValueError('pre_attention_add requires position embeddings and at least one GAT layer')
         self.edge_encoder = EdgeEncoder(config)
 
         self.use_global_node = getattr(config, 'use_global_node', False)
@@ -615,13 +625,24 @@ class GraphTransformer(nn.Module):
                 self.ion12_head = nn.Linear(self.hidden_dim, 12)
                 nn.init.xavier_uniform_(self.ion12_head.weight)
                 nn.init.zeros_(self.ion12_head.bias)
+
+        if self.position_embedding_mode == 'pre_attention_add':
+            # Reuse the learned 32-d absolute positions, projecting to hidden_dim
+            # for addition. No extra norm, dropout or per-layer reinjection.
+            with torch.random.fork_rng(devices=[]):
+                self.pre_attention_position_proj = nn.Linear(
+                    config.position_embedding_dim, self.hidden_dim, bias=False)
+                nn.init.xavier_uniform_(self.pre_attention_position_proj.weight)
+            self.register_buffer('position_embedding_mode_code', torch.tensor(1, dtype=torch.int64))
     
     def load_state_dict(self, state_dict, strict=True, assign=False):
         # Validate before PyTorch starts copying any shared tensors. This also
         # protects direct loads and repeated attempts after a rejected load.
         from .attention_v2 import validate_attention_checkpoint
+        from .position_encoding import validate_position_checkpoint
         try:
             validate_attention_checkpoint(self, state_dict)
+            validate_position_checkpoint(self, state_dict)
         except ValueError as error:
             raise RuntimeError(str(error)) from error
         saved_ion = {k for k in state_dict if k.startswith('ion12_head.')}
@@ -786,6 +807,13 @@ class GraphTransformer(nn.Module):
                 gcn_timings[f'gcn_layer_{i}'] = time.perf_counter() - layer_start
         if timing_enabled:
             gcn_end = time.perf_counter()
+
+        if self.position_embedding_mode == 'pre_attention_add':
+            from .position_encoding import add_packed_residue_positions
+            positions = self.node_encoder.position_embedding(seq_positions)
+            positions = self.pre_attention_position_proj(positions)
+            node_features = add_packed_residue_positions(
+                node_features, positions, seq_lens_tensor, node_lens_tensor)
         
         # 图注意力层
         gat_timings = {}
