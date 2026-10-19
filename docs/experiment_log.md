@@ -1993,3 +1993,12 @@ pod读取完成报告并独立从保存CSV复算16项臂×指标的均值、样�
 5组重叠序列级随机80/20划分，两臂共10次训练，固定test阈值0.5，沿用有效键mask与谱图平均P/R调和F1。提升筛选仍为平均ΔF1≥0.002、至少4/5 F1严格提高、平均ΔAUC≥0、平均ΔqBrier≤0，全部满足才列待确认候选；不是统计显著性门槛。只与本轮修正验证的control对照，不用历史原版替代同轮对照；两臂实验不能单独估计验证修复的因果收益。冻结论文主表保持原数值，尚无本轮效果结论。
 
 所有数据恢复、QA、CUDA smoke及训练在pod。代码含prepare_four_state_targets.py、test_four_state.py、four_state_ops.py；后者在后台训练终止后复算保存CSV的小报告并输出配对launch.json/terminal.json，接入既有dbond完成提醒。运行中不反复读epoch/状态，不自动追加实验。正式启动需pod的全量标签QA、五划分配对验证SHA、loss/mask/初始化/跨模式加载与CUDA更新核验通过。
+
+
+启动与pod核验补记：训练源码4da48eeab50decd0a31fbf64f2f179478a6624a7，已push并在pod fast-forward pull。批次checkpoints/graph_transform/four_state_batch/20261019_124645，后台worker PID1195953，选择当时空闲GPU0/1/2/4；GPU3的其他负载未触碰。两臂共10次训练已提交，尚无本轮效果结论。配对事件目录/mnt/pvc/graphtrans/four_state_ops/{launch,terminal}.json；结束后生成result.json、report.md和review_receipt.json，原dbond提醒已从PAUSED恢复ACTIVE，每60分钟仅扫描pending终态。当前对话target_thread_id=01a151ed-0d59-76a3-9634-aec14ee56eb0，未新建重复提醒。
+
+全量标签QA通过：477,669逐谱状态OR完全一致，9,552并集条件组；各fold只导出其训练白名单7,643/7,721/7,649/7,650/7,605组。四类整数计数和=n、正类和=原true_multi计数，folded q最大序列化误差5e-5。250,102个原匹配多通道碰撞峰保留，不改变历史操作性标签。预处理manifest /mnt/pvc/graphtrans/four_state_targets_v1/preparation.json SHA256=ced81fc73f9fe2d2637cf3be549b351beee2b55b3823c426c1ea698323f824de。原SQLite只读SHA复核通过，无外部测试CSV参与标签构建。
+
+五组内部train/val的序列完全隔离，且与各自外部test序列隔离；两臂train.csv/val.csv字节SHA逐划分一致。实际训练条件组依次6,098/6,179/6,140/6,147/6,161；完整验证谱图依次77,992/76,804/76,626/74,085/69,957，每划分82验证序列。原版1,706,153参数，四状态1,706,924参数；各臂真实16组/427有效键、生产AMP单步均完成参数更新，四状态所有输出梯度有限且非零；512谱验证批生产精度路径峰值已分配显存1,021.137MB（仅smoke测量，不作为训练峰值或速度结论）。loss分解、含NaN padding排除、主q一致、目标不参与推理、跨模式加载拒绝且参数未被部分修改均通过。
+
+数值核验限定：两次初期预检分别暴露测试入口logger未初始化和TF32下过严的初始输出比较。测试入口已修；pod诊断显示相同隐藏输入的1输出/4输出GEMM在生产TF32下可有约1.4e-3的logit差异，关闭TF32后约1e-6。最终smoke用highest FP32检验初始union关系，最大logit差8.344650268554688e-7，并恢复原high/TF32设置后运行AMP更新与512谱eval。保留“数学初始化相同、共享参数和RNG相同”的结论，不声称生产浮点输出逐位相等。所有错误在正式提交前解决，标签预处理未重跑。小回执保存F:/codexout/dbond_four_state_launch_20261019/；运行中不读epoch或status。
