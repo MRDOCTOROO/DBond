@@ -47,6 +47,13 @@ class Trainer:
         self.optimizer = optimizer
         self.criterion = criterion
         self.four_state_enabled = getattr(model, 'bond_head_type', 'concat_mlp') == 'four_state_mlp'
+        self.four_state_conditional_weight = (config or {}).get('loss', {}).get('four_state_conditional_weight', 1.0)
+        cw = self.four_state_conditional_weight
+        if (isinstance(cw, bool) or not isinstance(cw, (int, float))
+                or not math.isfinite(cw) or cw < 0):
+            raise ValueError('four_state_conditional_weight must be a finite nonnegative number')
+        if not self.four_state_enabled and cw != 1.0:
+            raise ValueError('Non-default four_state_conditional_weight requires a four-state head')
         if self.four_state_enabled:
             lc = config.get('loss', {})
             if (lc.get('main_loss') != 'binary_cross_entropy' or lc.get('handle_imbalance', False)
@@ -454,7 +461,8 @@ class Trainer:
             if 'four_state_targets' not in batch_data or self.model.last_four_state_logits is None:
                 raise ValueError('four-state training requires verified joint targets and logits')
             loss = four_state_cross_entropy(self.model.last_four_state_logits,
-                batch_data['four_state_targets'], batch_data['label_mask'], row_weights)
+                batch_data['four_state_targets'], batch_data['label_mask'], row_weights,
+                conditional_weight=self.four_state_conditional_weight)
 
         main_loss_value = float(loss.detach().item()) if self.ion12_enabled else 0.0
 
