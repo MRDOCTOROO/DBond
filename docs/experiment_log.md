@@ -2096,4 +2096,10 @@ pod预检全部通过：五组train/val SHA逐一与原成功四状态批次相�
 
 外部评估均固定0.5、batch512、allow_target_aware=False、去padding；报告F1/accuracy/AUC/谱图P-R调和F1/q-Brier/q_seq、逐划分差值/胜率及选中λ。沿用采用门槛：平均ΔF1>=0.002、F1至少4/5严格改善、平均ΔAUC>=0、平均Δq-Brier<=0，全部满足才列待复验候选。这检验内部验证选参策略，而非预先固定某λ；五组划分重叠、单次初始化、多轮外部测试探索，不宣称统计显著，不替换冻结主表。
 
-全部数值、数据处理、预检和训练均在pod，本机仅编辑/同步/查看小报告。预检覆盖原CE λ0值/梯度逐位等价、独立MSE公式/梯度、q端点/极端logits/污染padding/权重/非法配置、五组旧train/val SHA、禁止外部test访问、内部选参完整性/NaN/精确平局/0回退、相同完整初始化和CPU/CUDA RNG、真实16组427有效键的生产AMP两臂更新。新事件目录/mnt/pvc/graphtrans/four_state_brier_ops/采用配对launch.json/terminal.json；完成后原dbond每120分钟仅扫描终态、核验并提醒原对话，不读epoch进度。当前状态：代码准备中，尚未提交正式训练。
+全部数值、数据处理、预检和训练均在pod，本机仅编辑/同步/查看小报告。预检覆盖原CE λ0值/梯度逐位等价、独立MSE公式/梯度、q端点/极端logits/污染padding/权重/非法配置、五组旧train/val SHA、禁止外部test访问、内部选参完整性/NaN/精确平局/0回退、相同完整初始化和CPU/CUDA RNG、真实16组427有效键的生产AMP两臂更新。新事件目录/mnt/pvc/graphtrans/four_state_brier_ops/采用配对launch.json/terminal.json；完成后原dbond每120分钟仅扫描终态、核验并提醒原对话，不读epoch进度。当前状态：代码、pod预检和正式训练提交已完成，尚无效果结论（启动回执见下）。
+
+启动与预检补记：训练源码d69127282f8184172ec7e9e1d333ed8b318f96da已push并在pod fast-forward pull。2026-10-20 14:28:37 UTC（北京时间22:28:37）提交批次checkpoints/graph_transform/four_state_brier_batch/20261020_142837，worker PID1324382，使用提交时空闲GPU0/1/2/4。五组划分各λ=0/0.25/1/4共20次训练；对照为同轮λ0四状态α=1，关闭新增电荷特征。现阶段只有提交与预检结果，尚无性能结论。提交后不读取epoch日志或运行状态，不在pod训练中pull。
+
+pod预检全部通过：λ0与原CE值/梯度逐位一致；独立CE+Brier参考与梯度、极端logits、q端点、污染padding、权重归一化、非法参数/协议拒绝均通过；内部选参完整性、NaN拒绝、精确平局取小λ和0回退、禁止外部test访问均通过。五组train/val SHA逐一与原成功四状态批次相同；真实16组427有效键的生产AMP两臂更新均通过，完整模型初始化及CPU/CUDA初始RNG一致，参数量均1,706,924。另以1222内部train/val运行隔离的单epoch λ1集成canary，验证真实checkpoint保存/重载、实际α/λ/配置与来源hash及训练receipt绑定；外部test CSV读取数为0。canary不计入20次正式训练，不用于效果判断，不作为正式模型起点。
+
+提交回执/mnt/pvc/graphtrans/four_state_brier_ops/launch.json；预检smoke.json和integration_canary/passed.json；三份小回执同步F:/codexout/dbond_four_state_brier_launch_20261020/。正式批次先锁定全部五组内部验证选择到selection.json，再评估λ0对照与选中策略；未选λ不做外部测试。终态生成result.json、report.md、review_receipt.json，再写terminal.json供原对话dbond提醒扫描。原提醒已确认ACTIVE、每120分钟，仅扫描pending完成/失败并报告后ack；完成核验明确检查选择锁定与同轮对照，不用历史binary或电荷分支替代。本机应用及SSH可用是提醒条件，不声称已有pod直接唤醒应用的即时回调。
