@@ -1058,6 +1058,25 @@ def _reject_ion12_resume(config, resume):
         raise ValueError('ion12 resume is unsupported: target source and auxiliary weight must remain fixed')
 
 
+def _validate_four_state_union_brier_protocol(config, resume):
+    """Defer outer-test access for this explicitly marked validation-only trial."""
+    if config.get('experiment', {}).get('loss_protocol') != 'four_state_union_brier_v1':
+        return False
+    if config.get('data', {}).get('test_csv_path') is not None:
+        raise ValueError('four_state_union_brier_v1 requires data.test_csv_path=None until validation selection is frozen')
+    if resume is not None:
+        raise ValueError('four_state_union_brier_v1 does not support --resume')
+    model_config = config.get('model', {})
+    if model_config.get('bond_head_type', 'concat_mlp') != 'four_state_mlp':
+        raise ValueError('four_state_union_brier_v1 requires the four_state_mlp head')
+    if model_config.get('use_charge_partition_features', False) is not False:
+        raise ValueError('four_state_union_brier_v1 requires use_charge_partition_features=False')
+    alpha = config.get('loss', {}).get('four_state_conditional_weight', 1.0)
+    if isinstance(alpha, bool) or not isinstance(alpha, (int, float)) or alpha != 1.0:
+        raise ValueError('four_state_union_brier_v1 requires four_state_conditional_weight=1')
+    return True
+
+
 def _write_ion12_targets_provenance(train_dataset, config, checkpoint_dir):
     if not config.get('model', {}).get('use_ion12_aux_head', False):
         return None
@@ -1103,6 +1122,11 @@ def main():
 
     # 加载配置
     config = load_config(args.config, args)
+    union_brier_protocol = _validate_four_state_union_brier_protocol(config, args.resume)
+    if union_brier_protocol:
+        import hashlib
+        with open(args.config, 'rb') as stream:
+            source_config_sha256 = hashlib.sha256(stream.read()).hexdigest()
     _reject_ion12_resume(config, args.resume)
     training_config = config['training']
     transfer_encoder_lr_scale = validate_transfer_optimizer_request(training_config, args.resume)
@@ -1139,6 +1163,24 @@ def main():
     model_start = time.perf_counter()
     model = create_model(config, device)
     logger.info(f"Model creation took {time.perf_counter() - model_start:.2f}s")
+    if union_brier_protocol:
+        state_hasher = hashlib.sha256()
+        for name, value in sorted(model.state_dict().items()):
+            header = json.dumps(
+                {'name': name, 'shape': list(value.shape), 'dtype': str(value.dtype)},
+                sort_keys=True, separators=(',', ':')).encode('utf-8')
+            state_hasher.update(header + b'\0')
+            state_hasher.update(value.detach().cpu().contiguous().reshape(-1)
+                                .view(torch.uint8).numpy().tobytes())
+            state_hasher.update(b'\0')
+        model_initialization = {
+            'model_state_sha256': state_hasher.hexdigest(),
+            'torch_cpu_rng_sha256': hashlib.sha256(torch.get_rng_state().numpy().tobytes()).hexdigest(),
+            'torch_cuda_rng_sha256': [
+                hashlib.sha256(state.numpy().tobytes()).hexdigest()
+                for state in (torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [])
+            ],
+        }
     transfer_provenance = None
     if transfer_enabled:
         from pretraining.transfer import load_pretrained_backbone
@@ -1253,6 +1295,25 @@ def main():
             with open(path, 'w', encoding='utf-8') as stream:
                 json.dump(provenance, stream, ensure_ascii=False, indent=2, allow_nan=False)
             transfer_extra_state = dict(transfer_extra_state or {}, **{name: provenance})
+    if union_brier_protocol:
+        # Snapshot once after seed, dataset paths and checkpoint directory resolve.
+        resolved_config_path = os.path.abspath(os.path.join(
+            training_config['checkpoint_dir'], 'resolved_training_config.yaml'))
+        resolved_config_bytes = yaml.safe_dump(
+            config, allow_unicode=True, sort_keys=False).encode('utf-8')
+        with open(resolved_config_path, 'wb') as stream:
+            stream.write(resolved_config_bytes)
+        transfer_extra_state = dict(transfer_extra_state or {}, loss_protocol={
+            'name': 'four_state_union_brier_v1',
+            'four_state_conditional_weight': trainer.four_state_conditional_weight,
+            'four_state_union_brier_weight': trainer.four_state_union_brier_weight,
+            'outer_test_deferred': test_dataset is None,
+            'checkpoint_selection': selection.mode,
+            'source_config_sha256': source_config_sha256,
+            'resolved_config_sha256': hashlib.sha256(resolved_config_bytes).hexdigest(),
+            'resolved_config_path': resolved_config_path,
+            'initialization': model_initialization,
+        })
     logger.info(f"Checkpoint dir: {training_config['checkpoint_dir']}")
     log_config = config.get('logging', {})
     tb_writers: Dict[str, SummaryWriter] = {}

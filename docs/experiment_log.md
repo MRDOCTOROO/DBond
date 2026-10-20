@@ -2068,3 +2068,32 @@ project_goal：完成有KB依据的新输入方案和配对训练提交。comple
 pod预检全部通过：五组train/val SHA逐一与原成功四状态批次相同，序列与外部test隔离；每臂真实16组/427有效键。对照1,706,924参数，特征臂1,707,599；α均1，生产AMP对照1步、候选2步，输出层和后续隐藏层梯度有限且非零。CPU初始eval/train预测逐位一致，共享参数与构建RNG逐位一致。初次过严的跨前向AMP逐位相等断言未通过；诊断中候选−对照与对照重复前向最大logit差均0.001953125，生产CUDA归约非确定。现以pod CPU检验数学初始函数，同时在候选同次AMP前向捕获原头logits，证实新增残差严格为0、union logits与所捕获原头精确一致；生产确定性/精度设置未改变。不宣称跨前向AMP逐位相等。
 
 预检和启动收据同步F:/codexout/dbond_four_state_charge_launch_20261020/。本轮交付状态：证据核验、实现、git push/pull、pod数值预检和正式训练提交均完成；实验效果及独立完成核验仍待终态。比较检验的是整个新增特征分支，不能仅凭收益分离额外容量、优化参数化和化学描述的贡献。dbond原对话heartbeat为ACTIVE、每120分钟仅扫描pending终态，报告后ack，不新建重复提醒。本机应用运行及SSH可用是提醒条件；当前没有pod直接唤醒应用的即时回调。仅本台账补记另行提交，训练中不pull。
+
+### 15.46 电荷/片段组成分支完成（2026-10-20）
+
+§15.45批次four_state_charge_batch/20261020_100710已于2026-10-20 13:41:03 UTC完成，源码6e9274405fc27880d6a577df0775a531079fe837。原对话13:49 UTC heartbeat在pod对十个原始逐划分metric CSV完成461项独立校验（均值/样本SD/配对差/胜率、来源hash、实际配置及配对train/val SHA），已提醒并ack。对照为同轮四状态α=1，不是历史binary模型。
+
+| 指标 | 同轮四状态对照 | +组成特征 | Δ / 改善划分 |
+|---|---:|---:|---:|
+| 有效键micro-F1 % | 79.987457 | 80.029839 | +0.042382 pp / 3/5 |
+| 有效键accuracy % | 80.002819 | 80.048668 | +0.045849 pp / 4/5 |
+| ROC-AUC | 0.882994 | 0.883101 | +0.000107 / 4/5 |
+| 谱图P/R调和F1 % | 75.569189 | 75.725351 | +0.156162 pp / 3/5 |
+| q-Brier ↓ | 0.066454 | 0.066488 | +0.000034 / 3/5 |
+| q_seq | 0.628259 | 0.621483 | -0.006776 / 2/5 |
+
+未通过全部预设门槛，不采纳该分支，后续回到无新增电荷特征的四状态α=1。只对该具体实现作结论，不否定化学信息本身。报告/mnt/pvc/graphtrans/four_state_charge_ops/report.md，独立收据heartbeat_review_20261020.json，本地F:/codexout/dbond_four_state_charge_results_20261020/。冻结论文主表不替换。
+
+### 15.47 四状态CE + union Brier，内部验证选择λ（2026-10-20，预注册）
+
+用户明确授权实现、git push、pod pull训练及完成提醒。保持原四状态头α=1，关闭use_charge_partition_features，不改图、FiLM、输入特征、参数量或推理union。新增逐有效键损失L=CE4(t,P)+λ*(sigmoid(logsumexp(z_positive)-z_none)-(1-t_none))^2；两项共用原mask、group_uniform权重和归一分母。λ=0跳过新增算术，保持旧CE值/梯度路径；参数是有限非负数且非bool。训练外的验证/测试loss和全部指标不加此项。
+
+数学依据：对固定概率标签，CE和概率平方误差均有合理概率估计目标（Gneiting & Raftery 2007, DOI10.1198/016214506000001437）；组合改变有限容量/优化过程中的相对误差惩罚，不提供新观测、不保证收益。当前q仍为同(seq,charge,NCE)重复观测均值，四类比例和4位q不变，不做label smoothing或先验收缩。训练有效键group_uniform与谱图频次加权q-Brier不同，不能承诺两者完全对齐。
+
+预先固定λ候选{0,0.25,1,4}，是几何间隔的优化超参数网格，不是物理常数。每个外部划分独立选择，不跨划分混用标签：每候选从头训练，使用相同fold稳定seed、相同初始化/最大epoch300/AdamW学习率与早停规则；各候选epoch可因早停不同。仍按内部完整原谱验证集strict max micro-F1保存best_model.pt。只读取该点checkpoint.metrics.q_brier，以未舍入q-Brier最小者选λ，精确平局取小λ，允许回退λ0。q_seq与外部测试指标均不参与λ或checkpoint选择。五组重复序列级80/20划分各4次，共20次训练。
+
+本轮不用会自动打开外部test的旧5fold训练驱动；直接生成每候选fold配置，强制test_csv_path=None，在创建dataset前协议校验，并安装Python文件audit屏障，候选训练和选权重阶段禁止打开*.test.fbr.* CSV。checkpoint.extra_state记录实际α/λ、协议、延后测试状态和完整原始/解析配置hash。训练receipt绑定checkpoint/config/内部验证来源；缺候选、非有限指标、异常来源均失败，不静默跳过。全部五组选择落盘selection.json（候选内部指标、选中checkpoint/config SHA、目标和预检来源）后，才创建外部测试数据集。之后只评估同轮λ0与验证集选择的模型；某组选中0时直接复用对照结果，不重复推理。未选候选不读取测试指标。
+
+外部评估均固定0.5、batch512、allow_target_aware=False、去padding；报告F1/accuracy/AUC/谱图P-R调和F1/q-Brier/q_seq、逐划分差值/胜率及选中λ。沿用采用门槛：平均ΔF1>=0.002、F1至少4/5严格改善、平均ΔAUC>=0、平均Δq-Brier<=0，全部满足才列待复验候选。这检验内部验证选参策略，而非预先固定某λ；五组划分重叠、单次初始化、多轮外部测试探索，不宣称统计显著，不替换冻结主表。
+
+全部数值、数据处理、预检和训练均在pod，本机仅编辑/同步/查看小报告。预检覆盖原CE λ0值/梯度逐位等价、独立MSE公式/梯度、q端点/极端logits/污染padding/权重/非法配置、五组旧train/val SHA、禁止外部test访问、内部选参完整性/NaN/精确平局/0回退、相同完整初始化和CPU/CUDA RNG、真实16组427有效键的生产AMP两臂更新。新事件目录/mnt/pvc/graphtrans/four_state_brier_ops/采用配对launch.json/terminal.json；完成后原dbond每120分钟仅扫描终态、核验并提醒原对话，不读epoch进度。当前状态：代码准备中，尚未提交正式训练。

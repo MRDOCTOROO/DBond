@@ -54,6 +54,13 @@ class Trainer:
             raise ValueError('four_state_conditional_weight must be a finite nonnegative number')
         if not self.four_state_enabled and cw != 1.0:
             raise ValueError('Non-default four_state_conditional_weight requires a four-state head')
+        self.four_state_union_brier_weight = (config or {}).get('loss', {}).get('four_state_union_brier_weight', 0.0)
+        bw = self.four_state_union_brier_weight
+        if (isinstance(bw, bool) or not isinstance(bw, (int, float))
+                or not math.isfinite(bw) or bw < 0):
+            raise ValueError('four_state_union_brier_weight must be a finite nonnegative number')
+        if not self.four_state_enabled and bw != 0.0:
+            raise ValueError('Positive four_state_union_brier_weight requires a four-state head')
         if self.four_state_enabled:
             lc = config.get('loss', {})
             if (lc.get('main_loss') != 'binary_cross_entropy' or lc.get('handle_imbalance', False)
@@ -462,7 +469,8 @@ class Trainer:
                 raise ValueError('four-state training requires verified joint targets and logits')
             loss = four_state_cross_entropy(self.model.last_four_state_logits,
                 batch_data['four_state_targets'], batch_data['label_mask'], row_weights,
-                conditional_weight=self.four_state_conditional_weight)
+                conditional_weight=self.four_state_conditional_weight,
+                union_brier_weight=self.four_state_union_brier_weight)
 
         main_loss_value = float(loss.detach().item()) if self.ion12_enabled else 0.0
 
