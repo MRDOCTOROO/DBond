@@ -2031,3 +2031,34 @@ pod报告/mnt/pvc/graphtrans/four_state_ops/report.md，独立核验heartbeat_re
 计算、验证和训练均在pod；本机仅编辑/同步/读取小报告。预检包含默认与显式α=1旧CE及梯度逐位一致、α=0/0.5/1/2分解和梯度关系、极端logit/q端点/污染padding、五划分train/val SHA与成功批次一致、同初始化/三个生产AMP单步。独立事件目录/mnt/pvc/graphtrans/four_state_weight_ops/使用配对launch.json/terminal.json；完成后核验15个run的实际α、来源及指标汇总，通过原dbond提醒回本对话，不读epoch进度。
 
 启动补记：训练源码fae6c33cf571e0abda5071ace3fde96062f32832已push、pod fast-forward pull，2026-10-20 01:51:38 UTC（北京时间09:51:38）提交批次checkpoints/graph_transform/four_state_weight_batch/20261020_015138，worker PID1262590，选择空闲GPU0/1/2/4。pod语法编译及预检全部通过，5组train/val SHA逐一与原成功四状态批次一致；三臂真实16组/427有效键均完成生产AMP更新，共享完整初始化逐位一致，参数均1,706,924。preflight、launch小回执同步F:/codexout/dbond_four_state_weight_launch_20261020/。原dbond提醒检查时为PAUSED，按用户本轮完成提醒请求恢复同一任务至ACTIVE；保留每60分钟终态扫描，并明确本批control为α=1四状态版、两个候选全报。未新建重复提醒，训练运行中不读epoch或状态。仅ledger启动补记后续提交，pod训练源码保持fae6c33，不在训练中pull。
+
+### 15.44 四状态损失权重：完成结果（2026-10-20）
+
+§15.43批次checkpoints/graph_transform/four_state_weight_batch/20261020_015138，源码fae6c33cf571e0abda5071ace3fde96062f32832，15次训练全部完成（2026-10-20 06:46:31 UTC）。已由06:49 UTC heartbeat主动提醒并ack，本节补齐台账；同轮四状态α=1作唯一配对对照。
+
+| 指标 | α=1 | α=0.5 | Δ / 改善划分 | α=2 | Δ / 改善划分 |
+|---|---:|---:|---:|---:|---:|
+| 有效键micro-F1 % | 79.963332 | 79.980133 | +0.016801 pp / 4/5 | 79.852187 | -0.111144 pp / 2/5 |
+| 有效键accuracy % | 80.029613 | 80.008566 | -0.021046 pp / 3/5 | 79.845290 | -0.184323 pp / 1/5 |
+| ROC-AUC | 0.883107 | 0.882872 | -0.000234 / 2/5 | 0.881616 | -0.001491 / 0/5 |
+| 谱图P/R调和F1 % | 75.535827 | 75.600931 | +0.065104 pp / 3/5 | 75.382081 | -0.153746 pp / 1/5 |
+| q-Brier ↓ | 0.066173 | 0.067000 | +0.000828 / 0/5 | 0.066983 | +0.000810 / 1/5 |
+| q_seq | 0.625702 | 0.625323 | -0.000378 / 1/5 | 0.629552 | +0.003850 / 4/5 |
+
+两个候选均未通过全部采用门槛。α=0.5的F1增益很小且所有划分q-Brier变差；α=2的AUC全部下降。保留α=1。pod完成225项独立核验，绑定原metric/汇总CSV、实际运行配置、targets和全谱验证来源；均值/样本SD/配对差/差值SD/胜率及逐划分P/R调和一致。完整报告/mnt/pvc/graphtrans/four_state_weight_ops/report.md，核验heartbeat_review_20261020.json；本地F:/codexout/dbond_four_state_weight_results_20261020/。论文冻结表不替换。
+
+### 15.45 四状态α=1：电荷感知的两侧碎片组成（2026-10-20，预注册）
+
+用户授权继续基于storage选择新方案、实现、push/pod pull、配对训练和完成提醒；明确固定α=1。本轮仅检验一个新输入分支，不叠加交叉注意力、位置改动、预训练或辅助损失。以同轮从头重训四状态α=1为对照，两个臂分别5组重复序列级80/20划分，共10次训练。沿用group_uniform折叠训练、完整原谱内部验证、严格max-F1选点、原优化器/预算/早停、有效键mask和固定0.5测试阈值。训练/验证/测试划分及targets保持原成功批次相同，不用历史最好模型替代对照。
+
+知识依据：storage当前root G:/valhalla/valhalla_storage_share_root_20260830，base/kb:storage，project_work只读。bootstrap的全局自检因缺少无关的workflows/kb/antibody_design_ingest.md而未完成；未修补技能或伪称启动成功。独立检查当前root/KB状态和project_work资格均满足，按该contract执行只读来源核验。实体ent_000024(active)→.registry/machine/entity_resource_map.yaml:243(derived_from，旧表无map_id，未补造)→res_000140(active本地成员、无required/excluded/blacklist、资源active/not_listed)→file_000140(authoritative/present)，公共Library/public_resources/res_000140/authoritative.pdf；pod复核SHA256=814b51192664603b3b764766b436451b6117c041f84ef619f679e70da25a9e9c。实际提取物理p3–4 mobile-proton及PIC讨论：碱性残基组成、前体电荷、肽长影响质子迁移，Arg/Lys不同，理论定性且不能覆盖全部碎裂过程。详细source_records.json与提取证据保存/mnt/pvc/graphtrans/four_state_charge_ops/evidence/；未读source_copies、未写KB。
+
+工程假设：四状态b/y可见性可能受两侧组成与电荷关系影响。当前15维理论特征没有显式累积的两侧碱性组成；本轮新增17维描述：前/后缀R、K/B/O一级胺、H、X吡啶基、D、E计数各6维（除完整肽长）；两侧长度/32；charge/10；(charge−Arg总数)/肽长；(charge−R/K/B/O/H/X侧链基团总数)/肽长。后两个是有符号描述，不叫实际移动质子数，不做正负截断或硬预测规则。B/O/X基团外推、缩放、特征集合和网络接法均为项目假设，综述未验证D肽收益，也未给本实验pKa/气相碱性常数。
+
+新增17→32→SiLU→3小分支，输出[0, Δb_only, Δy_only, Δboth]加到原四状态logits，none作为参考；新增675参数（1,706,924→1,707,599）。不取骨干隐向量，不增加dropout；最后线性权重/偏置零初始化，构建在原初始化之后并隔离RNG，初始函数和共享参数保持原对照。alpha=1四类CE、状态顺序及推理union q不变。Checkpoint显式检查分支键、形状和特征版本，跨模式strict=False也须在拷贝权重前失败。
+
+采用门槛预先固定：平均ΔF1≥0.002、F1至少4/5严格改善、平均ΔAUC≥0、平均Δq-Brier≤0，全部满足才列待确认候选。五组划分重叠、各一次初始化、多轮探索使用同一外部测试集，不能声称确认性显著；冻结论文主表不变。完成报告全报F1/accuracy/AUC/谱图P-R调和F1/q-Brier/q_seq及逐划分差值与胜率。
+
+本机仅代码/配置编辑、git同步及小报告；计算/验证/训练全部pod。训练前检查独立字符计数参考、B/O/X/D/E语义、padding及批次不变性、空键、两臂共享初始化与初始AMP预测、跨模式checkpoint安全、生产α=1损失与两步分支梯度，以及5组train/val SHA和序列隔离。独立four_state_charge_ops/{launch,terminal}.json终态事件，训练结束自动分析汇总，不读epoch状态。现有dbond heartbeat已改每120分钟、ACTIVE、仍回原对话，仅扫描pending终态并去重；未建立pod直接唤醒应用的回调，不冒充即时通知。
+
+project_goal：完成有KB依据的新输入方案和配对训练提交。completion_status：代码与证据已准备，pod预检及正式训练尚待完成。target_kb：kb:storage。knowledge_used/source_records：本节及evidence/source_records.json。created_files：charge_partition.py、两份charge配置、test_four_state_charge.py、four_state_charge_ops.py。modified_files：graph_transformer.py、models/utils.py、本台账和本地论文表附注。unresolved_questions：D肽迁移边界、跨种子稳定性、多轮探索偏差。suggested_knowledge_writeback：完整结果可后续另行ingest_engineering；本轮不写回。

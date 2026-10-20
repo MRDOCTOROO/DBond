@@ -68,6 +68,7 @@ class ModelConfig:
         self.bond_condition_mode = 'none'
         self.bond_condition_dim = 32
         self.bond_head_type = 'concat_mlp'
+        self.use_charge_partition_features = False
         self.bond_cross_attention_heads = 4
         # Target-domain operational fragment matches, used only as training targets.
         self.use_ion12_aux_head = False

@@ -646,6 +646,18 @@ class GraphTransformer(nn.Module):
             self.bond_head[3] = replace_binary_output(self.bond_head[3])
             self.register_buffer('four_state_mode_code', torch.tensor(4, dtype=torch.int64))
 
+        self.use_charge_partition_features = getattr(config, 'use_charge_partition_features', False)
+        if not isinstance(self.use_charge_partition_features, bool):
+            raise ValueError('use_charge_partition_features must be boolean')
+        if self.use_charge_partition_features:
+            if self.bond_head_type != 'four_state_mlp':
+                raise ValueError('Charge-partition descriptors require the four-state head')
+            # Construct after legacy initialization and keep its RNG stream.
+            from .charge_partition import ChargePartitionReadout
+            with torch.random.fork_rng(devices=[]):
+                self.charge_partition = ChargePartitionReadout(
+                    self.node_encoder.char_to_idx, self.node_encoder.aa_embedding.num_embeddings)
+
         if self.bond_head_type == 'cross_attention_mlp':
             if self.bond_condition_mode != 'none' or self.use_ion12_aux_head:
                 raise ValueError('cross_attention_mlp does not support condition readout or ion12 auxiliary head')
@@ -666,10 +678,12 @@ class GraphTransformer(nn.Module):
         from .attention_v2 import validate_attention_checkpoint
         from .position_encoding import validate_position_checkpoint
         from .bond_cross_attention import validate_bond_head_checkpoint
+        from .charge_partition import validate_charge_partition_checkpoint
         try:
             validate_attention_checkpoint(self, state_dict)
             validate_position_checkpoint(self, state_dict)
             validate_bond_head_checkpoint(self, state_dict)
+            validate_charge_partition_checkpoint(self, state_dict)
         except ValueError as error:
             raise RuntimeError(str(error)) from error
         saved_ion = {k for k in state_dict if k.startswith('ion12_head.')}
@@ -910,6 +924,9 @@ class GraphTransformer(nn.Module):
             if self.bond_head_type == 'four_state_mlp':
                 from .four_state import union_logit
                 state_logits = self.bond_head(bond_features).float()
+                if self.use_charge_partition_features:
+                    tokens = self.node_encoder._encode_sequences(batch_data['sequences'], node_features.device)
+                    state_logits = state_logits + self.charge_partition(tokens, batch_data['charges'], valid_bond_mask)
                 bond_logits_flat = union_logit(state_logits)
                 if self.training:
                     self.last_four_state_logits = state_logits
