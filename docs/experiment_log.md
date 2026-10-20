@@ -2029,3 +2029,5 @@ pod报告/mnt/pvc/graphtrans/four_state_ops/report.md，独立核验heartbeat_re
 沿用五组重叠序列级80/20划分和去padding指标。两个候选分别与同轮α=1比较，全部报告；每个候选需同时满足平均ΔF1≥0.002、F1≥4/5严格改善、ΔAUC≥0、Δq-Brier≤0才列待确认候选。两个预设候选带来额外筛选选择，结果仍属探索性，不据此改冻结主表或声称显著。当前不预判调低还是调高更好。
 
 计算、验证和训练均在pod；本机仅编辑/同步/读取小报告。预检包含默认与显式α=1旧CE及梯度逐位一致、α=0/0.5/1/2分解和梯度关系、极端logit/q端点/污染padding、五划分train/val SHA与成功批次一致、同初始化/三个生产AMP单步。独立事件目录/mnt/pvc/graphtrans/four_state_weight_ops/使用配对launch.json/terminal.json；完成后核验15个run的实际α、来源及指标汇总，通过原dbond提醒回本对话，不读epoch进度。
+
+启动补记：训练源码fae6c33cf571e0abda5071ace3fde96062f32832已push、pod fast-forward pull，2026-10-20 01:51:38 UTC（北京时间09:51:38）提交批次checkpoints/graph_transform/four_state_weight_batch/20261020_015138，worker PID1262590，选择空闲GPU0/1/2/4。pod语法编译及预检全部通过，5组train/val SHA逐一与原成功四状态批次一致；三臂真实16组/427有效键均完成生产AMP更新，共享完整初始化逐位一致，参数均1,706,924。preflight、launch小回执同步F:/codexout/dbond_four_state_weight_launch_20261020/。原dbond提醒检查时为PAUSED，按用户本轮完成提醒请求恢复同一任务至ACTIVE；保留每60分钟终态扫描，并明确本批control为α=1四状态版、两个候选全报。未新建重复提醒，训练运行中不读epoch或状态。仅ledger启动补记后续提交，pod训练源码保持fae6c33，不在训练中pull。
