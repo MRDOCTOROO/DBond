@@ -2059,6 +2059,6 @@ pod报告/mnt/pvc/graphtrans/four_state_ops/report.md，独立核验heartbeat_re
 
 采用门槛预先固定：平均ΔF1≥0.002、F1至少4/5严格改善、平均ΔAUC≥0、平均Δq-Brier≤0，全部满足才列待确认候选。五组划分重叠、各一次初始化、多轮探索使用同一外部测试集，不能声称确认性显著；冻结论文主表不变。完成报告全报F1/accuracy/AUC/谱图P-R调和F1/q-Brier/q_seq及逐划分差值与胜率。
 
-本机仅代码/配置编辑、git同步及小报告；计算/验证/训练全部pod。训练前检查独立字符计数参考、B/O/X/D/E语义、padding及批次不变性、空键、两臂共享初始化与初始AMP预测、跨模式checkpoint安全、生产α=1损失与两步分支梯度，以及5组train/val SHA和序列隔离。独立four_state_charge_ops/{launch,terminal}.json终态事件，训练结束自动分析汇总，不读epoch状态。现有dbond heartbeat已改每120分钟、ACTIVE、仍回原对话，仅扫描pending终态并去重；未建立pod直接唤醒应用的回调，不冒充即时通知。
+本机仅代码/配置编辑、git同步及小报告；计算/验证/训练全部pod。训练前检查独立字符计数参考、B/O/X/D/E语义、padding及批次不变性、空键、两臂共享初始化、pod CPU初始eval/train预测及同次AMP前向中零残差/union保持（跨前向CUDA归约差异仅诊断）、跨模式checkpoint安全、生产α=1损失与两步分支梯度，以及5组train/val SHA和序列隔离。独立four_state_charge_ops/{launch,terminal}.json终态事件，训练结束自动分析汇总，不读epoch状态。现有dbond heartbeat已改每120分钟、ACTIVE、仍回原对话，仅扫描pending终态并去重；未建立pod直接唤醒应用的回调，不冒充即时通知。
 
 project_goal：完成有KB依据的新输入方案和配对训练提交。completion_status：代码与证据已准备，pod预检及正式训练尚待完成。target_kb：kb:storage。knowledge_used/source_records：本节及evidence/source_records.json。created_files：charge_partition.py、两份charge配置、test_four_state_charge.py、four_state_charge_ops.py。modified_files：graph_transformer.py、models/utils.py、本台账和本地论文表附注。unresolved_questions：D肽迁移边界、跨种子稳定性、多轮探索偏差。suggested_knowledge_writeback：完整结果可后续另行ingest_engineering；本轮不写回。

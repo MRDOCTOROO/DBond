@@ -17,6 +17,7 @@ from data.row_validation import file_sha
 from models.graph_transformer import GraphTransformer
 from models.utils import build_model_config
 from models.charge_partition import ChargePartitionReadout, FEATURE_DIM
+from models.four_state import union_logit
 from training.four_state_loss import four_state_cross_entropy
 from training.loss_functions import BinaryBondLoss
 from training.trainer import Trainer
@@ -48,7 +49,7 @@ def check_features():
                       for side in (seq[:cut],seq[cut:]) for group in ('R','KBO','H','X','D','E')]
             expected.append(counts + [cut/32.,(len(seq)-cut)/32.,float(charge[row])/10.,
                 (float(charge[row])-seq.count('R'))/len(seq),
-                (float(charge[row])-sum(c in 'RKB OHX'.replace(' ','') for c in seq))/len(seq)])
+                (float(charge[row])-sum(c in 'RKBOHX' for c in seq))/len(seq)])
     actual = readout.features(tokens,charge,mask)
     assert FEATURE_DIM == 17 and actual.shape == (8,17)
     assert torch.allclose(actual, torch.tensor(expected), atol=1e-7, rtol=0)
@@ -133,16 +134,42 @@ def run(output):
         except RuntimeError: pass
         else: raise AssertionError('Corrupt feature version accepted')
         candidate.load_state_dict(candidate.state_dict())
+        # CUDA scatter/index_add aggregation uses atomic reductions in the
+        # production nondeterministic setting. Compare algebraic initialization
+        # on pod CPU, then verify the exact zero correction WITHIN an AMP forward.
+        control.cpu(); candidate.cpu()
+        cpu_batch={k:v.cpu() if torch.is_tensor(v) else v for k,v in batch.items()}
         control.eval(); candidate.eval()
-        with torch.no_grad(),torch.autocast('cuda',dtype=torch.float16):
-            assert torch.equal(control(batch),candidate(batch))
-        # Train-mode initialization parity also checks unchanged dropout RNG.
+        with torch.no_grad():
+            assert torch.equal(control(cpu_batch),candidate(cpu_batch))
         control.train(); candidate.train()
-        with torch.no_grad(),torch.autocast('cuda',dtype=torch.float16):
-            seed(); p0=control(batch)
-            seed(); p1=candidate(batch)
+        with torch.no_grad():
+            seed(); p0=control(cpu_batch)
+            seed(); p1=candidate(cpu_batch)
             assert torch.equal(p0,p1)
-        report['checks'] += ['shared initialization/RNG and initial eval/train AMP predictions match exactly',
+        control.cuda(); candidate.cuda()
+        control.eval(); candidate.eval()
+        captured={}
+        head_hook=candidate.bond_head.register_forward_hook(lambda module,args,out:captured.update(base=out.float()))
+        delta_hook=candidate.charge_partition.register_forward_hook(lambda module,args,out:captured.update(delta=out))
+        with torch.no_grad(),torch.autocast('cuda',dtype=torch.float16):
+            p0=control(batch)
+            p0_repeat=control(batch)
+            p1=candidate(batch)
+        head_hook.remove(); delta_hook.remove()
+        assert torch.equal(captured['delta'],torch.zeros_like(captured['delta']))
+        assert torch.equal(p1[batch['label_mask'].bool()],union_logit(captured['base']))
+        assert torch.isfinite(p0).all() and torch.isfinite(p1).all()
+        report['initial_amp_diagnostic']={
+            'paired_max_abs_logit_difference':float((p0-p1).abs().max()),
+            'same_control_repeat_max_abs_logit_difference':float((p0-p0_repeat).abs().max()),
+            'feature_correction_max_abs':float(captured['delta'].abs().max()),
+            'shared_parameters_exact':True,'pod_cpu_eval_and_train_predictions_exact':True,
+            'candidate_amp_union_exactly_matches_its_captured_base_logits':True,
+            'production_deterministic_algorithms':torch.are_deterministic_algorithms_enabled()}
+        control.train(); candidate.train()
+        report['checks'] += ['shared initialization/RNG and initial pod CPU eval/train predictions match exactly',
+                             'zero residual and unchanged union logits verified inside a production AMP forward; CUDA reduction variability recorded',
                              'cross-mode and corrupted checkpoint markers rejected before copying weights']
         for arm,model in (('control',control),('features',candidate)):
             cfg=copy.deepcopy(c if arm=='control' else candidate_cfg)
