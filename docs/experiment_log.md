@@ -2062,3 +2062,9 @@ pod报告/mnt/pvc/graphtrans/four_state_ops/report.md，独立核验heartbeat_re
 本机仅代码/配置编辑、git同步及小报告；计算/验证/训练全部pod。训练前检查独立字符计数参考、B/O/X/D/E语义、padding及批次不变性、空键、两臂共享初始化、pod CPU初始eval/train预测及同次AMP前向中零残差/union保持（跨前向CUDA归约差异仅诊断）、跨模式checkpoint安全、生产α=1损失与两步分支梯度，以及5组train/val SHA和序列隔离。独立four_state_charge_ops/{launch,terminal}.json终态事件，训练结束自动分析汇总，不读epoch状态。现有dbond heartbeat已改每120分钟、ACTIVE、仍回原对话，仅扫描pending终态并去重；未建立pod直接唤醒应用的回调，不冒充即时通知。
 
 project_goal：完成有KB依据的新输入方案和配对训练提交。completion_status：代码与证据已准备，pod预检及正式训练尚待完成。target_kb：kb:storage。knowledge_used/source_records：本节及evidence/source_records.json。created_files：charge_partition.py、两份charge配置、test_four_state_charge.py、four_state_charge_ops.py。modified_files：graph_transformer.py、models/utils.py、本台账和本地论文表附注。unresolved_questions：D肽迁移边界、跨种子稳定性、多轮探索偏差。suggested_knowledge_writeback：完整结果可后续另行ingest_engineering；本轮不写回。
+
+启动与预检补记：最终训练源码6e9274405fc27880d6a577df0775a531079fe837已push、pod fast-forward pull。2026-10-20 10:07:10 UTC（北京时间18:07:10）已提交checkpoints/graph_transform/four_state_charge_batch/20261020_100710，worker PID1302440，使用当时空闲GPU0/1/2/4，GPU3其他负载未触碰。两臂共10次训练；当前没有效果结论，不读epoch或运行状态。完成/失败目录/mnt/pvc/graphtrans/four_state_charge_ops/，结果在report.md/result.json，完成后review_receipt.json绑定原始指标和来源。
+
+pod预检全部通过：五组train/val SHA逐一与原成功四状态批次相同，序列与外部test隔离；每臂真实16组/427有效键。对照1,706,924参数，特征臂1,707,599；α均1，生产AMP对照1步、候选2步，输出层和后续隐藏层梯度有限且非零。CPU初始eval/train预测逐位一致，共享参数与构建RNG逐位一致。初次过严的跨前向AMP逐位相等断言未通过；诊断中候选−对照与对照重复前向最大logit差均0.001953125，生产CUDA归约非确定。现以pod CPU检验数学初始函数，同时在候选同次AMP前向捕获原头logits，证实新增残差严格为0、union logits与所捕获原头精确一致；生产确定性/精度设置未改变。不宣称跨前向AMP逐位相等。
+
+预检和启动收据同步F:/codexout/dbond_four_state_charge_launch_20261020/。本轮交付状态：证据核验、实现、git push/pull、pod数值预检和正式训练提交均完成；实验效果及独立完成核验仍待终态。比较检验的是整个新增特征分支，不能仅凭收益分离额外容量、优化参数化和化学描述的贡献。dbond原对话heartbeat为ACTIVE、每120分钟仅扫描pending终态，报告后ack，不新建重复提醒。本机应用运行及SSH可用是提醒条件；当前没有pod直接唤醒应用的即时回调。仅本台账补记另行提交，训练中不pull。
