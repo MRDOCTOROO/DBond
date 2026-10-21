@@ -2151,3 +2151,11 @@ four_state_fusion_ops.py在smoke和launch均检查width_ops配对launch/terminal
 五组为重叠的重复序列级80/20划分，每组一次初始化；总墙钟受早停/设备/调度影响，不作为等步吞吐结论。各指标SD、全部逐划分差/SD/胜率、P/R、配置及20份权重路径/SHA完整保留于report.md/result.json/checkpoint_registry.json。pod图表width_dashboard_20261022.html、width_metrics_20261022.svg、width_deltas_20261022.svg；小报告同步F:/codexout/dbond_four_state_width_results_20261022/。原成功4da48ee及dbond-four-state-reference-20261020标签保留，不修改冻结论文主表，不因外测择宽换后续底座。
 
 本次完成结果已提醒并ack宽度事件；队列第1轮reviewed，第2轮继续256/4头同轮late、early_only、early_plus_late三臂。先push/pod pull及pod-only smoke，通过后才提交。此前本地a751dd3实现尚无数值效果结论；后续动态边和学习图不提前启动。
+
+### 15.51 理论早/晚融合已预检并提交（2026-10-22）
+
+宽度实验已完成、独立复核通过、报告并ack后，训练源码f9237a605c6e215f7b75c48accf3c581fc7a9582已git push并在pod fast-forward pull。2026-10-21 21:44:03 UTC（北京时间2026-10-22 05:44:03）提交four_state_fusion_batch/20261021_214403，worker PID1465072，使用提交时空闲GPU0/1/2/4。late、early_only、early_plus_late三臂串行，各五组重复划分，共15次正式训练；固定hidden256、4头、3GCN+2GAT、四状态CEα1/Brierλ0/nocharge，各臂参数1706924。恢复标签dbond-four-state-theory-fusion-v1-20261022；原成功4da48ee及宽度08a8cbc标签继续保留。
+
+pod-only smoke全部通过：late对固定08a8cbc旧源码的初始化张量、RNG、CPU训练前向及反向逐位一致；三个路由共享初始化和CPU/CUDA初始RNG一致；CPU独立端点平均、L0/L1/空键/污染padding/全局不直接注入、GCN1理论输入与梯度路径符合预期；checkpoint同模式严格回载及跨模式copy前拒绝；每臂真实16组425有效键AMP更新且理论投影梯度非零；early_plus_late最长真实train128和FP32 val512通过。五组训练/内部完整原谱验证SHA均匹配原成功批次，所有mask指标padding投毒不变。预检只验证实现和数值，不作为性能结果；early_only零槽有效容量与端点平均映射的解释限制见§15.49及协议。
+
+配对完成事件four_state_fusion_ops/{launch,terminal}.json；launch/smoke小回执同步F:/codexout/dbond_four_state_fusion_launch_20261022/。终态后在pod独立核验全部三臂原始CSV、来源和权重，出报告及HTML/SVG，再提醒并按队列接续动态边。仅扫描完成/失败事件；不反复读取epoch或运行状态，不在训练期间pull或更改该批次源码。本次仅更新本地/远端提交回执，pod仍固定训练源码f9237a6。冻结论文表无新增效果结论。
