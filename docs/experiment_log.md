@@ -2103,3 +2103,15 @@ pod预检全部通过：五组train/val SHA逐一与原成功四状态批次相�
 pod预检全部通过：λ0与原CE值/梯度逐位一致；独立CE+Brier参考与梯度、极端logits、q端点、污染padding、权重归一化、非法参数/协议拒绝均通过；内部选参完整性、NaN拒绝、精确平局取小λ和0回退、禁止外部test访问均通过。五组train/val SHA逐一与原成功四状态批次相同；真实16组427有效键的生产AMP两臂更新均通过，完整模型初始化及CPU/CUDA初始RNG一致，参数量均1,706,924。另以1222内部train/val运行隔离的单epoch λ1集成canary，验证真实checkpoint保存/重载、实际α/λ/配置与来源hash及训练receipt绑定；外部test CSV读取数为0。canary不计入20次正式训练，不用于效果判断，不作为正式模型起点。
 
 提交回执/mnt/pvc/graphtrans/four_state_brier_ops/launch.json；预检smoke.json和integration_canary/passed.json；三份小回执同步F:/codexout/dbond_four_state_brier_launch_20261020/。正式批次先锁定全部五组内部验证选择到selection.json，再评估λ0对照与选中策略；未选λ不做外部测试。终态生成result.json、report.md、review_receipt.json，再写terminal.json供原对话dbond提醒扫描。原提醒已确认ACTIVE、每120分钟，仅扫描pending完成/失败并报告后ack；完成核验明确检查选择锁定与同轮对照，不用历史binary或电荷分支替代。本机应用及SSH可用是提醒条件，不声称已有pod直接唤醒应用的即时回调。
+
+### 15.48 四状态模型隐藏宽度对照（2026-10-21，预注册）
+
+用户明确授权本轮实现、git push、pod pull、训练及定时完成提醒，后续其他结构组逐个开展。恢复参考为最早成功四状态源码4da48eeab50decd0a31fbf64f2f179478a6624a7，固定标签dbond-four-state-reference-20261020；不因后续多轮外测微小波动替换底座。具体协议和恢复索引见experiments/width_sweep_v1.md。
+
+本轮预先指定256同轮对照及128、384、512三个候选，共20次训练。实际原模型4头GAT，保持4头及concat不变，每头维度分别64/32/96/128，不采用旧对话表格中的8头。仅改model.hidden_dim与输出/缓存身份；原始embedding不变，节点、边、全局/FiLM输出、3层GCN、2层GAT、理论投影及四状态MLP随D变化。故是联合隐藏宽度/容量试验，不能只归因为GCN通道数。四状态CEα1、Brierλ0、关闭charge组成分支，其余图/输入/优化配方保持原成功joint配置。
+
+维持五组重复序列级80/20划分、group_uniform折叠训练、完整原谱内部验证、去padding指标、固定0.5阈值及strict max-F1选点。所有宽度相同seed、拆分、最大预算和早停规则；不同宽度消耗不同构造随机数，不声称共享初始化或相同batch顺序。性能结论仅限该固定训练配方；实际早停步数和并行设备调度不同，耗时是观察到的墙钟时间。
+
+全部宽度报告F1/accuracy/AUC/谱图P-R调和F1/q-Brier/q_seq、SD、逐划分配对差和胜率；记录参数量和训练耗时。沿用预设工程门槛：平均ΔF1≥0.002、F1至少4/5改善、ΔAUC≥0、Δq-Brier≤0，全部通过列待复验候选。全报三个候选，不按外测结果宣布确认最优，不替换冻结论文表。通过者保留源码、配置SHA与逐划分checkpoint路径/SHA以供恢复。
+
+所有预检、数值验证和训练在pod。本地仅编辑、同步和查看小报告。新four_state_width_ops采用launch.json/terminal.json配对终态，自动分析后写result/report/review_receipt。当前会话完成提醒仅限本批次，pending为空安静结束，不读取epoch或运行状态，不处理旧批次、不自动失败重跑。当前状态：配置与协议已准备，等待pod预检及提交训练。
