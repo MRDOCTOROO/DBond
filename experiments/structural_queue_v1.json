@@ -6,11 +6,68 @@
   "execution_policy": "one_batch_at_a_time; review_and_report_then_submit_next; no_epoch_polling; halt_on_failure",
   "compute_location": "gsj-5090.devpod:/mnt/pvc/graphtrans/DBond",
   "reference_commit": "4da48eeab50decd0a31fbf64f2f179478a6624a7",
-  "structural_baseline": {"hidden_dim": 256, "attention_heads": 4, "gcn_layers": 3, "gat_layers": 2, "four_state_alpha": 1, "union_brier_lambda": 0, "charge_partition": false},
+  "structural_baseline": {
+    "hidden_dim": 256,
+    "attention_heads": 4,
+    "gcn_layers": 3,
+    "gat_layers": 2,
+    "four_state_alpha": 1,
+    "union_brier_lambda": 0,
+    "charge_partition": false
+  },
   "stages": [
-    {"id": 1, "name": "hidden_width", "status": "submitted", "ops": "/mnt/pvc/graphtrans/four_state_width_ops", "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_width_batch/20261021_133620", "gitrev": "08a8cbc771090814d791b60336053bc94f65cc52", "report": null, "review_receipt": null},
-    {"id": 2, "name": "theory_fusion_stage", "status": "ready_local_unverified", "requires_reviewed_stage": 1, "ops": "/mnt/pvc/graphtrans/four_state_fusion_ops", "root": null, "gitrev": null, "arms": ["late", "early_only", "early_plus_late"], "report": null, "review_receipt": null},
-    {"id": 3, "name": "dynamic_edge_state", "status": "planned", "requires_reviewed_stage": 2, "ops": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops", "root": null, "gitrev": null, "report": null, "review_receipt": null},
-    {"id": 4, "name": "learned_graph_topology", "status": "planned", "requires_reviewed_stage": 3, "ops": "/mnt/pvc/graphtrans/four_state_learned_graph_ops", "root": null, "gitrev": null, "report": null, "review_receipt": null}
+    {
+      "id": 1,
+      "name": "hidden_width",
+      "status": "reviewed",
+      "ops": "/mnt/pvc/graphtrans/four_state_width_ops",
+      "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_width_batch/20261021_133620",
+      "gitrev": "08a8cbc771090814d791b60336053bc94f65cc52",
+      "report": "/mnt/pvc/graphtrans/four_state_width_ops/report.md",
+      "review_receipt": "/mnt/pvc/graphtrans/four_state_width_ops/heartbeat_review_20261022.json",
+      "reviewed_at_local": "2026-10-22",
+      "outcome": "No candidate passed all preregistered gates. Retain 256 structural baseline; preserve 128 separately for calibration/ranking replication.",
+      "checkpoint_registry": "/mnt/pvc/graphtrans/four_state_width_ops/checkpoint_registry.json",
+      "dashboard": "/mnt/pvc/graphtrans/four_state_width_ops/width_dashboard_20261022.html",
+      "source_tag": "dbond-four-state-width-sweep-v1-20261021"
+    },
+    {
+      "id": 2,
+      "name": "theory_fusion_stage",
+      "status": "ready_for_pod_preflight",
+      "requires_reviewed_stage": 1,
+      "ops": "/mnt/pvc/graphtrans/four_state_fusion_ops",
+      "root": null,
+      "gitrev": null,
+      "arms": [
+        "late",
+        "early_only",
+        "early_plus_late"
+      ],
+      "report": null,
+      "review_receipt": null
+    },
+    {
+      "id": 3,
+      "name": "dynamic_edge_state",
+      "status": "planned",
+      "requires_reviewed_stage": 2,
+      "ops": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops",
+      "root": null,
+      "gitrev": null,
+      "report": null,
+      "review_receipt": null
+    },
+    {
+      "id": 4,
+      "name": "learned_graph_topology",
+      "status": "planned",
+      "requires_reviewed_stage": 3,
+      "ops": "/mnt/pvc/graphtrans/four_state_learned_graph_ops",
+      "root": null,
+      "gitrev": null,
+      "report": null,
+      "review_receipt": null
+    }
   ]
 }
