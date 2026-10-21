@@ -18,7 +18,7 @@ class AttentionExtractor:
     注意力权重提取器
     
     从GraphTransformer模型中提取注意力权重，用于可视化分析。
-    复制forward()方法中的节点准备逻辑，确保与训练时一致。
+    历史节点准备重放不覆盖所有生产分支，正式机制分析须使用实际forward钩子。
     """
     
     def __init__(self, model: nn.Module, device: torch.device):
@@ -43,6 +43,9 @@ class AttentionExtractor:
         Returns:
             List[torch.Tensor]: 每个注意力层的权重列表
         """
+        if getattr(self.model, 'theory_fusion_stage', 'late') != 'late':
+            raise NotImplementedError(
+                'Legacy attention replay omits early theory fusion; use production forward hooks')
         with torch.no_grad():
             # 节点特征编码
             node_features = self.model.node_encoder(batch_data)

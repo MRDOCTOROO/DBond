@@ -57,6 +57,9 @@ class ModelConfig:
         # 序列衍生理论键离子特征（prefix/suffix mass、b/y 理论 m/z、H2O/NH3-loss、
         # Pro 上下文等，见 data/theory_features.py）；开启后 bond head 多一路投影
         self.use_theory_features = False
+        # Reuse the same projected theory at the prediction head, before GCN,
+        # or at both points. Absence retains the original late route.
+        self.theory_fusion_stage = 'late'
         # Optional architecture experiments; absent keys retain legacy behavior.
         self.use_fragment_readout = False
         self.fragment_readout_dim = 64
@@ -125,6 +128,8 @@ class ModelConfig:
         validate_position_mode(self.position_embedding_mode)
         from .bond_cross_attention import validate_bond_head_type
         validate_bond_head_type(self.bond_head_type)
+        from .theory_fusion import validate_theory_fusion_stage
+        validate_theory_fusion_stage(self.theory_fusion_stage)
     
     def update_config(self, config_dict: Dict):
         """更新配置参数"""
@@ -445,6 +450,10 @@ class CheckpointManager:
         if hasattr(model, 'gat_attention_type'):
             from .attention_v2 import validate_attention_checkpoint
             validate_attention_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
+
+        if hasattr(model, 'theory_fusion_stage'):
+            from .theory_fusion import validate_theory_fusion_checkpoint
+            validate_theory_fusion_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
 
         # New experimental branches must never be silently dropped/left random
         # by strict=False. Legacy checkpoints have neither prefix and remain

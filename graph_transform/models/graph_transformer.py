@@ -475,11 +475,21 @@ class GraphTransformer(nn.Module):
 
         self.use_global_node = getattr(config, 'use_global_node', False)
         self.use_theory_features = getattr(config, 'use_theory_features', False)
+        from .theory_fusion import validate_theory_fusion_stage, theory_fusion_mode_code
+        self.theory_fusion_stage = validate_theory_fusion_stage(
+            getattr(config, 'theory_fusion_stage', 'late'))
+        if self.theory_fusion_stage != 'late' and not self.use_theory_features:
+            raise ValueError('Early theory fusion requires use_theory_features=True')
+        theory_mode_code = theory_fusion_mode_code(self.theory_fusion_stage)
+        if theory_mode_code is not None:
+            # Shapes alone cannot distinguish these routes at inference time.
+            # Buffers add no learned parameters and consume no random numbers.
+            self.register_buffer('theory_fusion_mode_code', torch.tensor(theory_mode_code, dtype=torch.int64))
         if self.use_theory_features:
             from data.theory_features import BOND_THEORY_DIM
             # 序列衍生理论键离子特征（prefix/suffix mass、b/y 理论 m/z、相对位置、
             # 两侧残基质量、H2O/NH3-loss 标记、Pro 上下文），投影到 hidden_dim 后
-            # 与 bond 表示拼接。
+            # 默认在预测头与 bond 表示拼接；早期融合复用同一投影。
             self.bond_theory_proj = nn.Linear(BOND_THEORY_DIM, config.hidden_dim)
         if self.use_global_node:
             state_out_dim = self.node_encoder.state_encoder[-1].out_features
@@ -679,11 +689,13 @@ class GraphTransformer(nn.Module):
         from .position_encoding import validate_position_checkpoint
         from .bond_cross_attention import validate_bond_head_checkpoint
         from .charge_partition import validate_charge_partition_checkpoint
+        from .theory_fusion import validate_theory_fusion_checkpoint
         try:
             validate_attention_checkpoint(self, state_dict)
             validate_position_checkpoint(self, state_dict)
             validate_bond_head_checkpoint(self, state_dict)
             validate_charge_partition_checkpoint(self, state_dict)
+            validate_theory_fusion_checkpoint(self, state_dict)
         except ValueError as error:
             raise RuntimeError(str(error)) from error
         saved_ion = {k for k in state_dict if k.startswith('ion12_head.')}
@@ -833,6 +845,16 @@ class GraphTransformer(nn.Module):
                         num_nodes=node_features.size(0),
                     )
 
+        early_theory = None
+        if max_bonds > 0 and self.theory_fusion_stage != 'late':
+            from .theory_fusion import add_packed_bond_theory
+            # The 15 descriptors are still sequence-derived. Only their entry
+            # point changes: AFTER the unchanged FiLM and BEFORE the first GCN.
+            # Project valid bonds once, then reuse the same tensor at readout.
+            theory_flat = batch_data['bond_theory'][valid_bond_mask]
+            early_theory = self.bond_theory_proj(theory_flat.to(node_features.dtype))
+            node_features = add_packed_bond_theory(node_features, early_theory, bond_src, bond_dst)
+
         # 辅助头仅在训练前向激活；eval 路径零开销、last_aux_outputs 保持 None
         aux_active = (self.use_deep_supervision or self.use_peptide_aux_head) and self.training
         aux_bond_logits = {}
@@ -914,10 +936,17 @@ class GraphTransformer(nn.Module):
             if self.bond_use_product_feature:
                 bond_feature_parts.append(h_src * h_dst)
             if self.use_theory_features:
-                # 理论键离子特征：[B, max_bonds, D] 按 valid_bond_mask 展平，
-                # 行序与 bond_src/bond_dst 的行主序展开一致
-                theory_flat = batch_data['bond_theory'][valid_bond_mask]
-                bond_feature_parts.append(self.bond_theory_proj(theory_flat.to(h_src.dtype)))
+                if self.theory_fusion_stage == 'late':
+                    # Keep the original operation order and RNG for the legacy
+                    # route; all 3 GCN and 2 GAT layers finish before this input.
+                    theory_flat = batch_data['bond_theory'][valid_bond_mask]
+                    bond_feature_parts.append(self.bond_theory_proj(theory_flat.to(h_src.dtype)))
+                elif self.theory_fusion_stage == 'early_only':
+                    # Retain the exact 6D head width and learned parameter count.
+                    # Theory reaches the prediction solely through graph nodes.
+                    bond_feature_parts.append(torch.zeros_like(h_src))
+                else:
+                    bond_feature_parts.append(early_theory.to(h_src.dtype))
             bond_features = (bond_feature_parts if self.bond_head_type == 'cross_attention_mlp'
                              else torch.cat(bond_feature_parts, dim=-1))
             ion12_active = self.use_ion12_aux_head and self.training
@@ -1030,9 +1059,12 @@ class GraphTransformer(nn.Module):
         ⚠️ 注意：此方法是简化版，存在两个已知局限：
             1. 未处理 global node packing（forward 路径在 GAT 前会 packing）
             2. 历史版本曾跳过 GCN 层（已在本次修复中补回）
-        推荐生产环境使用 utils.attention_extractor.AttentionExtractor，
-        它完整复现 forward 路径。此方法保留仅供简单调试。
+        此方法以及旧 AttentionExtractor 均非完整生产 forward 的替代；
+        正式机制分析应使用实际 forward 的钩子。此方法仅供旧路径调试。
         """
+        if self.theory_fusion_stage != 'late':
+            raise NotImplementedError(
+                'Legacy attention replay omits early theory fusion; use production forward hooks')
         attention_weights = []
 
         # 节点特征编码

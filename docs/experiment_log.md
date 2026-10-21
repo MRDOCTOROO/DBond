@@ -2116,3 +2116,18 @@ pod预检全部通过：λ0与原CE值/梯度逐位一致；独立CE+Brier参考
 
 所有预检、数值验证和训练在pod。本地仅编辑、同步和查看小报告。新four_state_width_ops采用launch.json/terminal.json配对终态，自动分析后写result/report/review_receipt。当前会话完成提醒仅限本批次，pending为空安静结束，不读取epoch或运行状态，不处理旧批次、不自动失败重跑。当前状态：配置与协议已准备，等待pod预检及提交训练。
 启动补记：源码08a8cbc771090814d791b60336053bc94f65cc52已push，pod fast-forward pull、语法与数值预检全部通过。2026-10-21 13:36:20 UTC提交four_state_width_batch/20261021_133620，worker PID1425572，使用空闲GPU0/1/4，共20次训练。固定源码标签dbond-four-state-width-sweep-v1-20261021；原成功恢复标签dbond-four-state-reference-20261020已推送。参数量128/256/384/512分别464172/1706924/3736108/6551724。五组train/val SHA保持一致；每宽度真实16条/425有效键AMP更新、逐层形状、global双向连接、padding投毒与checkpoint检查通过；512额外通过最长真实train128及val512。预检不作效果判断，不作为训练起点。当前会话独立heartbeat dbond-2 ACTIVE每120分钟，只处理本宽度批次；旧dbond仍PAUSED不变。收据F:/codexout/dbond_four_state_width_launch_20261021/，完整恢复协议experiments/width_sweep_v1.md。当前交付为正式训练已提交、效果等待终态；训练后不读取epoch或运行状态，也不在训练中pull本次台账补记。
+### 15.49 后续串行结构队列与理论融合实现（2026-10-21，本地准备）
+
+用户明确授权宽度实验完成后逐轮开展：第2轮理论早/晚融合，第3轮动态边更新，第4轮固定位置图/学习拓扑；每轮出报告。限制同一时间只运行一轮，本机可提前编辑下一轮，计算、数值核验和绘图仍只在pod。用户当前明确的串行训练授权覆盖旧AGENTS“只交命令不启动”的历史规则；不另询问已授权提交。队列索引experiments/structural_queue_v1.json，完整协议structural_queue_v1.md，第3/4轮设计dynamic_learned_graph_protocol.md。
+
+第2–4轮固定成功四状态参考配方hidden256/4heads/3GCN+2GAT/CE4α1λ0/nocharge，每轮从头重训同轮对照，不根据宽度外部测试胜者自动换底座，也不将上一轮新模块叠加，便于单项归因。第3轮计划比较static、同参数固定h0上下文边更新、当前层h_l动态更新；主头仍用e0，隔离传播与头的改动。第4轮计划原位置图、同评分器固定图、同预算学习新连接，保留主链和全局边；现有GAT学已有边权重不等于学习拓扑。新长程边的distance buckets须与建图半径解耦，正式运行前冻结最终小协议。
+
+第2轮本地实现theory_fusion_stage=late/early_only/early_plus_late，全部复用已有Linear15→D，无新增可学习参数、dropout或缩放常数。late保持原投影时序：GCN×3及GAT×2结束后才进入最终逐键头；这条理论输入不直接参与骨干传播或注意力，联合loss梯度仍可训练主干。早期分支将有效键投影按两侧相邻残基求incident mean，在FiLM之后、GCN1之前相加；全局节点不直接注入，之后可经图传播获取。early_only末端理论槽填零保留6D头，early_plus_late保留同次投影作直达输入。总参数数目相同不代表有效容量相同：early_only零槽列无数据梯度；同时端点平均改变信息映射，不能将负结果归咎所有早融合。early_plus_late用于检验保留直达路径时提前参与传播有无帮助。
+
+默认late不加mode buffer，保持旧checkpoint schema；两个early模式分别持久标记，ModelConfig声明并验证枚举。GraphTransformer直接load与CheckpointManager均copy前拒绝模式不匹配，包括strict=False。旧attention手工replay遗漏早期路径，加入early显式拒绝；机制分析只用真实forward钩子，不用旧helper画误导图。指标汇总不受此helper防护影响。
+
+pod-only预检脚本已编写但尚未执行：固定08a8cbc只读git show旧源码，对late初始化、CPU前向、梯度和RNG回归；三臂共有张量/CPU CUDA RNG/总参数核验；独立端点平均参考含L0/L1/global/NaN padding；理论扰动与GCN1梯度路径在CPU验证，避免CUDA scatter非确定假阴性；生产AMP及最长train128/val512在GPU验证；mask指标及checkpoint跨模式防混用检查。五组train/val和完整原谱来源SHA须逐一匹配原成功批次。
+
+four_state_fusion_ops.py在smoke和launch均检查width_ops配对launch/terminal completed/review passed/已ack报告四个前提，再检查空闲GPU。三臂共15次正式训练全部完成后独立核验原始CSV、train/val/target/source/config来源、八项汇总、六主指标/P/R及逐划分差/SD/胜率；CPU strict加载全部best_model核对stage/参数数/finite，生成恢复清单和report/result/review后才写terminal。失败不重跑、不自动跳过后进入下一轮。所有候选完整报告，采用门槛与前轮一致；冻结论文主表不变。
+
+当前状态：第二轮代码/配置/报告生成与预检脚本已在本地完成编写及静态审阅，尚无pod语法、数值或性能验证；第三、四轮目前只有协议，等各自前序完成后实现并验证。没有读取当前宽度训练日志/运行状态，没有向pod同步任何新模型文件，没有启动额外训练。现有dbond-2提醒延用每120分钟终态检查，按此新授权扩展为逐轮复核、报告、ack后接续下一轮；提交信息落队列，空闲资源不足则留待下一次检查，不占用其他工作负载。
