@@ -37,3 +37,16 @@
 Pod目录：`/mnt/pvc/graphtrans/four_state_width_ops/`。`launch.json`绑定提交、配置、目标文件、源代码及运行根目录；成功预检记录在`smoke.json`。全部完成后核验原始指标CSV与来源，生成`result.json`、`report.md`、`review_receipt.json`和权重恢复索引，然后写`terminal.json`；失败只写失败终态，不自动重跑。
 
 当前会话提醒只处理该宽度批次的pending终态事件。pending为空时保持安静；完成后小量核验并报告，再ack。旧会话的其他实验和提醒不在本次处理范围。数据处理、数值验证与训练只在pod执行，本机仅编辑、git同步和查看小报告。
+
+## 已提交训练（2026-10-21）
+
+- 训练源码：`08a8cbc771090814d791b60336053bc94f65cc52`。
+- 固定实验标签：`dbond-four-state-width-sweep-v1-20261021`。
+- Pod批次：`/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_width_batch/20261021_133620`。
+- 提交时间：2026-10-21 13:36:20 UTC / 北京时间21:36:20；worker PID1425572；提交时空闲GPU0、1、4，其他设备未使用。
+- 预检全部通过：四档各真实16条/425有效键的AMP更新，逐GCN/GAT/理论/全局形状，五组train/val来源SHA与原成功批次一致，污染padding指标不变，checkpoint恢复/跨宽拒绝。
+- 参数量：128维464,172；256维1,706,924；384维3,736,108；512维6,551,724。
+- 512维额外通过最长真实训练batch128与FP32验证batch512，峰值分配显存分别3102.790039 MB与2402.901367 MB（1024²字节），无需改批量。预检不是性能结果，也不是正式训练起点。
+- 小回执已同步到`F:/codexout/dbond_four_state_width_launch_20261021/`。
+- 本轮独立提醒id `dbond-2`，ACTIVE，每120分钟仅检查匹配本批次的pending终态；原提醒`dbond`的PAUSED状态及旧会话目标未变。没有pending时保持安静，完成核验并提醒后ack，不读取epoch状态、不自动重跑。
+- 完成后权重恢复清单：`/mnt/pvc/graphtrans/four_state_width_ops/checkpoint_registry.json`；结果及报告同目录。当前尚无效果结论，未开始其他结构实验。
