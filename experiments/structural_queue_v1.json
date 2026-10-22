@@ -137,16 +137,16 @@
     {
       "id": 6,
       "name": "four_state_head_fusion",
-      "status": "ready_local_unverified",
-      "implementation_status": "implemented_and_independently_static_reviewed_pending_pod_preflight",
+      "status": "submitted",
+      "implementation_status": "implemented_static_reviewed_pod_smoke_passed_and_launched",
       "requires_reviewed_stage": 3,
       "protocol": "experiments/four_state_head_fusion_v1.md",
       "ops": "/mnt/pvc/graphtrans/four_state_head_fusion_ops",
       "batch_prefix": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_head_fusion_batch",
-      "root": null,
-      "gitrev": null,
-      "report": null,
-      "review_receipt": null,
+      "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_head_fusion_batch/20261022_214615",
+      "gitrev": "d4a2d1c45221a78d1cedb08f87404adf8ad07533",
+      "report": "/mnt/pvc/graphtrans/four_state_head_fusion_ops/report.md",
+      "review_receipt": "/mnt/pvc/graphtrans/four_state_head_fusion_ops/heartbeat_review.json",
       "arms": [
         "concat",
         "cross_attention",
@@ -164,7 +164,29 @@
       "predecessor_ops": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops",
       "authorized_at_local": "2026-10-22",
       "completion_action": "Independent pod review/report/ack, then only stage7. Do not adopt a test-selected head into stage7.",
-      "execution_condition": "Stage3 completed, independently reviewed, reported, acked; then implementation/static review, push/pod pull, successful pod smoke, one launch. No current pod source changes."
+      "execution_condition": "Stage3 completed, independently reviewed, reported, acked; then implementation/static review, push/pod pull, successful pod smoke, one launch. No current pod source changes.",
+      "source_tag": "dbond-four-state-head-fusion-v1-20261023",
+      "launch_receipt": "/mnt/pvc/graphtrans/four_state_head_fusion_ops/launch.json",
+      "preflight_receipt": "/mnt/pvc/graphtrans/four_state_head_fusion_ops/smoke.json",
+      "preflight_sha256": "ebb373c3b4522954e50eaefa02157166a4f1d9c3d7022bc1afb8c60201b04816",
+      "config_sha256": {
+        "concat": "68b7c60534a30d82307913266c8b0fb89387cacf91261f00824f943c91ba1944",
+        "cross_attention": "10b9e9bb33f02a08f70df1c1e5213db2d477c75b1d8541c9e906aaa22df8e8e8",
+        "gated": "6b1d2cd84bd89938dccc04a231641bc47183b893d820d326db8f5161edd823e6",
+        "residual_mlp": "8e1a040b77e89e0302ef929e81c45c32cbeed47f66d8b017425f4462f15e6756"
+      },
+      "gpus": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "submitted_at_utc": "2026-10-22T21:46:15.069333+00:00",
+      "worker_pid": 1578787,
+      "checkpoint_registry": "/mnt/pvc/graphtrans/four_state_head_fusion_ops/checkpoint_registry.json",
+      "dashboard": "/mnt/pvc/graphtrans/four_state_head_fusion_ops/head_fusion_dashboard.html",
+      "local_receipts": "F:/codexout/dbond_four_state_head_fusion_results_20261023/",
+      "resume_condition": "Launched once after all 15 pod preflight checks passed. Never repeat smoke/launch. Pod source frozen; only terminal events, no epoch monitoring. Stage7 requires completed independent review/report/ack."
     },
     {
       "id": 7,

@@ -2289,3 +2289,13 @@ stage7协议experiments/four_state_node_conv_v1.md：同静态四状态基座保
 新checkpoint schema/模式/来源/头数标记及保存config预复制检查，防strict=False串用。模型、四份配置、pod-only预检及ops已由不同审阅者静态交叉检查，无已知重要阻断；本机未执行任何数值测试。预检覆盖旧fb30252状态/RNG/CPU前反向、四态CE和union q、六来源独立公式/隔离/梯度、padding/短链、gate/res零初值及第二步梯度解锁、三候选最长train128/val512、历史五组来源和checkpoint防混用。ops带前序独立review/ack屏障，20份权重恢复、八指标/三比较、HTML/SVG/恢复索引。
 
 stage3已报告准备并ack、reviewed，现允许push/pod fast-forward pull一次后smoke；仅所有预检通过才launch。此记录不宣称数值预检或训练已运行。原成功4da48ee及所有候选/权重继续保留，学习图暂缓；后续stage7需本轮完成独立报告后才开展。
+
+### 15.62 四状态融合头预检全部通过并提交20次同轮训练（2026-10-23）
+
+本地源码d4a2d1c45221a78d1cedb08f87404adf8ad07533已push/pod fast-forward pull，永久tag dbond-four-state-head-fusion-v1-20261023。前序动态边completed/独立审计/报告/ack屏障通过；一次pod-only smoke的15项fusion_checks全部通过，未重复预检。覆盖冻结fb30252 concat参数schema/RNG/CPU前反向完全一致、旧binaryconcat/cross严格恢复兼容、共同骨干初始化、gate/res初始等函数、实际四态CE+unionq、六源顺序/梯度、手算注意力门控残差、键与样本隔离、padding/短链/空有效键、诊断RNG不变、跨模式预复制拒绝、两步AMP梯度解锁、三候选最长train128/val512及五组历史来源SHA。cross初始函数不同于concat，预检和报告明确区分，不宣称四臂初始输出相同。
+
+于2026-10-22 21:46:15 UTC（北京时间10月23日05:46:15）正式launch，worker PID1578787；root /mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_head_fusion_batch/20261022_214615。提交时空闲GPU0/1/2/4，未抢占GPU3。concat→cross_attention→gated→residual_mlp四臂串行，每臂五组划分，共20次从头训练；原调度保持。两种seed base42、256维、3GCN2GAT4头、四态α1/Brier0、static/late/nocharge、原nodeencoder不变，不叠加此前实验候选。
+
+ops /mnt/pvc/graphtrans/four_state_head_fusion_ops；launch绑定源码/配置/目标、旧前序审计SHA及smoke SHA ebb373c3b4522954e50eaefa02157166a4f1d9c3d7022bc1afb8c60201b04816。四份config SHA已完整登记小索引与launch，小回执同步F:/codexout/dbond_four_state_head_fusion_results_20261023/。本地接下来只push提交回执，pod不pull，训练源码冻结d4a2d1c。
+
+完成后独立复核20权重、实际RNG/模式/来源、原始CSV全部8指标、3对照/SD/配对差SD/胜平负/参数耗时、内部小样本融合诊断，生成完整报告和可视化、恢复registry并提醒/ack。四项工程门槛不变；成功执行但负结果仍按授权接stage7，执行/来源失败halt不自动重跑。stage7仅协议，尚未实现或测试，待本轮报告后再做；学习图仍暂缓，冻结论文表不改，所有原成功源码及候选保留。
