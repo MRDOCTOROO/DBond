@@ -3,7 +3,7 @@
   "authorization_date_local": "2026-10-21",
   "thread_id": "01a1547f-f644-7d70-816a-1b3fe2ad8e80",
   "protocol": "experiments/structural_queue_v1.md",
-  "execution_policy": "one_batch_at_a_time; review_fusion_then_only_width_seed_replication; stop_after_replication; dynamic_and_learned_graph_deferred",
+  "execution_policy": "authorized_seed_replication_complete; no_automatic_continuation; dynamic_and_learned_graph_deferred",
   "compute_location": "gsj-5090.devpod:/mnt/pvc/graphtrans/DBond",
   "reference_commit": "4da48eeab50decd0a31fbf64f2f179478a6624a7",
   "structural_baseline": {
@@ -58,13 +58,13 @@
     {
       "id": 5,
       "name": "width_seed_replication",
-      "status": "submitted",
+      "status": "reviewed",
       "requires_reviewed_stage": 2,
       "ops": "/mnt/pvc/graphtrans/four_state_width_replication_ops",
       "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_width_replication_batch/20261022_034451",
       "gitrev": "967bd43c51513f8a0779e5fd1d20dbb1fec955f4",
-      "report": null,
-      "review_receipt": null,
+      "report": "/mnt/pvc/graphtrans/four_state_width_replication_ops/report.md",
+      "review_receipt": "/mnt/pvc/graphtrans/four_state_width_replication_ops/heartbeat_review_20261022.json",
       "protocol": "experiments/width_seed_replication_v1.md",
       "arms": [
         "256",
@@ -81,7 +81,11 @@
       "source_tag": "dbond-four-state-width-seed43-run-20261022",
       "launch_receipt": "/mnt/pvc/graphtrans/four_state_width_replication_ops/launch.json",
       "preflight_receipt": "/mnt/pvc/graphtrans/four_state_width_replication_ops/smoke.json",
-      "submitted_at_utc": "2026-10-22T11:44:51.081493+08:00"
+      "submitted_at_utc": "2026-10-22T11:44:51.081493+08:00",
+      "reviewed_at_local": "2026-10-22",
+      "checkpoint_registry": "/mnt/pvc/graphtrans/four_state_width_replication_ops/checkpoint_registry.json",
+      "dashboard": "/mnt/pvc/graphtrans/four_state_width_replication_ops/replication_dashboard_20261022.html",
+      "outcome": "Seed43 partly replicated 128 calibration/ranking directions: q-Brier improved 4/5, q_seq 3/5; AUC reversed and F1/spectrum F1 declined. Not all gates passed; preserve both widths, no automatic promotion or further experiment."
     },
     {
       "id": 3,
@@ -108,11 +112,11 @@
       "resume_condition": "Explicit later user authorization after resolving width/head experiment identity; do not auto-launch."
     }
   ],
-  "auto_advance": true,
+  "auto_advance": false,
   "scheduling_update": {
     "date_local": "2026-10-22",
     "reason": "User chose independent-seed replication of 128/256 four-state after current fusion completes and is reviewed; no full2x2; dynamic/learned graph remain deferred.",
-    "current_fusion_action": "Completed, independently reviewed, reported and acked. Seed replication submitted; do not relaunch either stage.",
+    "current_fusion_action": "Completed, independently reviewed, reported and acked; no automatic follow-up.",
     "requested_combination": {
       "bond_head_type": "four_state_mlp",
       "report": "/mnt/pvc/graphtrans/four_state_width_ops/report.md",
@@ -123,9 +127,7 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "None automatically. Review seed43 replication terminal, report/ack, then stop; dynamic and learned graph remain deferred."
+    "next_new_experiment": "None authorized for automatic continuation. Seed43 replication reviewed; dynamic and learned graph remain deferred."
   },
-  "auto_advance_allowlist": [
-    5
-  ]
+  "auto_advance_allowlist": []
 }

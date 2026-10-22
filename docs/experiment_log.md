@@ -2204,3 +2204,24 @@ pod-only smoke全部通过：late对固定08a8cbc旧源码的初始化张量、R
 预检核对两臂真实层维度、global/理论路由、16组425有效键AMP更新、有限梯度、padding投毒不变、同维度权重严格回载和跨宽度复制前拒绝；256完整train128及FP32 val512通过。256参数1706924，128参数464172；这些仅为预检与架构规模，不是模型效果结果。smoke来源绑定967bd43及两份配置SHA。新checkpoint额外记录actual training/split seed、宽度、融合和损失配置，完成后逐份核验。
 
 配对事件four_state_width_replication_ops/{launch,terminal}.json；launch/smoke小回执同步F:/codexout/dbond_four_state_width_replication_launch_20261022/。完成后在pod复算全部指标、SD、配对差/胜率，生成报告与HTML/SVG和10份权重SHA恢复记录；并列旧seed42与新seed43的128−256方向，不能把重叠划分混作十个独立折。沿用预设分类门槛，同时单独报告校准/排序优势是否复现，不基于外测择epoch/阈值/seed，不修改冻结论文表。仅完成/失败事件提醒，不反复读进度；复验报告并ack后停止自动接续，动态边和学习图继续deferred_by_user。
+
+### 15.56 独立训练种子复验完成：128概率误差与序列排序仅部分复现（2026-10-22）
+
+批次four_state_width_replication_batch/20261022_034451于2026-10-22 07:42:11 UTC（北京时间15:42:11）完成；十次训练均成功，源码967bd43c51513f8a0779e5fd1d20dbb1fec955f4，恢复标签dbond-four-state-width-seed43-run-20261022。两臂保持四状态α1/Brierλ0、原晚融合、nocharge、3GCN+2GAT/4头；训练base43、内部split base42，五组train/val/source SHA保持原成功及旧宽度批次一致。pod独立核验来源、checkpoint实际种子协议、原始CSV与均值/样本SD、配对差/SD/胜平负，凭据four_state_width_replication_ops/heartbeat_review_20261022.json。固定0.5阈值及去padding口径；未读取epoch日志、未修改模型或启动新训练。
+
+| 指标 | seed43同轮256 | seed43的128 | 128−256 / 改善划分 |
+|---|---:|---:|---:|
+| 有效键micro-F1 % | 79.769528 | 79.687830 | −0.081698 pp / 1/5 |
+| 有效键accuracy % | 79.821783 | 79.810523 | −0.011260 pp / 3/5 |
+| ROC-AUC | 0.881656 | 0.880639 | −0.001017 / 2/5 |
+| 谱图平均P/R调和F1 % | 75.382159 | 75.028265 | −0.353895 pp / 1/5 |
+| q-Brier ↓ | 0.067181 | 0.066134 | −0.001047 / 4/5 |
+| q_seq | 0.608704 | 0.635667 | +0.026963 / 3/5 |
+
+两轮各自同轮128−256比较：旧seed42的q-Brier−0.002343051（5/5改善）与q_seq+0.037459737（5/5）在新seed43维持改善均值方向，幅度减小且新胜率降为4/5、3/5。AUC旧+0.002331635（5/5）转为新−0.001017（2/5），未复现；F1从旧+0.006424个百分点（2/5）转为新−0.081698个百分点（1/5）；谱图调和F1两轮均下降（旧−0.236105、新−0.353895个百分点）。新q_seq配对SD0.059239大于均值增益0.026963，2252划分提升0.125207而1222/9075为负，说明排序优势尚不稳定。Brier是概率平方误差，不将其下降单独等同于严格校准机制证据；AUC是键级判别排序，q_seq是序列级排序，两者方向不同并不矛盾。
+
+128仅通过Brier不升门槛，未通过F1幅度/F1胜率/AUC门槛，不宣布整体更优或自动替换256。保留128小容量、概率误差/序列排序候选以及256对照，源标签与全部十份权重/config SHA保存在checkpoint_registry.json；参数128为464172、256为1706924，两臂五划分墙钟分别1.9529/2.0018小时，受早停/设备/调度影响，不作为等步吞吐结论。两次训练种子仍不足以确认稳健性，五组重叠划分不能合并为十个独立样本；不依外测选epoch/阈值/seed或混合权重，不替换冻结论文主表。
+
+报告、result、原自动review及独立heartbeat_review、恢复索引与HTML/SVG/PNG均保存在four_state_width_replication_ops/；小报告同步F:/codexout/dbond_four_state_width_replication_results_20261022/。看板replication_dashboard_20261022.html，主图replication_metrics_20261022.svg/.png，新旧种子差图replication_seed_deltas_20261022.svg。原成功4da48ee及标签、旧宽度08a8cbc及标签、理论融合f9237a6及标签继续保留。
+
+本轮结果已准备提醒并ack准确completed键，stage5 reviewed，auto_advance=false且allowlist清空。当前授权队列收尾，动态边与学习图仍deferred_by_user；不启动新预检或训练。后续仅本地/远端同步结果台账，不在pod pull改变本轮来源快照。
