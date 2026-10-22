@@ -2159,3 +2159,9 @@ four_state_fusion_ops.py在smoke和launch均检查width_ops配对launch/terminal
 pod-only smoke全部通过：late对固定08a8cbc旧源码的初始化张量、RNG、CPU训练前向及反向逐位一致；三个路由共享初始化和CPU/CUDA初始RNG一致；CPU独立端点平均、L0/L1/空键/污染padding/全局不直接注入、GCN1理论输入与梯度路径符合预期；checkpoint同模式严格回载及跨模式copy前拒绝；每臂真实16组425有效键AMP更新且理论投影梯度非零；early_plus_late最长真实train128和FP32 val512通过。五组训练/内部完整原谱验证SHA均匹配原成功批次，所有mask指标padding投毒不变。预检只验证实现和数值，不作为性能结果；early_only零槽有效容量与端点平均映射的解释限制见§15.49及协议。
 
 配对完成事件four_state_fusion_ops/{launch,terminal}.json；launch/smoke小回执同步F:/codexout/dbond_four_state_fusion_launch_20261022/。终态后在pod独立核验全部三臂原始CSV、来源和权重，出报告及HTML/SVG，再提醒并按队列接续动态边。仅扫描完成/失败事件；不反复读取epoch或运行状态，不在训练期间pull或更改该批次源码。本次仅更新本地/远端提交回执，pod仍固定训练源码f9237a6。冻结论文表无新增效果结论。
+
+### 15.52 宽度/预测头身份澄清与队列暂缓（2026-10-22）
+
+用户请求暂缓动态边，在中间优先测试128维+四状态头α=1。只读复核现有配置和已绑定报告，确认§15.50宽度四臂均为four_state_mlp、α=1/Brierλ0；因此128维+四状态已经完成，不是128维+原二分类头。128同轮F1 79.984027%、accuracy80.238314%、AUC0.885376、谱图调和F1 75.303909%、q-Brier0.063974、q_seq0.664807均属于四状态结果；对照256也是四状态，不能再叠加历史四状态相对binary的收益。报告源码08a8cbc，配置pre_synthesis_four_state_width128.yaml，完整权重登记four_state_width_ops/checkpoint_registry.json。没有新增或改算任何数值，冻结论文表不变。
+
+队列auto_advance=false，动态边与学习图deferred_by_user；已提交的理论融合不打断、不重启、训练中不pull，终态仍核验报告并ack，但不接续动态边。用户已收到设计选择问题：独立新种子配对复验128/256四状态、补齐2×2，或等融合结果。尚未选择时不按错误身份重复原试验、不自行扩大计算；新设计需另写小协议。所有已授权数据和数值工作继续只在pod，本次本机仅文档/配置索引更新和同步。

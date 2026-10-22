@@ -3,7 +3,7 @@
   "authorization_date_local": "2026-10-21",
   "thread_id": "01a1547f-f644-7d70-816a-1b3fe2ad8e80",
   "protocol": "experiments/structural_queue_v1.md",
-  "execution_policy": "one_batch_at_a_time; review_and_report_then_submit_next; no_epoch_polling; halt_on_failure",
+  "execution_policy": "one_batch_at_a_time; review_and_report_current; do_not_auto_advance_after_fusion; user_deferred_dynamic_and_learned_graph",
   "compute_location": "gsj-5090.devpod:/mnt/pvc/graphtrans/DBond",
   "reference_commit": "4da48eeab50decd0a31fbf64f2f179478a6624a7",
   "structural_baseline": {
@@ -54,24 +54,43 @@
     {
       "id": 3,
       "name": "dynamic_edge_state",
-      "status": "planned",
+      "status": "deferred_by_user",
       "requires_reviewed_stage": 2,
       "ops": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops",
       "root": null,
       "gitrev": null,
       "report": null,
-      "review_receipt": null
+      "review_receipt": null,
+      "resume_condition": "Explicit later user authorization after resolving width/head experiment identity; do not auto-launch."
     },
     {
       "id": 4,
       "name": "learned_graph_topology",
-      "status": "planned",
+      "status": "deferred_by_user",
       "requires_reviewed_stage": 3,
       "ops": "/mnt/pvc/graphtrans/four_state_learned_graph_ops",
       "root": null,
       "gitrev": null,
       "report": null,
-      "review_receipt": null
+      "review_receipt": null,
+      "resume_condition": "Explicit later user authorization after resolving width/head experiment identity; do not auto-launch."
     }
-  ]
+  ],
+  "auto_advance": false,
+  "scheduling_update": {
+    "date_local": "2026-10-22",
+    "reason": "User requested defer dynamic edge/learned graph and prioritize 128+four-state alpha=1. Audit confirms requested combination already completed in width sweep; next new trial design awaits clarification.",
+    "current_fusion_action": "Keep existing submission; review and report terminal event only. Do not interrupt or restart.",
+    "requested_combination": {
+      "bond_head_type": "four_state_mlp",
+      "report": "/mnt/pvc/graphtrans/four_state_width_ops/report.md",
+      "source_commit": "08a8cbc771090814d791b60336053bc94f65cc52",
+      "existing_stage": 1,
+      "checkpoint_registry": "/mnt/pvc/graphtrans/four_state_width_ops/checkpoint_registry.json",
+      "four_state_alpha": 1,
+      "hidden_dim": 128,
+      "status": "already_completed_and_reviewed"
+    },
+    "next_new_experiment": "awaiting_user_choice_between_independent_seed_replication_and_2x2_or_wait"
+  }
 }
