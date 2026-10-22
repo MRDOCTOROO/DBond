@@ -2173,3 +2173,24 @@ pod-only smoke全部通过：late对固定08a8cbc旧源码的初始化张量、R
 预注册experiments/width_seed_replication_v1.md：下一轮只128/256四状态α1、union-Brier0、原晚期理论融合、nocharge，训练基础seed43（原42），同原五组重复序列级划分，共10次从头训练。发现旧experiment.seed同时用于训练初始化和内部验证split；直接改42→43会改变内部验证集合，故新增可选显式validation_split_seed/base_seed，保持默认旧行为，按fold固定旧split base42、仅训练base43。实际split CSV SHA须在pod逐组匹配历史来源；不同宽度不声称共享逐元素初始化/RNG或batch顺序。
 
 新增独立four_state_width_replication_ops配对launch/terminal，前置fusion completed/review passed/已ack及队列reviewed，通过pod预检和空闲资源检查才提交；新旧seed结果分开报告再比较配对差方向，不混作10个独立数据样本，沿用F1/AUC/Brier工程门槛并另外描述排序校准复现。全部来源/配置/种子/权重路径SHA保留。队列只允许fusion后接该复验，之后停止；动态边和学习图继续deferred_by_user。当前仅本地代码/配置/小协议准备，尚无pod数值预检或正式启动，不在当前融合运行中pull。
+
+### 15.54 理论早/晚融合完成及独立复核（2026-10-22）
+
+批次four_state_fusion_batch/20261021_214403于2026-10-22 03:21:59 UTC（北京时间11:21:59）完成，源码f9237a605c6e215f7b75c48accf3c581fc7a9582，永久标签dbond-four-state-theory-fusion-v1-20261022。三臂共15次训练，全部256维、4头、四状态α1/Brierλ0/nocharge；同轮late对照，不用历史binary作对照。已在pod独立核验原始指标、均值/样本SD、配对差/SD/胜率、源码/配置/targets/train-val与权重来源，记录four_state_fusion_ops/heartbeat_review_20261022.json；保持固定0.5阈值及去padding指标。
+
+| 指标 | late同轮对照 | early_only | early_plus_late |
+|---|---:|---:|---:|
+| 有效键micro-F1 % | 79.976370 | 80.131444 | 80.118165 |
+| 有效键accuracy % | 80.005936 | 80.098753 | 80.149648 |
+| ROC-AUC | 0.883050 | 0.884386 | 0.884451 |
+| 谱图平均P/R调和F1 % | 75.573944 | 75.843154 | 75.770671 |
+| q-Brier ↓ | 0.066343 | 0.065727 | 0.065625 |
+| q_seq | 0.628653 | 0.653713 | 0.645015 |
+
+仅早融合F1+0.155073个百分点（4/5改善），谱图调和F1+0.269210个百分点（4/5），AUC+0.001336（4/5），Brier−0.000616（4/5），q_seq+0.025060（4/5）；accuracy+0.092817个百分点（3/5）。早晚同时融合F1+0.141794个百分点（5/5），谱图调和F1+0.196727个百分点（3/5），AUC+0.001401（3/5），Brier−0.000718（3/5），q_seq+0.016362（3/5）；accuracy+0.143712个百分点（3/5）。两候选六主指标均值均改善，均通过F1至少4/5、AUC不降、Brier不升三项，但都未达到平均ΔF1≥0.002（0.2个百分点），故不宣布通过完整采用门槛，均保留为待复验候选，不能称为毫无收益。
+
+当前原late在全部3GCN+2GAT后才将理论15→256拼到逐键头；early把同一投影按相邻有效键端点平均，在FiLM之后/GCN1之前相加，global无直接注入。early_only末端理论槽为零，early_plus_late保留同次投影直达头。结果支持进一步复验当前早期路由，但端点平均改变映射、early_only零槽改变有效容量，不能归因为纯粹移动时机，也不能证明真实空间断裂机制。五组重叠划分各一次初始化，不宣称统计显著或已确认最优，不替换冻结论文表。
+
+完整SD/P-R/逐划分变化、三臂参数与墙钟时长及15份权重/config SHA见four_state_fusion_ops/report.md、result.json和checkpoint_registry.json；HTML/SVG/PNG在同目录fusion_dashboard_20261022.html、fusion_metrics_20261022.*、fusion_deltas_20261022.svg。本地小报告F:/codexout/dbond_four_state_fusion_results_20261022/。原成功4da48ee及标签、宽度08a8cbc及标签全部保留。
+
+融合结果已准备提醒并ack，队列stage2 reviewed；仅按用户最新选择接独立种子复验id5。保持原late路线，不根据本轮测试挑early叠加到复验；训练base43/内部split base42固定，先pod预检通过才launch。动态边与学习图仍deferred_by_user，复验报告后停止接续。当前本次台账记录阶段尚未声明复验已经启动。

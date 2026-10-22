@@ -34,7 +34,7 @@
     {
       "id": 2,
       "name": "theory_fusion_stage",
-      "status": "submitted",
+      "status": "reviewed",
       "requires_reviewed_stage": 1,
       "ops": "/mnt/pvc/graphtrans/four_state_fusion_ops",
       "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_fusion_batch/20261021_214403",
@@ -44,12 +44,16 @@
         "early_only",
         "early_plus_late"
       ],
-      "report": null,
-      "review_receipt": null,
+      "report": "/mnt/pvc/graphtrans/four_state_fusion_ops/report.md",
+      "review_receipt": "/mnt/pvc/graphtrans/four_state_fusion_ops/heartbeat_review_20261022.json",
       "source_tag": "dbond-four-state-theory-fusion-v1-20261022",
       "launch_receipt": "/mnt/pvc/graphtrans/four_state_fusion_ops/launch.json",
       "preflight_receipt": "/mnt/pvc/graphtrans/four_state_fusion_ops/smoke.json",
-      "submitted_at_utc": "2026-10-22T05:44:03.477718+08:00"
+      "submitted_at_utc": "2026-10-22T05:44:03.477718+08:00",
+      "reviewed_at_local": "2026-10-22",
+      "outcome": "Both early candidates improved all six mean metrics but F1 gain remained below preregistered 0.2 percentage-point gate; retain candidates, keep original late baseline for seed replication.",
+      "checkpoint_registry": "/mnt/pvc/graphtrans/four_state_fusion_ops/checkpoint_registry.json",
+      "dashboard": "/mnt/pvc/graphtrans/four_state_fusion_ops/fusion_dashboard_20261022.html"
     },
     {
       "id": 5,
