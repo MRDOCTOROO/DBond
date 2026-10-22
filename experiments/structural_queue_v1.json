@@ -3,7 +3,7 @@
   "authorization_date_local": "2026-10-21",
   "thread_id": "01a1547f-f644-7d70-816a-1b3fe2ad8e80",
   "protocol": "experiments/structural_queue_v1.md",
-  "execution_policy": "one_batch_at_a_time; review_and_report_current; do_not_auto_advance_after_fusion; user_deferred_dynamic_and_learned_graph",
+  "execution_policy": "one_batch_at_a_time; review_fusion_then_only_width_seed_replication; stop_after_replication; dynamic_and_learned_graph_deferred",
   "compute_location": "gsj-5090.devpod:/mnt/pvc/graphtrans/DBond",
   "reference_commit": "4da48eeab50decd0a31fbf64f2f179478a6624a7",
   "structural_baseline": {
@@ -52,6 +52,30 @@
       "submitted_at_utc": "2026-10-22T05:44:03.477718+08:00"
     },
     {
+      "id": 5,
+      "name": "width_seed_replication",
+      "status": "ready_local_unverified",
+      "requires_reviewed_stage": 2,
+      "ops": "/mnt/pvc/graphtrans/four_state_width_replication_ops",
+      "root": null,
+      "gitrev": null,
+      "report": null,
+      "review_receipt": null,
+      "protocol": "experiments/width_seed_replication_v1.md",
+      "arms": [
+        "256",
+        "128"
+      ],
+      "training_base_seed": 43,
+      "internal_split_base_seed": 42,
+      "total_training_runs": 10,
+      "predecessor_ops": "/mnt/pvc/graphtrans/four_state_fusion_ops",
+      "source_discovery_ops": "/mnt/pvc/graphtrans/four_state_width_ops",
+      "source_discovery_root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_width_batch/20261021_133620",
+      "execution_condition": "Fusion completed, independently reviewed, reported and acked; pod preflight must pass. No additional graph experiments.",
+      "completion_action": "Review/report/ack; stop. Dynamic/learned graph remain deferred."
+    },
+    {
       "id": 3,
       "name": "dynamic_edge_state",
       "status": "deferred_by_user",
@@ -76,11 +100,11 @@
       "resume_condition": "Explicit later user authorization after resolving width/head experiment identity; do not auto-launch."
     }
   ],
-  "auto_advance": false,
+  "auto_advance": true,
   "scheduling_update": {
     "date_local": "2026-10-22",
-    "reason": "User requested defer dynamic edge/learned graph and prioritize 128+four-state alpha=1. Audit confirms requested combination already completed in width sweep; next new trial design awaits clarification.",
-    "current_fusion_action": "Keep existing submission; review and report terminal event only. Do not interrupt or restart.",
+    "reason": "User chose independent-seed replication of 128/256 four-state after current fusion completes and is reviewed; no full2x2; dynamic/learned graph remain deferred.",
+    "current_fusion_action": "Keep submission; review/report/ack terminal, then allow only width seed replication after pod preflight passes.",
     "requested_combination": {
       "bond_head_type": "four_state_mlp",
       "report": "/mnt/pvc/graphtrans/four_state_width_ops/report.md",
@@ -91,6 +115,9 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "awaiting_user_choice_between_independent_seed_replication_and_2x2_or_wait"
-  }
+    "next_new_experiment": "width_seed_replication: train base43 with historical internal split base42; two widths x five splits; stop afterwards"
+  },
+  "auto_advance_allowlist": [
+    5
+  ]
 }

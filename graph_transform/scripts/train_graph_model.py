@@ -650,10 +650,21 @@ def _resolve_preprocessed_path(data_config: Dict[str, Any], split: str) -> str:
     return os.path.join(preprocessed_dir, f'{split}.pt')
 
 
+def _validation_split_seed(config):
+    training = config.get('training', {})
+    if 'validation_split_base_seed' in training:
+        raise ValueError('Unresolved validation_split_base_seed: use the five-fold runner')
+    value = training.get('validation_split_seed', config.get('experiment', {}).get('seed', 42))
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError('training.validation_split_seed must be an integer')
+    return value
+
+
 def create_datasets(config: Dict[str, Any]) -> tuple:
     """创建数据集"""
     data_config = config['data']
     training_config = config.get('training', {})
+    validated_split_seed = _validation_split_seed(config)
     model_config = build_model_config(config)
 
     dataset_cls = CachedGraphDataset if data_config.get('cache_graphs', False) else GraphDataset
@@ -735,7 +746,7 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
         )
         if val_split and val_split > 0:
             full_frame = train_dataset.data
-            split_seed = config.get('experiment', {}).get('seed', 42)
+            split_seed = validated_split_seed
             unique_seqs = pd.Series(full_frame['seq'].astype(str).unique())
             rng = np.random.default_rng(split_seed)
             perm = rng.permutation(len(unique_seqs))
@@ -1295,6 +1306,18 @@ def main():
             with open(path, 'w', encoding='utf-8') as stream:
                 json.dump(provenance, stream, ensure_ascii=False, indent=2, allow_nan=False)
             transfer_extra_state = dict(transfer_extra_state or {}, **{name: provenance})
+    if 'validation_split_seed' in training_config:
+        # New explicit-split trials bind the actual run RNG to each checkpoint.
+        # Existing runs keep their checkpoint schema and random stream unchanged.
+        transfer_extra_state = dict(transfer_extra_state or {}, training_rng_protocol={
+            'training_seed': config['experiment']['seed'],
+            'validation_split_seed': _validation_split_seed(config),
+            'hidden_dim': model.config.hidden_dim,
+            'bond_head_type': model.config.bond_head_type,
+            'theory_fusion_stage': model.config.theory_fusion_stage,
+            'four_state_conditional_weight': trainer.four_state_conditional_weight,
+            'four_state_union_brier_weight': trainer.four_state_union_brier_weight,
+        })
     if union_brier_protocol:
         # Snapshot once after seed, dataset paths and checkpoint directory resolve.
         resolved_config_path = os.path.abspath(os.path.join(

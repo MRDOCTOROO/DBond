@@ -2165,3 +2165,11 @@ pod-only smoke全部通过：late对固定08a8cbc旧源码的初始化张量、R
 用户请求暂缓动态边，在中间优先测试128维+四状态头α=1。只读复核现有配置和已绑定报告，确认§15.50宽度四臂均为four_state_mlp、α=1/Brierλ0；因此128维+四状态已经完成，不是128维+原二分类头。128同轮F1 79.984027%、accuracy80.238314%、AUC0.885376、谱图调和F1 75.303909%、q-Brier0.063974、q_seq0.664807均属于四状态结果；对照256也是四状态，不能再叠加历史四状态相对binary的收益。报告源码08a8cbc，配置pre_synthesis_four_state_width_128.yaml，完整权重登记four_state_width_ops/checkpoint_registry.json。没有新增或改算任何数值，冻结论文表不变。
 
 队列auto_advance=false，动态边与学习图deferred_by_user；已提交的理论融合不打断、不重启、训练中不pull，终态仍核验报告并ack，但不接续动态边。用户已收到设计选择问题：独立新种子配对复验128/256四状态、补齐2×2，或等融合结果。尚未选择时不按错误身份重复原试验、不自行扩大计算；新设计需另写小协议。所有已授权数据和数值工作继续只在pod，本次本机仅文档/配置索引更新和同步。
+
+### 15.53 用户选择128/256四状态独立种子复验（2026-10-22，本地准备）
+
+用户确认等理论融合完成后做独立种子复验，不补2×2。已确证256+binary/256+four_state首轮同轮完成（4da48ee，four_state_batch/20261019_124645），128/256+four_state宽度轮同轮完成（08a8cbc，four_state_width_batch/20261021_133620）；未在所查台账找到128+binary的已完成核验记录，因此当前三个格子有证据，但不是完整同轮2×2。原结果数字不变，冻结论文表不变。
+
+预注册experiments/width_seed_replication_v1.md：下一轮只128/256四状态α1、union-Brier0、原晚期理论融合、nocharge，训练基础seed43（原42），同原五组重复序列级划分，共10次从头训练。发现旧experiment.seed同时用于训练初始化和内部验证split；直接改42→43会改变内部验证集合，故新增可选显式validation_split_seed/base_seed，保持默认旧行为，按fold固定旧split base42、仅训练base43。实际split CSV SHA须在pod逐组匹配历史来源；不同宽度不声称共享逐元素初始化/RNG或batch顺序。
+
+新增独立four_state_width_replication_ops配对launch/terminal，前置fusion completed/review passed/已ack及队列reviewed，通过pod预检和空闲资源检查才提交；新旧seed结果分开报告再比较配对差方向，不混作10个独立数据样本，沿用F1/AUC/Brier工程门槛并另外描述排序校准复现。全部来源/配置/种子/权重路径SHA保留。队列只允许fusion后接该复验，之后停止；动态边和学习图继续deferred_by_user。当前仅本地代码/配置/小协议准备，尚无pod数值预检或正式启动，不在当前融合运行中pull。

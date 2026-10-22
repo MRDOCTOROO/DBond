@@ -76,6 +76,16 @@ def make_fold_config(base_config, fold_id: str, fold_dir: str, cv_root: str, fol
     run_root = os.path.join(cv_root, f"fold_{fold_id}")
     checkpoint_root = os.path.join(run_root, "checkpoints")
     config.setdefault("experiment", {})["seed"] = fold_seed
+    # Optional split RNG is separate from initialization/shuffle RNG. Existing
+    # experiments retain their exact historical fallback when this is absent.
+    split_base_seed = config.get("training", {}).get("validation_split_base_seed")
+    if "validation_split_base_seed" in config.get("training", {}):
+        if isinstance(split_base_seed, bool) or not isinstance(split_base_seed, int):
+            raise ValueError("training.validation_split_base_seed must be an integer")
+        if "validation_split_seed" in config["training"]:
+            raise ValueError("Specify validation_split_base_seed or validation_split_seed, not both")
+        config["training"]["validation_split_seed"] = _stable_fold_seed(split_base_seed, fold_id)
+        del config["training"]["validation_split_base_seed"]
     config["data"]["train_csv_path"] = train_csv
     config["data"]["test_csv_path"] = test_csv
     config["data"]["val_csv_path"] = None
