@@ -2234,3 +2234,16 @@ pod-only smoke全部通过：late对固定08a8cbc旧源码的初始化张量、R
 全部臂H256、4头、3GCN+2GAT、原late、nocharge、α1/Brier0、folded group_uniform，训练base42/内部split base42；同原始来源SHA、完整原谱内部验证、max内部micro-F1选checkpoint、固定0.5及去padding指标。保持优化器/预算，不叠加128、早融合或学习图。全报S1−S0、D−S0、D−S1的F1/accuracy/AUC/谱图平均P-R调和F1/q-Brier/q_seq，均值/样本SD、配对差SD、逐划分胜率、参数/耗时；原四项工程门槛不变。每份checkpoint内部验证前16行另做五层边变化及实际gate饱和描述，不用于选择模型或证明物理机制。
 
 本机仅编辑/静态审阅与git同步；pod预检需验证静态对967bd43兼容、三臂共享初始化、动态反馈与e0路由、AMP梯度、最大真实批量、历史train/val SHA和检查点防混用。预检通过才提交一次；使用four_state_dynamic_edge_ops独立launch/terminal和源码冻结。当前尚无正式训练结果，不宣称提升。后续提交回执另行追加；所有既有成功源码/标签/权重保留，原冻结论文主表不改。
+
+
+### 15.58 动态边三臂已通过pod预检并提交（2026-10-22）
+
+训练源码fb302522082349dc391fcc2e52a58bee42ee2a6b已push/pod fast-forward pull，永久恢复标签dbond-four-state-dynamic-edge-v1-20261022。一次pod预检16项dynamic_checks全部通过：原967bd43静态CPU参数/RNG/forward/gradient完全一致，三臂共同参数及新增两臂更新器初始化一致，zero updater初始CPU预测不变，5层h0/h_l反馈区分、head e0、真实gate诊断、短链混合图、更新器空边、padding污染、跨mode预复制拒绝、两步AMP梯度、历史五组train/val/source SHA、最长真实train128/val512通过。保留旧GAT全空边限制，E0只测新updater；不修改原GAT。
+
+static参数1,706,924；fixed_context与dynamic_context均1,839,916，新增共享更新器132,992参数。动态臂最长训练128预检峰值allocated 2749.414 MiB，最长验证512为1965.665 MiB；仅预检描述，不是训练性能结果。
+
+正式提交时间2026-10-22 15:02:48 UTC（北京时间23:02:48）。批次/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_dynamic_edge_batch/20261022_150248，ops /mnt/pvc/graphtrans/four_state_dynamic_edge_ops，使用提交时空闲GPU0/1/2/4；未占用GPU3。三臂顺序static→fixed_context→dynamic_context，每臂五组；训练与内部划分base42，共15次从头训练。arm串行/现有每卡划分调度不变。
+
+launch.json绑定源码、全部Python文件SHA、配置、四状态目标和预检；smoke SHA d41453518013a5c7f025c962ecb80b50a57d9299a0d83b7429e9781c46d3df44。配置SHA：static 63e884215029a85813035b2b06ab4ea721d11cb6382801c835a231399081e898；fixed_context c5e01e886aa0030f71b45c2efb1bd19e29d510a93bf36f693d478f51bbed3f2e；dynamic_context 14ac100b20183c2c8f40cbda1a62438834f115d4ab881154405c324d68c70450。小凭据同步F:/codexout/dbond_four_state_dynamic_edge_results_20261022/。源码冻结，不在pod pull后续回执commit；只扫完成/失败事件，不读取epoch进度。
+
+完成后按协议独立核验15份权重/来源、全部指标及三组配对差、SD/胜率/参数耗时和内部小样本边门控诊断，生成报告、HTML/SVG、恢复索引，提醒后ack并标reviewed。失败则报告halt，不自动重跑；学习图仍deferred_by_user。当前尚无正式效果结论，不改冻结论文主表；原成功4da48ee及既有候选保留。

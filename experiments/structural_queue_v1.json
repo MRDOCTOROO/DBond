@@ -90,14 +90,14 @@
     {
       "id": 3,
       "name": "dynamic_edge_state",
-      "status": "authorized",
+      "status": "submitted",
       "requires_reviewed_stage": 5,
       "ops": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops",
-      "root": null,
-      "gitrev": null,
-      "report": null,
-      "review_receipt": null,
-      "resume_condition": "2026-10-22 explicit user authorization received; implement, push, pod pull, preflight then launch once. Stop after report; no learned graph.",
+      "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_dynamic_edge_batch/20261022_150248",
+      "gitrev": "fb302522082349dc391fcc2e52a58bee42ee2a6b",
+      "report": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/report.md",
+      "review_receipt": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/heartbeat_review.json",
+      "resume_condition": "Launched after passed pod preflight. Never repeat smoke/launch; source frozen until terminal. Review/report/ack then stop.",
       "total_training_runs": 15,
       "authorized_at_local": "2026-10-22",
       "protocol": "experiments/dynamic_edge_state_v1.md",
@@ -109,7 +109,26 @@
         "static",
         "fixed_context",
         "dynamic_context"
-      ]
+      ],
+      "local_receipts": "F:/codexout/dbond_four_state_dynamic_edge_results_20261022/",
+      "checkpoint_registry": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/checkpoint_registry.json",
+      "preflight_receipt": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/smoke.json",
+      "dashboard": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/dynamic_edge_dashboard.html",
+      "config_sha256": {
+        "static": "63e884215029a85813035b2b06ab4ea721d11cb6382801c835a231399081e898",
+        "fixed_context": "c5e01e886aa0030f71b45c2efb1bd19e29d510a93bf36f693d478f51bbed3f2e",
+        "dynamic_context": "14ac100b20183c2c8f40cbda1a62438834f115d4ab881154405c324d68c70450"
+      },
+      "launch_receipt": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/launch.json",
+      "submitted_at_utc": "2026-10-22T23:02:48.865541+08:00",
+      "preflight_sha256": "d41453518013a5c7f025c962ecb80b50a57d9299a0d83b7429e9781c46d3df44",
+      "gpus": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "source_tag": "dbond-four-state-dynamic-edge-v1-20261022"
     },
     {
       "id": 4,
@@ -139,7 +158,7 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "stage3 dynamic_edge_state: preparing static/fixed_context/dynamic_context paired ablation; stage4 remains deferred."
+    "next_new_experiment": "Dynamic edge stage3 submitted; await exact terminal, independently review/report/ack and stop. Stage4 learned graph remains deferred."
   },
   "auto_advance_allowlist": []
 }
