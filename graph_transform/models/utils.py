@@ -74,6 +74,9 @@ class ModelConfig:
         self.bond_condition_mode = 'none'
         self.bond_condition_dim = 32
         self.bond_head_type = 'concat_mlp'
+        # Independent from the binary/four-state supervision choice. Legacy
+        # concat adds neither state-dict keys nor initialization RNG draws.
+        self.bond_fusion_mode = 'concat'
         self.use_charge_partition_features = False
         self.bond_cross_attention_heads = 4
         # Target-domain operational fragment matches, used only as training targets.
@@ -135,6 +138,8 @@ class ModelConfig:
         validate_theory_fusion_stage(self.theory_fusion_stage)
         from .dynamic_edges import validate_edge_state_mode
         validate_edge_state_mode(self.edge_state_mode)
+        from .bond_fusion_heads import validate_bond_fusion_mode
+        validate_bond_fusion_mode(self.bond_fusion_mode)
     
     def update_config(self, config_dict: Dict):
         """更新配置参数"""
@@ -463,6 +468,10 @@ class CheckpointManager:
         if hasattr(model, 'edge_state_mode'):
             from .dynamic_edges import validate_edge_state_checkpoint
             validate_edge_state_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
+
+        if hasattr(model, 'bond_fusion_mode'):
+            from .bond_fusion_heads import validate_bond_fusion_checkpoint
+            validate_bond_fusion_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
 
         # New experimental branches must never be silently dropped/left random
         # by strict=False. Legacy checkpoints have neither prefix and remain

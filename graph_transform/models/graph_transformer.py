@@ -695,6 +695,35 @@ class GraphTransformer(nn.Module):
         # Opt in only for preflight / small internal-validation diagnostic batches.
         self.enable_edge_state_diagnostics = False
         self.last_edge_state_diagnostics = []
+
+        from .bond_fusion_heads import validate_bond_fusion_mode, bond_fusion_mode_code
+        self.bond_fusion_mode = validate_bond_fusion_mode(getattr(config, 'bond_fusion_mode', 'concat'))
+        if self.bond_fusion_mode != 'concat':
+            if self.bond_head_type != 'four_state_mlp' or not all((
+                    self.bond_use_edge_repr, self.bond_use_diff_feature,
+                    self.bond_use_product_feature, self.use_theory_features)):
+                raise ValueError('Experimental bond fusion requires a four-state head and all six source slots')
+            with torch.random.fork_rng(devices=[]):
+                if self.bond_fusion_mode == 'cross_attention':
+                    from .bond_fusion_heads import FourStateBondCrossAttentionHead
+                    self.bond_head = FourStateBondCrossAttentionHead(
+                        self.hidden_dim, getattr(config, 'bond_cross_attention_heads', 4), config.dropout)
+                elif self.bond_fusion_mode == 'gated':
+                    self.bond_fusion_gate = nn.Linear(6 * self.hidden_dim, 6)
+                    nn.init.zeros_(self.bond_fusion_gate.weight)
+                    nn.init.zeros_(self.bond_fusion_gate.bias)
+                else:
+                    from .bond_fusion_heads import BondFusionResidual
+                    self.bond_fusion_residual = BondFusionResidual(self.hidden_dim)
+            self.register_buffer('bond_fusion_mode_code', torch.tensor(
+                bond_fusion_mode_code(self.bond_fusion_mode), dtype=torch.int64))
+            self.register_buffer('bond_fusion_schema_code', torch.tensor(1, dtype=torch.int64))
+            self.register_buffer('bond_fusion_source_roles', torch.arange(6, dtype=torch.int64))
+            self.register_buffer('bond_fusion_heads_code', torch.tensor(
+                self.bond_head.cross_attention.num_heads if self.bond_fusion_mode == 'cross_attention' else 0,
+                dtype=torch.int64))
+        self.enable_bond_fusion_diagnostics = False
+        self.last_bond_fusion_diagnostics = {}
     
     def load_state_dict(self, state_dict, strict=True, assign=False):
         # Validate before PyTorch starts copying any shared tensors. This also
@@ -705,6 +734,7 @@ class GraphTransformer(nn.Module):
         from .charge_partition import validate_charge_partition_checkpoint
         from .theory_fusion import validate_theory_fusion_checkpoint
         from .dynamic_edges import validate_edge_state_checkpoint
+        from .bond_fusion_heads import validate_bond_fusion_checkpoint
         try:
             validate_attention_checkpoint(self, state_dict)
             validate_position_checkpoint(self, state_dict)
@@ -712,6 +742,7 @@ class GraphTransformer(nn.Module):
             validate_charge_partition_checkpoint(self, state_dict)
             validate_theory_fusion_checkpoint(self, state_dict)
             validate_edge_state_checkpoint(self, state_dict)
+            validate_bond_fusion_checkpoint(self, state_dict)
         except ValueError as error:
             raise RuntimeError(str(error)) from error
         saved_ion = {k for k in state_dict if k.startswith('ion12_head.')}
@@ -968,6 +999,16 @@ class GraphTransformer(nn.Module):
         # predictions 容器固定 float32；AMP 下 bond_logits 在赋值处用 .to() 对齐。
         predictions = torch.zeros(batch_size, max_bonds, device=node_features.device)
         self.last_four_state_logits = None
+        fusion_diagnostics = bool(self.enable_bond_fusion_diagnostics)
+        self.last_bond_fusion_diagnostics = {}
+        if fusion_diagnostics:
+            from .bond_fusion_heads import BOND_FUSION_SOURCES
+            diagnostic_sources = list(BOND_FUSION_SOURCES[:2]) + [name for name, enabled in zip(
+                BOND_FUSION_SOURCES[2:], (self.bond_use_edge_repr, self.bond_use_diff_feature,
+                                          self.bond_use_product_feature, self.use_theory_features)) if enabled]
+            self.last_bond_fusion_diagnostics = {
+                'mode': self.bond_fusion_mode, 'num_valid_bonds': 0,
+                'sources': diagnostic_sources, 'source_l2_mean': [0.] * len(diagnostic_sources)}
 
         if max_bonds > 0:
             h_src = node_features[bond_src]
@@ -991,12 +1032,40 @@ class GraphTransformer(nn.Module):
                     bond_feature_parts.append(torch.zeros_like(h_src))
                 else:
                     bond_feature_parts.append(early_theory.to(h_src.dtype))
-            bond_features = (bond_feature_parts if self.bond_head_type == 'cross_attention_mlp'
+            bond_features = (bond_feature_parts if (self.bond_head_type == 'cross_attention_mlp'
+                                                   or self.bond_fusion_mode == 'cross_attention')
                              else torch.cat(bond_feature_parts, dim=-1))
+            if fusion_diagnostics:
+                from .bond_fusion_heads import source_norm_diagnostics
+                self.last_bond_fusion_diagnostics.update(
+                    num_valid_bonds=int(h_src.size(0)), source_l2_mean=source_norm_diagnostics(bond_feature_parts))
             ion12_active = self.use_ion12_aux_head and self.training
             if self.bond_head_type == 'four_state_mlp':
                 from .four_state import union_logit
-                state_logits = self.bond_head(bond_features).float()
+                if self.bond_fusion_mode == 'cross_attention':
+                    self.bond_head.enable_diagnostics = fusion_diagnostics
+                    state_logits = self.bond_head(bond_feature_parts).float()
+                    if fusion_diagnostics:
+                        self.last_bond_fusion_diagnostics.update(self.bond_head.last_diagnostics)
+                elif self.bond_fusion_mode == 'gated':
+                    source_weights = torch.softmax(self.bond_fusion_gate(bond_features), dim=-1)
+                    # Six normalized source weights give unit gates initially;
+                    # each ordered 256-d slot is retained rather than summed.
+                    gated_features = (bond_features.reshape(-1, 6, self.hidden_dim)
+                        * (6 * source_weights).unsqueeze(-1)).reshape(-1, 6 * self.hidden_dim)
+                    state_logits = self.bond_head(gated_features).float()
+                    if fusion_diagnostics:
+                        from .bond_fusion_heads import gate_diagnostics
+                        self.last_bond_fusion_diagnostics.update(gate_diagnostics(source_weights))
+                elif self.bond_fusion_mode == 'residual_mlp':
+                    hidden = self.bond_head[1](self.bond_head[0](bond_features))
+                    corrected = self.bond_fusion_residual(hidden)
+                    state_logits = self.bond_head[3](self.bond_head[2](corrected)).float()
+                    if fusion_diagnostics:
+                        from .bond_fusion_heads import residual_diagnostics
+                        self.last_bond_fusion_diagnostics.update(residual_diagnostics(hidden, corrected))
+                else:
+                    state_logits = self.bond_head(bond_features).float()
                 if self.use_charge_partition_features:
                     tokens = self.node_encoder._encode_sequences(batch_data['sequences'], node_features.device)
                     state_logits = state_logits + self.charge_partition(tokens, batch_data['charges'], valid_bond_mask)

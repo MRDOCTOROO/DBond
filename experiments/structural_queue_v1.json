@@ -90,14 +90,14 @@
     {
       "id": 3,
       "name": "dynamic_edge_state",
-      "status": "submitted",
+      "status": "reviewed",
       "requires_reviewed_stage": 5,
       "ops": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops",
       "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_dynamic_edge_batch/20261022_150248",
       "gitrev": "fb302522082349dc391fcc2e52a58bee42ee2a6b",
       "report": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/report.md",
       "review_receipt": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/heartbeat_review.json",
-      "resume_condition": "Launched after passed pod preflight. Never repeat smoke/launch; source frozen until terminal. New follow-ups 6 then7 authorized only after predecessor reviewed.",
+      "resume_condition": "Completed, independently reviewed and acked. Do not repeat this batch; stage6 follows under authorization.",
       "total_training_runs": 15,
       "authorized_at_local": "2026-10-22",
       "protocol": "experiments/dynamic_edge_state_v1.md",
@@ -113,7 +113,7 @@
       "local_receipts": "F:/codexout/dbond_four_state_dynamic_edge_results_20261022/",
       "checkpoint_registry": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/checkpoint_registry.json",
       "preflight_receipt": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/smoke.json",
-      "dashboard": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/dynamic_edge_dashboard.html",
+      "dashboard": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/dynamic_edge_review_dashboard.html",
       "config_sha256": {
         "static": "63e884215029a85813035b2b06ab4ea721d11cb6382801c835a231399081e898",
         "fixed_context": "c5e01e886aa0030f71b45c2efb1bd19e29d510a93bf36f693d478f51bbed3f2e",
@@ -128,13 +128,17 @@
         2,
         4
       ],
-      "source_tag": "dbond-four-state-dynamic-edge-v1-20261022"
+      "source_tag": "dbond-four-state-dynamic-edge-v1-20261022",
+      "reviewed_at_local": "2026-10-23",
+      "analysis_report": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/analysis.md",
+      "outcome": "Independent pod audit passed (2405 checks, 268 SHA, 15 strict restores). Dynamic vs static F1 -0.180000pp, AUC -0.001204581, Brier +0.000871254; q_seq +0.006170785 (4/5). Neither update candidate passes any of four gates vs static. Preserve static baseline; proceed only to authorized stage6.",
+      "event_acknowledged": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_dynamic_edge_batch/20261022_150248|completed"
     },
     {
       "id": 6,
       "name": "four_state_head_fusion",
-      "status": "authorized_waiting_predecessor",
-      "implementation_status": "protocol_only_not_implemented_or_tested",
+      "status": "ready_local_unverified",
+      "implementation_status": "implemented_and_independently_static_reviewed_pending_pod_preflight",
       "requires_reviewed_stage": 3,
       "protocol": "experiments/four_state_head_fusion_v1.md",
       "ops": "/mnt/pvc/graphtrans/four_state_head_fusion_ops",

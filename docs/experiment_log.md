@@ -2260,3 +2260,32 @@ stage6协议experiments/four_state_head_fusion_v1.md：固定256四状态α1/Bri
 stage7协议experiments/four_state_node_conv_v1.md：同静态四状态基座保留原concat头，不叠加stage3/6赢家；NodeEncoder完整[B,L,256]输出后、global打包和FiLM前残差加序列分支。none、k5输出192、并行k3/5/7各64再拼192投影256，三臂×5共15次；两卷积候选等参数预算，pod核验。末端投影零初始化，无任意缩放常数；padding显式清零、只沿L卷积，不卷积global或跨肽链。单尺度控制限制为k5，不能把更大感受野和多分支贡献完全分离。
 
 两轮固定base42/splitbase42与实际train/val/sourceSHA，折叠group_uniform、完整原谱内部验证、strict max内部F1、固定.5和去padding；原预算不改。完整报告含8指标、均值SD、配对差SD、胜平负、参数/耗时/显存、结构变化示意、HTML/SVG与逐划分波动、描述性内部验证融合/分支诊断、全部权重strict恢复和源码/配置/权重SHA、永久标签及恢复索引。所有结果在pod核验，四项工程门槛不变，失败halt不自动重跑；stage7报告后停止。此提交只有协议/队列/台账，不含新增模型实现或训练结果，不改变冻结论文主表。
+
+### 15.60 动态边完成：未超过原静态边，保留静态基座（2026-10-23）
+
+批次four_state_dynamic_edge_batch/20261022_150248于2026-10-22 20:00:30UTC（北京时间10月23日04:00:30）完成。源码fb302522082349dc391fcc2e52a58bee42ee2a6b及tag dbond-four-state-dynamic-edge-v1-20261022保留。pod独立审计2405项检查、268项SHA绑定全部通过，15份权重strictCPU恢复与actual training_rng_protocol、历史train/val/sourceSHA、原始CSV及全指标统计一致；另独立hook重算内部验证前16行的五层边状态和实际GCN/GAT gate饱和。凭据four_state_dynamic_edge_ops/heartbeat_review.json。
+
+| 指标 | 静态边 | 固定上下文更新 | 动态上下文更新 |
+|---|---:|---:|---:|
+| 有效键micro-F1 % |79.997679|79.687644|79.817679|
+| 有效键accuracy % |80.002613|79.726073|79.847381|
+| ROC-AUC |0.883026|0.880087|0.881821|
+| 谱图平均P/R调和F1 % |75.606447|75.238502|75.336473|
+| q-Brier ↓ |0.066485|0.068213|0.067356|
+| q_seq |0.627481|0.618083|0.633652|
+
+动态−静态F1−0.180000个百分点（1/5改善）、accuracy−0.155232pp（1/5）、AUC−0.001204581（0/5）、谱图F1−0.269974pp（2/5）、Brier+0.000871254（仅1/5改善）、q_seq+0.006170785（4/5）。固定−静态F1−0.310035pp（0/5），两个候选相对静态均未通过任何一项预设工程门槛。动态−固定六主指标均值改善，F1+0.130035pp（3/5），AUC+0.001734199（4/5），Brier−0.000857179（4/5），q_seq+0.015568679（5/5）；说明当前状态反馈较固定初态有利，但没有超过原静态基座，不能宣称动态更新整体有效。
+
+最后GAT门饱和比例（≤.01或≥.99）静态约.197、固定约.636、动态约.631；末层边范数静态16.41、固定50.74、动态46.54。更新器实际生效，重复共享残差伴随幅度增长及饱和可能是性能退步线索，但内部小样本仅描述，未做因果消融，不能断言过拟合或所有动态边方式无效。静态参数1706924，两候选1839916；各臂墙钟约1.8120/1.6537/1.4949小时受早停与调度影响，不作为等步吞吐结论。五组重叠划分单初始化，误差条为样本SD而非置信区间，冻结论文主表不变。
+
+完整三比较/八指标/均值SD/配对SD/逐划分胜平负及全部权重路径SHA/configSHA保存在ops原report.md/result.json/checkpoint_registry.json；解释报告analysis.md与dynamic_edge_review_dashboard.html、均值/配对/诊断/结构SVG及PNG已生成并离线视觉核验，小文件同步F:/codexout/dbond_four_state_dynamic_edge_results_20261022/。原report/result未改写，独立审计绑定保持有效；仅HTML交互未做浏览器渲染验证（本地file协议被工具限制），静态图已检查。
+
+报告已准备并ack准确completed键，stage3 reviewed。按用户授权接stage6原concat/cross_attention/gated/residual_mlp四臂20次，仍256四状态α1/Brier0、原late、static/nocharge，不叠加动态边。此处stage6模型/配置/ops/测试仅本地写好、静态交叉审阅中，尚未pod预检或训练；后续真实提交回执另记。学习图仍deferred，stage7待stage6报告后再做。保留原成功4da48ee与全部候选。
+
+### 15.61 四状态末端融合四臂实现与静态审阅完成，待pod预检（2026-10-23）
+
+已按冻结协议新增bond_fusion_mode（concat默认/cross_attention/gated/residual_mlp），独立于bond_head_type=four_state_mlp；原concat无新增state keys或RNG抽样。cross 2端点Q/4来源KV/4头、残差LN、MLP四态；gated为6×softmax零初始化门，六槽仍有序拼接；residual原隐藏层添加LN→256/128/256两线性残差块，末层零初始化。所有新增初始化fork_rng，未修改训练目标、骨干传播或默认旧binary路线。
+
+新checkpoint schema/模式/来源/头数标记及保存config预复制检查，防strict=False串用。模型、四份配置、pod-only预检及ops已由不同审阅者静态交叉检查，无已知重要阻断；本机未执行任何数值测试。预检覆盖旧fb30252状态/RNG/CPU前反向、四态CE和union q、六来源独立公式/隔离/梯度、padding/短链、gate/res零初值及第二步梯度解锁、三候选最长train128/val512、历史五组来源和checkpoint防混用。ops带前序独立review/ack屏障，20份权重恢复、八指标/三比较、HTML/SVG/恢复索引。
+
+stage3已报告准备并ack、reviewed，现允许push/pod fast-forward pull一次后smoke；仅所有预检通过才launch。此记录不宣称数值预检或训练已运行。原成功4da48ee及所有候选/权重继续保留，学习图暂缓；后续stage7需本轮完成独立报告后才开展。
