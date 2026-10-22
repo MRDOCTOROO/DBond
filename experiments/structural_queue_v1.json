@@ -3,7 +3,7 @@
   "authorization_date_local": "2026-10-21",
   "thread_id": "01a1547f-f644-7d70-816a-1b3fe2ad8e80",
   "protocol": "experiments/structural_queue_v1.md",
-  "execution_policy": "authorized_seed_replication_complete; no_automatic_continuation; dynamic_and_learned_graph_deferred",
+  "execution_policy": "user_reauthorized_dynamic_edge_only; contemporaneous_256_four_state_alpha1_late_control; stop_after_report; learned_graph_deferred",
   "compute_location": "gsj-5090.devpod:/mnt/pvc/graphtrans/DBond",
   "reference_commit": "4da48eeab50decd0a31fbf64f2f179478a6624a7",
   "structural_baseline": {
@@ -90,14 +90,26 @@
     {
       "id": 3,
       "name": "dynamic_edge_state",
-      "status": "deferred_by_user",
-      "requires_reviewed_stage": 2,
+      "status": "authorized",
+      "requires_reviewed_stage": 5,
       "ops": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops",
       "root": null,
       "gitrev": null,
       "report": null,
       "review_receipt": null,
-      "resume_condition": "Explicit later user authorization after resolving width/head experiment identity; do not auto-launch."
+      "resume_condition": "2026-10-22 explicit user authorization received; implement, push, pod pull, preflight then launch once. Stop after report; no learned graph.",
+      "total_training_runs": 15,
+      "authorized_at_local": "2026-10-22",
+      "protocol": "experiments/dynamic_edge_state_v1.md",
+      "predecessor_ops": "/mnt/pvc/graphtrans/four_state_width_replication_ops",
+      "completion_action": "Independent pod review/report/ack; stop. Learned graph remains deferred.",
+      "internal_split_base_seed": 42,
+      "training_base_seed": 42,
+      "arms": [
+        "static",
+        "fixed_context",
+        "dynamic_context"
+      ]
     },
     {
       "id": 4,
@@ -115,7 +127,7 @@
   "auto_advance": false,
   "scheduling_update": {
     "date_local": "2026-10-22",
-    "reason": "User chose independent-seed replication of 128/256 four-state after current fusion completes and is reviewed; no full2x2; dynamic/learned graph remain deferred.",
+    "reason": "User explicitly resumed dynamic edge updates on 256 four-state alpha1 after completed seed replication; only stage3 authorized.",
     "current_fusion_action": "Completed, independently reviewed, reported and acked; no automatic follow-up.",
     "requested_combination": {
       "bond_head_type": "four_state_mlp",
@@ -127,7 +139,7 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "None authorized for automatic continuation. Seed43 replication reviewed; dynamic and learned graph remain deferred."
+    "next_new_experiment": "stage3 dynamic_edge_state: preparing static/fixed_context/dynamic_context paired ablation; stage4 remains deferred."
   },
   "auto_advance_allowlist": []
 }

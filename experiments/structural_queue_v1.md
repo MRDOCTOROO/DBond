@@ -1,5 +1,10 @@
 # DBond 串行结构实验队列 v1
 
+## 2026-10-22用户重新授权动态边更新（最新调度）
+
+用户明确选择256维＋四状态头α=1为基准，恢复stage3动态边实验，在pod训练并完成后提醒和分析。原宽度、理论融合、种子复验已reviewed/ack；stage3依赖stage5。本轮按dynamic_edge_state_v1.md冻结静态e0、固定h0更新、当前h_l更新三臂×五划分，共15次；所有臂256/4头、原late、nocharge、α1/Brier0、训练与内部划分base42，完整原谱验证与去padding。源码静态审阅后push/pod pull、pod预检通过才launch，终态之前冻结源码；一次失败则halt。完成后独立复核、报告并ack停止，不自动启动学习图。stage4仍deferred_by_user；下方较早的“动态边暂缓/复验后全停”仅保留为历史记录。
+
+
 ## 2026-10-22用户选择独立种子复验（最新调度，覆盖下方旧暂缓说明）
 
 用户已答复：先等理论融合完成，再做128/256四状态的独立种子复验。自动接续仅允许新增stage id5 width_seed_replication；原id3动态边、id4学习图保持deferred_by_user，复验之后停止。不是完整2×2，不补二分类臂。协议width_seed_replication_v1.md：新训练base seed43、旧内部验证split base42，两臂×五组共10次；仅本地先准备，融合终态复核/报告/ack后才pod pull及预检，通过才launch。当前代码尚未pod验证，不宣称已启动或有效果。

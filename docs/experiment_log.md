@@ -2225,3 +2225,12 @@ pod-only smoke全部通过：late对固定08a8cbc旧源码的初始化张量、R
 报告、result、原自动review及独立heartbeat_review、恢复索引与HTML/SVG/PNG均保存在four_state_width_replication_ops/；小报告同步F:/codexout/dbond_four_state_width_replication_results_20261022/。看板replication_dashboard_20261022.html，主图replication_metrics_20261022.svg/.png，新旧种子差图replication_seed_deltas_20261022.svg。原成功4da48ee及标签、旧宽度08a8cbc及标签、理论融合f9237a6及标签继续保留。
 
 本轮结果已准备提醒并ack准确completed键，stage5 reviewed，auto_advance=false且allowlist清空。当前授权队列收尾，动态边与学习图仍deferred_by_user；不启动新预检或训练。后续仅本地/远端同步结果台账，不在pod pull改变本轮来源快照。
+
+
+### 15.57 重新授权并准备固定拓扑动态边状态三臂实验（2026-10-22）
+
+用户选择256维四状态头α=1为基准，恢复此前暂缓的动态边更新；学习图仍暂缓。新协议experiments/dynamic_edge_state_v1.md：static原e0、fixed_context共享更新器使用h0、dynamic_context使用各层当前h_l，三臂×五组共15次从头训练。更新器为LayerNorm(3H)→Linear(3H,H/2)→SiLU→Linear(H/2,H)残差，末层零初始化且隔离初始化RNG，五个GCN/GAT层前共享更新；最终键头始终取原e0，图连接与顺序不变。固定上下文臂用于区分新增容量和当前节点反馈收益，不将参数增加自动视为动态机制证据。
+
+全部臂H256、4头、3GCN+2GAT、原late、nocharge、α1/Brier0、folded group_uniform，训练base42/内部split base42；同原始来源SHA、完整原谱内部验证、max内部micro-F1选checkpoint、固定0.5及去padding指标。保持优化器/预算，不叠加128、早融合或学习图。全报S1−S0、D−S0、D−S1的F1/accuracy/AUC/谱图平均P-R调和F1/q-Brier/q_seq，均值/样本SD、配对差SD、逐划分胜率、参数/耗时；原四项工程门槛不变。每份checkpoint内部验证前16行另做五层边变化及实际gate饱和描述，不用于选择模型或证明物理机制。
+
+本机仅编辑/静态审阅与git同步；pod预检需验证静态对967bd43兼容、三臂共享初始化、动态反馈与e0路由、AMP梯度、最大真实批量、历史train/val SHA和检查点防混用。预检通过才提交一次；使用four_state_dynamic_edge_ops独立launch/terminal和源码冻结。当前尚无正式训练结果，不宣称提升。后续提交回执另行追加；所有既有成功源码/标签/权重保留，原冻结论文主表不改。

@@ -681,6 +681,20 @@ class GraphTransformer(nn.Module):
                 self.bond_head = BondCrossAttentionHead(self.hidden_dim,
                     getattr(config, 'bond_cross_attention_heads', 4), config.dropout, roles)
             self.register_buffer('bond_head_mode_code', torch.tensor(1, dtype=torch.int64))
+
+        from .dynamic_edges import validate_edge_state_mode, edge_state_mode_code
+        self.edge_state_mode = validate_edge_state_mode(getattr(config, 'edge_state_mode', 'static'))
+        if self.edge_state_mode != 'static':
+            # Preserve legacy initialization AND the following dropout RNG.
+            # Creating after _init_weights retains the updater's zero last layer.
+            with torch.random.fork_rng(devices=[]):
+                from .dynamic_edges import SharedEdgeStateUpdater
+                self.edge_state_updater = SharedEdgeStateUpdater(self.hidden_dim)
+            self.register_buffer('edge_state_mode_code', torch.tensor(
+                edge_state_mode_code(self.edge_state_mode), dtype=torch.int64))
+        # Opt in only for preflight / small internal-validation diagnostic batches.
+        self.enable_edge_state_diagnostics = False
+        self.last_edge_state_diagnostics = []
     
     def load_state_dict(self, state_dict, strict=True, assign=False):
         # Validate before PyTorch starts copying any shared tensors. This also
@@ -690,12 +704,14 @@ class GraphTransformer(nn.Module):
         from .bond_cross_attention import validate_bond_head_checkpoint
         from .charge_partition import validate_charge_partition_checkpoint
         from .theory_fusion import validate_theory_fusion_checkpoint
+        from .dynamic_edges import validate_edge_state_checkpoint
         try:
             validate_attention_checkpoint(self, state_dict)
             validate_position_checkpoint(self, state_dict)
             validate_bond_head_checkpoint(self, state_dict)
             validate_charge_partition_checkpoint(self, state_dict)
             validate_theory_fusion_checkpoint(self, state_dict)
+            validate_edge_state_checkpoint(self, state_dict)
         except ValueError as error:
             raise RuntimeError(str(error)) from error
         saved_ion = {k for k in state_dict if k.startswith('ion12_head.')}
@@ -855,6 +871,16 @@ class GraphTransformer(nn.Module):
             early_theory = self.bond_theory_proj(theory_flat.to(node_features.dtype))
             node_features = add_packed_bond_theory(node_features, early_theory, bond_src, bond_dst)
 
+        # Keep e0 in the readout cached above. Only message propagation receives
+        # recurrent edge states; connectivity, edge order and bond maps stay put.
+        initial_edge_features = edge_features
+        fixed_edge_context = node_features if self.edge_state_mode == 'fixed_context' else None
+        update_edge_states = self.edge_state_mode != 'static'
+        edge_diagnostics = bool(self.enable_edge_state_diagnostics)
+        self.last_edge_state_diagnostics = []
+        if update_edge_states:
+            edge_src, edge_dst = batch_data['edge_index']
+
         # 辅助头仅在训练前向激活；eval 路径零开销、last_aux_outputs 保持 None
         aux_active = (self.use_deep_supervision or self.use_peptide_aux_head) and self.training
         aux_bond_logits = {}
@@ -864,6 +890,15 @@ class GraphTransformer(nn.Module):
         gcn_timings = {}
         for i, gcn_layer in enumerate(self.gcn_layers):
             layer_start = time.perf_counter() if timing_enabled else None
+            previous_edge_features = edge_features if edge_diagnostics else None
+            if update_edge_states:
+                context = fixed_edge_context if fixed_edge_context is not None else node_features
+                edge_features = self.edge_state_updater(
+                    edge_features, context[edge_src], context[edge_dst])
+            if edge_diagnostics:
+                from .dynamic_edges import edge_state_diagnostic
+                self.last_edge_state_diagnostics.append(edge_state_diagnostic(
+                    'gcn', i, initial_edge_features, previous_edge_features, edge_features, gcn_layer))
             node_features = gcn_layer(node_features, batch_data['edge_index'], edge_features)
             if timing_enabled:
                 _maybe_sync(node_features.device, True)
@@ -884,6 +919,15 @@ class GraphTransformer(nn.Module):
             if hasattr(gat_layer, 'enable_timing'):
                 gat_layer.enable_timing = timing_enabled
             layer_start = time.perf_counter() if timing_enabled else None
+            previous_edge_features = edge_features if edge_diagnostics else None
+            if update_edge_states:
+                context = fixed_edge_context if fixed_edge_context is not None else node_features
+                edge_features = self.edge_state_updater(
+                    edge_features, context[edge_src], context[edge_dst])
+            if edge_diagnostics:
+                from .dynamic_edges import edge_state_diagnostic
+                self.last_edge_state_diagnostics.append(edge_state_diagnostic(
+                    'gat', i, initial_edge_features, previous_edge_features, edge_features, gat_layer))
             node_features = gat_layer(
                 node_features,
                 batch_data['edge_index'],
@@ -1065,6 +1109,9 @@ class GraphTransformer(nn.Module):
         if self.theory_fusion_stage != 'late':
             raise NotImplementedError(
                 'Legacy attention replay omits early theory fusion; use production forward hooks')
+        if self.edge_state_mode != 'static':
+            raise NotImplementedError(
+                'Legacy attention replay omits recurrent edge states; use production forward hooks')
         attention_weights = []
 
         # 节点特征编码

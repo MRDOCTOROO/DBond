@@ -60,6 +60,9 @@ class ModelConfig:
         # Reuse the same projected theory at the prediction head, before GCN,
         # or at both points. Absence retains the original late route.
         self.theory_fusion_stage = 'late'
+        # Fixed topology; optionally refresh edge states before every message
+        # layer using initial or current node context. Static keeps legacy keys.
+        self.edge_state_mode = 'static'
         # Optional architecture experiments; absent keys retain legacy behavior.
         self.use_fragment_readout = False
         self.fragment_readout_dim = 64
@@ -130,6 +133,8 @@ class ModelConfig:
         validate_bond_head_type(self.bond_head_type)
         from .theory_fusion import validate_theory_fusion_stage
         validate_theory_fusion_stage(self.theory_fusion_stage)
+        from .dynamic_edges import validate_edge_state_mode
+        validate_edge_state_mode(self.edge_state_mode)
     
     def update_config(self, config_dict: Dict):
         """更新配置参数"""
@@ -454,6 +459,10 @@ class CheckpointManager:
         if hasattr(model, 'theory_fusion_stage'):
             from .theory_fusion import validate_theory_fusion_checkpoint
             validate_theory_fusion_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
+
+        if hasattr(model, 'edge_state_mode'):
+            from .dynamic_edges import validate_edge_state_checkpoint
+            validate_edge_state_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
 
         # New experimental branches must never be silently dropped/left random
         # by strict=False. Legacy checkpoints have neither prefix and remain
