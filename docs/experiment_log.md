@@ -2194,3 +2194,13 @@ pod-only smoke全部通过：late对固定08a8cbc旧源码的初始化张量、R
 完整SD/P-R/逐划分变化、三臂参数与墙钟时长及15份权重/config SHA见four_state_fusion_ops/report.md、result.json和checkpoint_registry.json；HTML/SVG/PNG在同目录fusion_dashboard_20261022.html、fusion_metrics_20261022.*、fusion_deltas_20261022.svg。本地小报告F:/codexout/dbond_four_state_fusion_results_20261022/。原成功4da48ee及标签、宽度08a8cbc及标签全部保留。
 
 融合结果已准备提醒并ack，队列stage2 reviewed；仅按用户最新选择接独立种子复验id5。保持原late路线，不根据本轮测试挑early叠加到复验；训练base43/内部split base42固定，先pod预检通过才launch。动态边与学习图仍deferred_by_user，复验报告后停止接续。当前本次台账记录阶段尚未声明复验已经启动。
+
+### 15.55 128/256四状态独立种子复验已预检并提交（2026-10-22）
+
+理论融合已完成、独立复核、报告准备并ack，stage2 reviewed后，pod fast-forward pull至967bd43c51513f8a0779e5fd1d20dbb1fec955f4。prepared实现cad7845及dbond-four-state-width-seed43-prepared-20261022标签保留。pod-only smoke一次全部通过，于2026-10-22 03:44:51 UTC（北京时间11:44:51）提交four_state_width_replication_batch/20261022_034451，worker PID1496072，使用提交时空闲GPU0/1/2/4；256同轮对照先行，128候选随后，各五组划分共10次从头训练。训练源码冻结967bd43，恢复标签dbond-four-state-width-seed43-run-20261022；本次仅后续本地/远端记录回执，不在训练期间再次pod pull。
+
+两臂四状态α1/Brierλ0/nocharge、原晚期15维理论融合、3GCN+2GAT、4头、group_uniform折叠训练、完整原谱内部验证、strict内部有效键micro-F1选checkpoint、固定0.5阈值与去padding指标不变。本轮训练base seed43，内部验证split base42；五组实际train/val/source SHA均与原成功4da48ee及旧宽度08a8cbc两份历史预检逐组一致。新训练seed确实改变同宽度初始权重，相同seed可复现；显式split seed不消耗全局模型RNG，默认旧行为保留且非法seed提前拒绝。
+
+预检核对两臂真实层维度、global/理论路由、16组425有效键AMP更新、有限梯度、padding投毒不变、同维度权重严格回载和跨宽度复制前拒绝；256完整train128及FP32 val512通过。256参数1706924，128参数464172；这些仅为预检与架构规模，不是模型效果结果。smoke来源绑定967bd43及两份配置SHA。新checkpoint额外记录actual training/split seed、宽度、融合和损失配置，完成后逐份核验。
+
+配对事件four_state_width_replication_ops/{launch,terminal}.json；launch/smoke小回执同步F:/codexout/dbond_four_state_width_replication_launch_20261022/。完成后在pod复算全部指标、SD、配对差/胜率，生成报告与HTML/SVG和10份权重SHA恢复记录；并列旧seed42与新seed43的128−256方向，不能把重叠划分混作十个独立折。沿用预设分类门槛，同时单独报告校准/排序优势是否复现，不基于外测择epoch/阈值/seed，不修改冻结论文表。仅完成/失败事件提醒，不反复读进度；复验报告并ack后停止自动接续，动态边和学习图继续deferred_by_user。
