@@ -3,7 +3,7 @@
   "authorization_date_local": "2026-10-21",
   "thread_id": "01a1547f-f644-7d70-816a-1b3fe2ad8e80",
   "protocol": "experiments/structural_queue_v1.md",
-  "execution_policy": "user_reauthorized_dynamic_edge_only; contemporaneous_256_four_state_alpha1_late_control; stop_after_report; learned_graph_deferred",
+  "execution_policy": "authorized_serial_dynamic_edges_then_head_fusion_then_node_conv; only_one_batch_or_preflight_at_a_time; fixed_256_four_state_alpha1_late_static_baselines_for_followups; learned_graph_deferred",
   "compute_location": "gsj-5090.devpod:/mnt/pvc/graphtrans/DBond",
   "reference_commit": "4da48eeab50decd0a31fbf64f2f179478a6624a7",
   "structural_baseline": {
@@ -97,12 +97,12 @@
       "gitrev": "fb302522082349dc391fcc2e52a58bee42ee2a6b",
       "report": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/report.md",
       "review_receipt": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops/heartbeat_review.json",
-      "resume_condition": "Launched after passed pod preflight. Never repeat smoke/launch; source frozen until terminal. Review/report/ack then stop.",
+      "resume_condition": "Launched after passed pod preflight. Never repeat smoke/launch; source frozen until terminal. New follow-ups 6 then7 authorized only after predecessor reviewed.",
       "total_training_runs": 15,
       "authorized_at_local": "2026-10-22",
       "protocol": "experiments/dynamic_edge_state_v1.md",
       "predecessor_ops": "/mnt/pvc/graphtrans/four_state_width_replication_ops",
-      "completion_action": "Independent pod review/report/ack; stop. Learned graph remains deferred.",
+      "completion_action": "Independent pod review/report/ack, then implement/deploy/preflight/launch only stage6 under latest user authorization; do not change its baseline according to stage3 results.",
       "internal_split_base_seed": 42,
       "training_base_seed": 42,
       "arms": [
@@ -131,6 +131,70 @@
       "source_tag": "dbond-four-state-dynamic-edge-v1-20261022"
     },
     {
+      "id": 6,
+      "name": "four_state_head_fusion",
+      "status": "authorized_waiting_predecessor",
+      "implementation_status": "protocol_only_not_implemented_or_tested",
+      "requires_reviewed_stage": 3,
+      "protocol": "experiments/four_state_head_fusion_v1.md",
+      "ops": "/mnt/pvc/graphtrans/four_state_head_fusion_ops",
+      "batch_prefix": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_head_fusion_batch",
+      "root": null,
+      "gitrev": null,
+      "report": null,
+      "review_receipt": null,
+      "arms": [
+        "concat",
+        "cross_attention",
+        "gated",
+        "residual_mlp"
+      ],
+      "hidden_dim": 256,
+      "bond_head_type": "four_state_mlp",
+      "four_state_alpha": 1,
+      "edge_state_mode": "static",
+      "theory_fusion_stage": "late",
+      "training_base_seed": 42,
+      "internal_split_base_seed": 42,
+      "total_training_runs": 20,
+      "predecessor_ops": "/mnt/pvc/graphtrans/four_state_dynamic_edge_ops",
+      "authorized_at_local": "2026-10-22",
+      "completion_action": "Independent pod review/report/ack, then only stage7. Do not adopt a test-selected head into stage7.",
+      "execution_condition": "Stage3 completed, independently reviewed, reported, acked; then implementation/static review, push/pod pull, successful pod smoke, one launch. No current pod source changes."
+    },
+    {
+      "id": 7,
+      "name": "four_state_node_conv",
+      "status": "authorized_waiting_predecessor",
+      "implementation_status": "protocol_only_not_implemented_or_tested",
+      "requires_reviewed_stage": 6,
+      "protocol": "experiments/four_state_node_conv_v1.md",
+      "ops": "/mnt/pvc/graphtrans/four_state_node_conv_ops",
+      "batch_prefix": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_node_conv_batch",
+      "root": null,
+      "gitrev": null,
+      "report": null,
+      "review_receipt": null,
+      "arms": [
+        "none",
+        "single_k5",
+        "multiscale_357"
+      ],
+      "hidden_dim": 256,
+      "bond_head_type": "four_state_mlp",
+      "bond_fusion_mode": "concat",
+      "four_state_alpha": 1,
+      "edge_state_mode": "static",
+      "theory_fusion_stage": "late",
+      "training_base_seed": 42,
+      "internal_split_base_seed": 42,
+      "total_training_runs": 15,
+      "predecessor_ops": "/mnt/pvc/graphtrans/four_state_head_fusion_ops",
+      "authorized_at_local": "2026-10-22",
+      "completion_action": "Independent pod review/report/ack, auto_advance=false and empty allowlist; stop. Learned graph remains deferred.",
+      "execution_condition": "Stage6 completed, independently reviewed, reported, acked; then implementation/static review, push/pod pull, successful pod smoke, one launch. Keep original concat/static baseline."
+    },
+    {
       "id": 4,
       "name": "learned_graph_topology",
       "status": "deferred_by_user",
@@ -143,10 +207,10 @@
       "resume_condition": "Explicit later user authorization after resolving width/head experiment identity; do not auto-launch."
     }
   ],
-  "auto_advance": false,
+  "auto_advance": true,
   "scheduling_update": {
     "date_local": "2026-10-22",
-    "reason": "User explicitly resumed dynamic edge updates on 256 four-state alpha1 after completed seed replication; only stage3 authorized.",
+    "reason": "User explicitly authorized cross-attention/gated/residual MLP fusion, followed by multi-scale node Conv1D, after current dynamic edge experiment completes and is reviewed; complete reports for each round.",
     "current_fusion_action": "Completed, independently reviewed, reported and acked; no automatic follow-up.",
     "requested_combination": {
       "bond_head_type": "four_state_mlp",
@@ -158,7 +222,15 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "Dynamic edge stage3 submitted; await exact terminal, independently review/report/ack and stop. Stage4 learned graph remains deferred."
+    "next_new_experiment": "After stage3 reviewed/acked, stage6 head fusion 4 arms; after stage6 reviewed/acked, stage7 node Conv1D 3 arms; no stacked winners; then stop.",
+    "serial_stage_ids": [
+      3,
+      6,
+      7
+    ]
   },
-  "auto_advance_allowlist": []
+  "auto_advance_allowlist": [
+    6,
+    7
+  ]
 }

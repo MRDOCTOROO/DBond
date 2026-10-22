@@ -1,5 +1,12 @@
 # DBond 串行结构实验队列 v1
 
+## 2026-10-22追加末端融合与节点Conv1D（最新用户授权）
+
+用户要求当前动态边stage3完成并报告后，再开展末端融合：交叉注意力、门控、残差深MLP；之后开展完整节点编码上的多尺度Conv1D，并为每轮出完整报告。新串行顺序3→6→7，auto_advance=true、allowlist仅[6,7]，stage4学习图仍暂缓。本次只冻结两个协议并登记后续任务，模型代码尚未实现/预检，当前pod不pull也不加并行训练。
+
+stage6按four_state_head_fusion_v1.md比较原concat、cross_attention、gated、residual_mlp四臂×5；stage7按four_state_node_conv_v1.md比较无卷积、k5单尺度、k3/5/7多尺度三臂×5。均在256四状态α1、原late、静态边上独立对照；stage7保留原concat头，不自动叠加前轮赢家。已有旧binary交叉头和AA64多尺度卷积均为负结果，详台账§15.37、§15.20；本次新监督/验证及接入设计必须如实区别。每轮前序终态独立复核、报告、ack后才部署/预检/提交下一轮；成功终态即使没有性能提升仍按授权继续，失败或来源核验失败halt不重跑。完成stage7后停止自动接续。下方“stage3报告后停止”的旧文字保留为历史，由本段覆盖。
+
+
 ## 2026-10-22用户重新授权动态边更新（最新调度）
 
 用户明确选择256维＋四状态头α=1为基准，恢复stage3动态边实验，在pod训练并完成后提醒和分析。原宽度、理论融合、种子复验已reviewed/ack；stage3依赖stage5。本轮按dynamic_edge_state_v1.md冻结静态e0、固定h0更新、当前h_l更新三臂×五划分，共15次；所有臂256/4头、原late、nocharge、α1/Brier0、训练与内部划分base42，完整原谱验证与去padding。源码静态审阅后push/pod pull、pod预检通过才launch，终态之前冻结源码；一次失败则halt。完成后独立复核、报告并ack停止，不自动启动学习图。stage4仍deferred_by_user；下方较早的“动态边暂缓/复验后全停”仅保留为历史记录。

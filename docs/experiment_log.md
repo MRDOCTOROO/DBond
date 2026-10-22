@@ -2247,3 +2247,16 @@ static参数1,706,924；fixed_context与dynamic_context均1,839,916，新增共�
 launch.json绑定源码、全部Python文件SHA、配置、四状态目标和预检；smoke SHA d41453518013a5c7f025c962ecb80b50a57d9299a0d83b7429e9781c46d3df44。配置SHA：static 63e884215029a85813035b2b06ab4ea721d11cb6382801c835a231399081e898；fixed_context c5e01e886aa0030f71b45c2efb1bd19e29d510a93bf36f693d478f51bbed3f2e；dynamic_context 14ac100b20183c2c8f40cbda1a62438834f115d4ab881154405c324d68c70450。小凭据同步F:/codexout/dbond_four_state_dynamic_edge_results_20261022/。源码冻结，不在pod pull后续回执commit；只扫完成/失败事件，不读取epoch进度。
 
 完成后按协议独立核验15份权重/来源、全部指标及三组配对差、SD/胜率/参数耗时和内部小样本边门控诊断，生成报告、HTML/SVG、恢复索引，提醒后ack并标reviewed。失败则报告halt，不自动重跑；学习图仍deferred_by_user。当前尚无正式效果结论，不改冻结论文主表；原成功4da48ee及既有候选保留。
+
+
+### 15.59 用户追加末端融合与节点多尺度卷积串行实验（2026-10-22，协议已冻结，未实现/运行）
+
+当前stage3动态边批次fb30252/20261022_150248保持训练与源码冻结，不查看epoch或中途改模型。用户进一步授权完成后依次测试红框六路融合以及节点特征编码Conv1D，均要求完整报告。队列新增stage6和7，auto_advance_allowlist=[6,7]；前序completed、独立核验、报告和ack后才实施pod预检/训练。学习图stage4仍deferred_by_user。
+
+当前红框是六路256维拼接1536→256→ReLU→Dropout0.1→4状态，不是图中旧二分类→1；MLP能学习非线性交互，但没有显式来源注意力/门控。历史binary交叉注意力（84520e6，§15.37）以及AA64多尺度卷积（770ff82，§15.20）已做且未整体改善；当时完整原谱内部验证尚未修复。新轮不称首次，也不把新旧差异归因于单个变量。
+
+stage6协议experiments/four_state_head_fusion_v1.md：固定256四状态α1/Brier0、原late、静态边，比较concat、2Q/4KV cross_attention后接MLP→4、六路标量门控后接原MLP、原隐藏层加一个256→128→256残差块；4臂×5共20次。所有臂维持bond_head_type=four_state_mlp，另设融合模式，防止旧binary cross配置意外改变任务。门控6×softmax使零初值为恒等门，残差末层零初始化；共同骨干初始化隔离RNG。参数差异全报，不单凭结果宣称机制排除容量作用。
+
+stage7协议experiments/four_state_node_conv_v1.md：同静态四状态基座保留原concat头，不叠加stage3/6赢家；NodeEncoder完整[B,L,256]输出后、global打包和FiLM前残差加序列分支。none、k5输出192、并行k3/5/7各64再拼192投影256，三臂×5共15次；两卷积候选等参数预算，pod核验。末端投影零初始化，无任意缩放常数；padding显式清零、只沿L卷积，不卷积global或跨肽链。单尺度控制限制为k5，不能把更大感受野和多分支贡献完全分离。
+
+两轮固定base42/splitbase42与实际train/val/sourceSHA，折叠group_uniform、完整原谱内部验证、strict max内部F1、固定.5和去padding；原预算不改。完整报告含8指标、均值SD、配对差SD、胜平负、参数/耗时/显存、结构变化示意、HTML/SVG与逐划分波动、描述性内部验证融合/分支诊断、全部权重strict恢复和源码/配置/权重SHA、永久标签及恢复索引。所有结果在pod核验，四项工程门槛不变，失败halt不自动重跑；stage7报告后停止。此提交只有协议/队列/台账，不含新增模型实现或训练结果，不改变冻结论文主表。
