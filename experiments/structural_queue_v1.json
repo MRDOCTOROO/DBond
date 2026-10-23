@@ -195,16 +195,16 @@
     {
       "id": 7,
       "name": "four_state_node_conv",
-      "status": "ready_local_unverified",
-      "implementation_status": "implemented_and_independently_static_reviewed_pending_pod_preflight",
+      "status": "submitted",
+      "implementation_status": "implemented_static_reviewed_pod_smoke_passed_and_launched",
       "requires_reviewed_stage": 6,
       "protocol": "experiments/four_state_node_conv_v1.md",
       "ops": "/mnt/pvc/graphtrans/four_state_node_conv_ops",
       "batch_prefix": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_node_conv_batch",
-      "root": null,
-      "gitrev": null,
-      "report": null,
-      "review_receipt": null,
+      "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_node_conv_batch/20261023_055934",
+      "gitrev": "fba57b5412ba12a96a4bd0588fe688a5ff11d856",
+      "report": "/mnt/pvc/graphtrans/four_state_node_conv_ops/report.md",
+      "review_receipt": "/mnt/pvc/graphtrans/four_state_node_conv_ops/heartbeat_review.json",
       "arms": [
         "none",
         "single_k5",
@@ -224,7 +224,26 @@
       "completion_action": "Independent pod review/report/ack, auto_advance=false and empty allowlist; stop. Learned graph remains deferred.",
       "execution_condition": "Stage6 completed, independently reviewed, reported, acked; then implementation/static review, push/pod pull, successful pod smoke, one launch. Keep original concat/static baseline.",
       "source_tag": "dbond-four-state-node-conv-v1-20261023",
-      "local_receipts": "F:/codexout/dbond_four_state_node_conv_results_20261023/"
+      "local_receipts": "F:/codexout/dbond_four_state_node_conv_results_20261023/",
+      "launch_receipt": "/mnt/pvc/graphtrans/four_state_node_conv_ops/launch.json",
+      "preflight_receipt": "/mnt/pvc/graphtrans/four_state_node_conv_ops/smoke.json",
+      "preflight_sha256": "715f6ce4f37be1b72b0e97d9dc33a0bc5b4b3691d640fa84455a2add479a365d",
+      "config_sha256": {
+        "none": "db5d0f78d6f45f8ffbf5f1f3845b0e8d7f15f3b3a5a44b7603e8a7a05aabc195",
+        "single_k5": "56400ece30cc2d3db82d9995b35bb430ce9e43c22cfa384df3ce29e481fdf850",
+        "multiscale_357": "68d0a7abffa9ef8e3841f255de9a1fa63f43b81aa50616cad4ad3741bec2f49a"
+      },
+      "gpus": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "submitted_at_utc": "2026-10-23T13:59:34.539685+08:00",
+      "worker_pid": 1614655,
+      "checkpoint_registry": "/mnt/pvc/graphtrans/four_state_node_conv_ops/checkpoint_registry.json",
+      "dashboard": "/mnt/pvc/graphtrans/four_state_node_conv_ops/node_conv_dashboard.html",
+      "resume_condition": "Launched once after all pod conv_checks passed. Do not repeat smoke or launch. Pod source frozen; only terminal events. On completion independently audit, report, ack, set reviewed/auto_advance=false/empty allowlist and stop; learned graph remains deferred."
     },
     {
       "id": 4,
@@ -254,7 +273,7 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "Stage6 reviewed/acked; only stage7 node Conv1D three arms remains authorized. Deploy, one pod smoke, one launch, review/report/ack, then stop; learned graph deferred.",
+    "next_new_experiment": "No further training authorized after stage7. Wait for stage7 terminal only; independently review/report/ack then stop.",
     "serial_stage_ids": [
       3,
       6,

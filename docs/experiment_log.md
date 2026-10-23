@@ -2326,3 +2326,11 @@ cross相对concat的F1+0.107544个百分点（配对SD0.356882pp，3/5改善）�
 三份配置、pod-only预检及ops已完成交叉静态审阅，无已知重要阻断；本机未运行数值测试。预检覆盖旧d4a2d1c CPU前反向/schema/RNG、两候选等参数及初始等函数、逐位置独立卷积公式与感受野、global/FiLM路由、短链/空输入/padding污染/跨样本隔离、四态CE和两步任务梯度、checkpoint防混用、实际train128/val512显存和历史五组来源SHA。前序已终态/独立审计/报告/ack；仅pod smoke全部通过后launch一次。
 
 固定256四状态α1/Brier0、原concat、static/late/nocharge、3GCN2GAT4头、base42/splitbase42、folded group_uniform、完整原谱验证、max内部有效键F1、固定.5和去padding口径及原预算。none→single_k5→multiscale_357各五组共15次，比较single−none、multi−none、multi−single；不叠加stage6赢家。单尺度k5对多尺度最大k7仍无法完全分离感受野与多分支机制。当前未声称pod预检或正式训练已运行；真实launch回执另记。完成报告提醒ack后停止自动接续，学习图仍暂缓。
+
+### 15.65 节点序列卷积三臂pod预检全部通过并正式提交（2026-10-23）
+
+训练源码fba57b5412ba12a96a4bd0588fe688a5ff11d856，永久标签dbond-four-state-node-conv-v1-20261023。本机HTTPS握手故障后，通过保留提交身份的Git bundle经pod推送同一origin，再fast-forward pull；未关TLS验证。前序融合实验completed/独立审计/报告/ack屏障通过，单次pod-only smoke全部conv_checks通过，未重复数值预检。旧d4a2d1c无卷积模型schema/RNG/CPU前反向兼容、真实四态CE和union q、两候选参数相等及初始等函数、独立卷积/感受野、padding/短链/global/FiLM隔离、两步AMP任务梯度、检查点防混用、最长真实批量和历史五组来源SHA均已核验。
+
+正式提交时间 10/23/2026 13:59:34，worker PID 1614655，GPU 0/1/2/4。root /mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_node_conv_batch/20261023_055934；ops /mnt/pvc/graphtrans/four_state_node_conv_ops。none→single_k5→multiscale_357三臂串行、各五组，共15次从头训练。全部256四状态α1/Brier0、原concat、static/late/nocharge、3GCN2GAT4头、base42/splitbase42，不叠加此前候选。两卷积候选预算相同；完成后全报single−none、multi−none、multi−single，不将最大感受野7对5的差异单归因于多尺度机制。
+
+launch绑定源码Python SHA、配置、四态目标和前序审计，smoke SHA 715f6ce4f37be1b72b0e97d9dc33a0bc5b4b3691d640fa84455a2add479a365d；配置SHA及实际种子完整登记小索引和launch。小回执存F:/codexout/dbond_four_state_node_conv_results_20261023/。仅同步回执commit，pod训练期间不pull或修改训练源码；只检查完成/失败事件，不读取epoch进度。完成后独立核验15权重、来源与实际种子协议、全部去padding指标/均值SD/三配对SD和胜平负/参数耗时/描述性分支诊断，生成报告、HTML/SVG及恢复registry，提醒并ack后停止自动接续。失败halt、不自动重跑/跳过；学习图仍暂缓、冻结论文主表不改、全部成功源码和候选保留。
