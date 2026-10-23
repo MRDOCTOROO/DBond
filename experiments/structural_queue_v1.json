@@ -3,7 +3,7 @@
   "authorization_date_local": "2026-10-21",
   "thread_id": "01a1547f-f644-7d70-816a-1b3fe2ad8e80",
   "protocol": "experiments/structural_queue_v1.md",
-  "execution_policy": "authorized_serial_queue_completed_reviewed_and_acked; no_new_training_without_explicit_user_authorization; learned_graph_deferred",
+  "execution_policy": "only_authorized_stage8_none_vs_single_k5_seed43_replication; original_internal_split42; terminal_events_only; learned_graph_deferred",
   "compute_location": "gsj-5090.devpod:/mnt/pvc/graphtrans/DBond",
   "reference_commit": "4da48eeab50decd0a31fbf64f2f179478a6624a7",
   "structural_baseline": {
@@ -263,12 +263,45 @@
       "report": null,
       "review_receipt": null,
       "resume_condition": "Explicit later user authorization after resolving width/head experiment identity; do not auto-launch."
+    },
+    {
+      "id": 8,
+      "name": "node_conv_seed_replication",
+      "status": "ready_local_unverified",
+      "implementation_status": "implemented_independently_static_reviewed_not_pod_tested_or_launched",
+      "requires_reviewed_stage": 7,
+      "authorized_at_local": "2026-10-23",
+      "protocol": "experiments/node_conv_seed_replication_v1.md",
+      "ops": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops",
+      "batch_prefix": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_node_conv_replication_batch",
+      "root": null,
+      "gitrev": null,
+      "source_tag": "dbond-four-state-node-conv-seed43-v1-20261023",
+      "arms": [
+        "none",
+        "single_k5"
+      ],
+      "hidden_dim": 256,
+      "bond_head_type": "four_state_mlp",
+      "four_state_alpha": 1,
+      "union_brier_lambda": 0,
+      "training_base_seed": 43,
+      "internal_split_base_seed": 42,
+      "total_training_runs": 10,
+      "discovery_ops": "/mnt/pvc/graphtrans/four_state_node_conv_ops",
+      "discovery_root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_node_conv_batch/20261023_055934",
+      "discovery_gitrev": "fba57b5412ba12a96a4bd0588fe688a5ff11d856",
+      "report": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops/report.md",
+      "review_receipt": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops/heartbeat_review.json",
+      "local_receipts": "F:/codexout/dbond_four_state_node_conv_replication_results_20261023/",
+      "resume_condition": "Explicitly authorized seed43 none-vs-single_k5 replication after stage7 reviewed/ack. Deploy only statically reviewed code, pod source-bound smoke once then launch once. No new architecture or data split.",
+      "completion_action": "Independently verify/report new seed43 and old seed42 paired differences separately, preserve all recovery records, notify/ack, reviewed, auto_advance=false and empty allowlist; stop."
     }
   ],
-  "auto_advance": false,
+  "auto_advance": true,
   "scheduling_update": {
-    "date_local": "2026-10-22",
-    "reason": "User explicitly authorized cross-attention/gated/residual MLP fusion, followed by multi-scale node Conv1D, after current dynamic edge experiment completes and is reviewed; complete reports for each round.",
+    "date_local": "2026-10-23",
+    "reason": "User explicitly authorized an independent training seed replication for single k5 versus original no-convolution256four-statealpha1, keeping exact original splits and padding-free metrics.",
     "current_fusion_action": "Completed, independently reviewed, reported and acked; no automatic follow-up.",
     "requested_combination": {
       "bond_head_type": "four_state_mlp",
@@ -280,12 +313,12 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "None authorized. Stages1/2/5/3/6/7 reviewed and acked; stop automatic continuation. Learned graph remains deferred.",
+    "next_new_experiment": "Only stage8; after report/ack stop, no other experiment authorized.",
     "serial_stage_ids": [
-      3,
-      6,
-      7
+      8
     ]
   },
-  "auto_advance_allowlist": []
+  "auto_advance_allowlist": [
+    8
+  ]
 }

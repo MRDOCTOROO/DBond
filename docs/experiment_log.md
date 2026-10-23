@@ -2357,3 +2357,11 @@ multi−single：F1−0.064665pp（2/5改善）、accuracy−0.114786pp、AUC−
 两候选均2002284参数，none1706924；较none增加295360参数，因此无法完全排除容量作用。single/multi相同参数但最大感受野5与7不同，机制归因仍有限。分支在训练后确实产生非零残差，激活和权重不当作因果重要性或真实空间结构。五组重叠划分、各一次初始化、多轮探索，工程门槛不是统计显著；需独立训练种子复验后再作更强判断。本轮未修改冻结论文主表，也未自动换主配置或开始复验。
 
 原report/result/registry不改写；独立heartbeat_review.json、新analysis.md、node_conv_review_dashboard.html、均值/三比较逐划分波动/诊断/结构SVG和PNG、candidate_recovery.json已存four_state_node_conv_ops并同步F:/codexout/dbond_four_state_node_conv_results_20261023/。全部候选五份权重路径/SHA、配置SHA、源码/标签完整保留，原成功4da48ee及所有旧候选不删除。准确完成事件已ack，stage7 reviewed，auto_advance=false且allowlist清空；本会话已授权串行队列结束，学习图继续deferred_by_user，不自动启动新实验。
+
+### 15.67 单尺度k5独立训练随机种子复验：准备完成，待pod预检（2026-10-23）
+
+用户明确授权在stage7完成后，以同轮none对照复验single_k5；两臂均H256、四状态alpha1/Brier0、原concat/late/static/nocharge、3GCN2GAT4头。原发现训练base42，本轮训练base43；内部splitbase42不变，逐组实际训练seed和splitseed解耦，保持五组原train/val/sourceSHA、折叠group_uniform、完整原谱验证和去padding。10次从头训练，不续训旧权重，不增加multi或其他架构。参数/损失/优化器/预算均不改，源模型保留fba57b5实现。
+
+新增协议experiments/node_conv_seed_replication_v1.md、pre_synthesis_four_state_node_conv_seed43_{none,single_k5}.yaml、新ops和pod-only预检脚本；两配置独立静态审阅确认仅训练seed及输出/缓存身份变化，split42保持。脚本静态交叉审阅完成，此处不宣称已做数值预检或提交训练。stage8仅一项allowlist，前序stage7独立审计/报告/准确ack屏障；新ops four_state_node_conv_replication_ops，batch four_state_node_conv_replication_batch，独立source/config/targets/历史回执绑定及防重复提交。仅pod有空闲GPU、smoke全通过后launch，训练后源码冻结，不查看epoch进度。
+
+完成后全报八指标/均值SD/k5-none配对差SD与胜平负、参数/耗时/显存、10权重strictCPU恢复及实际种子/卷积marker/保存config，独立卷积分支路由诊断。旧seed42与新seed43分别报告，检查F1/AUC/Brier/谱图F1/排序方向和划分一致性能否复现，不合并成10个独立样本，不按外测选择epoch/阈值/seed；四门槛保持ΔF1≥.002、F1≥4/5、ΔAUC≥0、ΔBrier≤0。报告提醒/ack后停止接续。原4da48ee、fba57b5及所有候选和冻结主表保留，学习图仍暂缓。
