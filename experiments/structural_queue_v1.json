@@ -3,7 +3,7 @@
   "authorization_date_local": "2026-10-21",
   "thread_id": "01a1547f-f644-7d70-816a-1b3fe2ad8e80",
   "protocol": "experiments/structural_queue_v1.md",
-  "execution_policy": "authorized_serial_dynamic_edges_then_head_fusion_then_node_conv; only_one_batch_or_preflight_at_a_time; fixed_256_four_state_alpha1_late_static_baselines_for_followups; learned_graph_deferred",
+  "execution_policy": "authorized_serial_queue_completed_reviewed_and_acked; no_new_training_without_explicit_user_authorization; learned_graph_deferred",
   "compute_location": "gsj-5090.devpod:/mnt/pvc/graphtrans/DBond",
   "reference_commit": "4da48eeab50decd0a31fbf64f2f179478a6624a7",
   "structural_baseline": {
@@ -195,8 +195,8 @@
     {
       "id": 7,
       "name": "four_state_node_conv",
-      "status": "submitted",
-      "implementation_status": "implemented_static_reviewed_pod_smoke_passed_and_launched",
+      "status": "reviewed",
+      "implementation_status": "completed_independently_reviewed_reported_and_acked",
       "requires_reviewed_stage": 6,
       "protocol": "experiments/four_state_node_conv_v1.md",
       "ops": "/mnt/pvc/graphtrans/four_state_node_conv_ops",
@@ -242,8 +242,15 @@
       "submitted_at_utc": "2026-10-23T13:59:34.539685+08:00",
       "worker_pid": 1614655,
       "checkpoint_registry": "/mnt/pvc/graphtrans/four_state_node_conv_ops/checkpoint_registry.json",
-      "dashboard": "/mnt/pvc/graphtrans/four_state_node_conv_ops/node_conv_dashboard.html",
-      "resume_condition": "Launched once after all pod conv_checks passed. Do not repeat smoke or launch. Pod source frozen; only terminal events. On completion independently audit, report, ack, set reviewed/auto_advance=false/empty allowlist and stop; learned graph remains deferred."
+      "dashboard": "/mnt/pvc/graphtrans/four_state_node_conv_ops/node_conv_review_dashboard.html",
+      "resume_condition": "Completed, independently reviewed, report prepared and exact terminal event acknowledged. Authorized serial queue finished. Do not rerun or automatically start any new experiment.",
+      "reviewed_at_local": "2026-10-23",
+      "event_acknowledged": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_node_conv_batch/20261023_055934|completed",
+      "analysis_report": "/mnt/pvc/graphtrans/four_state_node_conv_ops/analysis.md",
+      "candidate_recovery": "/mnt/pvc/graphtrans/four_state_node_conv_ops/candidate_recovery.json",
+      "preferred_replication_candidate": "single_k5; exploratory candidate, not confirmed global optimum or automatic replacement",
+      "preferred_candidate_source_tag": "dbond-four-state-node-conv-k5-candidate-20261023",
+      "outcome": "Both convolution candidates pass all four engineering gates versus same-round none. Single k5 F1 +0.582625pp (5/5), AUC +0.005488 (5/5), q-Brier -0.002158 (5/5), spectrum F1 +0.713037pp (5/5); q_seq +0.018182 (3/5), precision lower. Multiscale F1 +0.517960pp (5/5), AUC +0.004599 (5/5), q-Brier -0.001146 (3/5). Multiscale-minus-single fails all four gates; do not claim multiscale superiority. Preserve both candidates and original reference; no automatic follow-up."
     },
     {
       "id": 4,
@@ -258,7 +265,7 @@
       "resume_condition": "Explicit later user authorization after resolving width/head experiment identity; do not auto-launch."
     }
   ],
-  "auto_advance": true,
+  "auto_advance": false,
   "scheduling_update": {
     "date_local": "2026-10-22",
     "reason": "User explicitly authorized cross-attention/gated/residual MLP fusion, followed by multi-scale node Conv1D, after current dynamic edge experiment completes and is reviewed; complete reports for each round.",
@@ -273,14 +280,12 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "No further training authorized after stage7. Wait for stage7 terminal only; independently review/report/ack then stop.",
+    "next_new_experiment": "None authorized. Stages1/2/5/3/6/7 reviewed and acked; stop automatic continuation. Learned graph remains deferred.",
     "serial_stage_ids": [
       3,
       6,
       7
     ]
   },
-  "auto_advance_allowlist": [
-    7
-  ]
+  "auto_advance_allowlist": []
 }

@@ -2334,3 +2334,26 @@ cross相对concat的F1+0.107544个百分点（配对SD0.356882pp，3/5改善）�
 正式提交时间 10/23/2026 13:59:34，worker PID 1614655，GPU 0/1/2/4。root /mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_node_conv_batch/20261023_055934；ops /mnt/pvc/graphtrans/four_state_node_conv_ops。none→single_k5→multiscale_357三臂串行、各五组，共15次从头训练。全部256四状态α1/Brier0、原concat、static/late/nocharge、3GCN2GAT4头、base42/splitbase42，不叠加此前候选。两卷积候选预算相同；完成后全报single−none、multi−none、multi−single，不将最大感受野7对5的差异单归因于多尺度机制。
 
 launch绑定源码Python SHA、配置、四态目标和前序审计，smoke SHA 715f6ce4f37be1b72b0e97d9dc33a0bc5b4b3691d640fa84455a2add479a365d；配置SHA及实际种子完整登记小索引和launch。小回执存F:/codexout/dbond_four_state_node_conv_results_20261023/。仅同步回执commit，pod训练期间不pull或修改训练源码；只检查完成/失败事件，不读取epoch进度。完成后独立核验15权重、来源与实际种子协议、全部去padding指标/均值SD/三配对SD和胜平负/参数耗时/描述性分支诊断，生成报告、HTML/SVG及恢复registry，提醒并ack后停止自动接续。失败halt、不自动重跑/跳过；学习图仍暂缓、冻结论文主表不改、全部成功源码和候选保留。
+
+### 15.66 节点卷积完成：两候选通过门槛，保留k5为优先复验候选（2026-10-23）
+
+批次four_state_node_conv_batch/20261023_055934于2026-10-23 10:15:23UTC（北京时间18:15:23）完成。源码fba57b5412ba12a96a4bd0588fe688a5ff11d856，批次标签dbond-four-state-node-conv-v1-20261023；新增候选恢复标签dbond-four-state-node-conv-k5-candidate-20261023指向同一源码，须配合single_k5配置与对应五份权重。独立pod审计2386检查/284项SHA绑定通过，15权重严格CPU恢复、actual training_rng_protocol/模式marker/保存config、完整原谱验证和五组历史train/val/source、原始CSV全指标均值SD与三组配对差/SD/胜平负核验通过。逐权重内部验证前16行用独立逐位置卷积公式及hook核对分支、global打包/FiLM前接入和诊断；数值处理和绘图均在pod。
+
+| 去padding指标 | 同轮none | single_k5 | multiscale_357 |
+|---|---:|---:|---:|
+| 有效键micro-F1 % |79.951831|80.534456|80.469792|
+| 有效键accuracy % |80.003363|80.319812|80.205026|
+| ROC-AUC |0.883028|0.888516|0.887627|
+| 谱图平均P/R调和F1 % |75.537594|76.250631|76.191284|
+| q-Brier ↓ |0.066310|0.064152|0.065164|
+| q_seq |0.629712|0.647894|0.643882|
+
+single−none：F1+0.582625个百分点，配对SD0.231089pp，5/5改善；accuracy+0.316448pp（5/5），AUC+0.005488（5/5），谱图F1+0.713037pp（5/5），q-Brier−0.002158（5/5），q_seq+0.018182（3/5）。谱图P−0.400048pp而R+1.967781pp，不能说所有指标均提高；AUC与概率误差同时改善，收益也不限于固定阈值的P/R交换。
+
+multi−none：F1+0.517960pp（配对SD0.138796pp，5/5），accuracy+0.201662pp（4/5），AUC+0.004599（5/5），谱图F1+0.653690pp（5/5），Brier−0.001146（3/5），q_seq+0.014170（3/5）；P−0.540643pp、R+2.061178pp。两个卷积候选均通过F1增幅≥0.2pp、F1至少4/5改善、AUC不降、Brier不升四项预设工程门槛。
+
+multi−single：F1−0.064665pp（2/5改善）、accuracy−0.114786pp、AUC−0.000889、谱图F1−0.059347pp、Brier+0.001012、q_seq−0.004012，六主指标均值不及single；该比较四门槛均未过。当前结果支持这套图前序列卷积分支，不支持多尺度优于单尺度。单尺度本轮数值更好，可优先保留复验；不能把小幅均值差视为确认性优势。
+
+两候选均2002284参数，none1706924；较none增加295360参数，因此无法完全排除容量作用。single/multi相同参数但最大感受野5与7不同，机制归因仍有限。分支在训练后确实产生非零残差，激活和权重不当作因果重要性或真实空间结构。五组重叠划分、各一次初始化、多轮探索，工程门槛不是统计显著；需独立训练种子复验后再作更强判断。本轮未修改冻结论文主表，也未自动换主配置或开始复验。
+
+原report/result/registry不改写；独立heartbeat_review.json、新analysis.md、node_conv_review_dashboard.html、均值/三比较逐划分波动/诊断/结构SVG和PNG、candidate_recovery.json已存four_state_node_conv_ops并同步F:/codexout/dbond_four_state_node_conv_results_20261023/。全部候选五份权重路径/SHA、配置SHA、源码/标签完整保留，原成功4da48ee及所有旧候选不删除。准确完成事件已ack，stage7 reviewed，auto_advance=false且allowlist清空；本会话已授权串行队列结束，学习图继续deferred_by_user，不自动启动新实验。
