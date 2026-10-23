@@ -2299,3 +2299,30 @@ stage3已报告准备并ack、reviewed，现允许push/pod fast-forward pull一�
 ops /mnt/pvc/graphtrans/four_state_head_fusion_ops；launch绑定源码/配置/目标、旧前序审计SHA及smoke SHA ebb373c3b4522954e50eaefa02157166a4f1d9c3d7022bc1afb8c60201b04816。四份config SHA已完整登记小索引与launch，小回执同步F:/codexout/dbond_four_state_head_fusion_results_20261023/。本地接下来只push提交回执，pod不pull，训练源码冻结d4a2d1c。
 
 完成后独立复核20权重、实际RNG/模式/来源、原始CSV全部8指标、3对照/SD/配对差SD/胜平负/参数耗时、内部小样本融合诊断，生成完整报告和可视化、恢复registry并提醒/ack。四项工程门槛不变；成功执行但负结果仍按授权接stage7，执行/来源失败halt不自动重跑。stage7仅协议，尚未实现或测试，待本轮报告后再做；学习图仍暂缓，冻结论文表不改，所有原成功源码及候选保留。
+
+### 15.63 融合头四臂完成：交叉注意力F1微增但概率误差变差，保留原concat（2026-10-23）
+
+批次four_state_head_fusion_batch/20261022_214615于2026-10-23 04:40:03UTC（北京时间12:40:03）完成，源码d4a2d1c45221a78d1cedb08f87404adf8ad07533，永久标签dbond-four-state-head-fusion-v1-20261023。pod独立审计2974项检查、312项SHA绑定通过，20份权重strictCPU恢复；实际training_rng_protocol、历史五组train/val/source、保存config及四态/融合模式、原始CSV全指标与均值样本SD/配对SD/胜平负一致。固定内部验证前16行用独立线性运算、softmax、LayerNorm和hook重算QKV注意力、门控、残差及四态union输出，与保存诊断一致。没有读取epoch日志或重跑训练。
+
+| 指标 | 原concat | cross_attention | gated | residual_mlp |
+|---|---:|---:|---:|---:|
+| 有效键micro-F1 % |79.970954|80.078498|79.833418|79.998052|
+| 有效键accuracy % |79.999311|79.965880|79.779320|80.005269|
+| ROC-AUC |0.883046873|0.882344490|0.880789446|0.882910582|
+| 谱图平均P/R调和F1 % |75.555357|75.564015|75.395936|75.619666|
+| q-Brier ↓ |0.066384897|0.067636395|0.067870354|0.066959666|
+| q_seq |0.629672616|0.630174655|0.601282902|0.624483132|
+
+cross相对concat的F1+0.107544个百分点（配对SD0.356882pp，3/5改善），AUC−0.000702382（1/5），q-Brier+0.001251498（2/5），谱图F1+0.008658pp（4/5），q_seq+0.000502038（2/5）。谱图P−0.564561pp、R+0.618272pp，不能仅凭F1微增宣布整体改善。gated F1−0.137536pp（2/5）、AUC−0.002257426、Brier+0.001485457、q_seq−0.028389714，整体下降。residual F1+0.027098pp（3/5）、AUC−0.000136290、Brier+0.000574769、q_seq−0.005189484，接近原版但无整体收益。三个候选均未通过四项预设工程门槛中的任何一项；保留concat基座，候选源码/配置/权重全部保留，不依外测叠加到下一轮。
+
+参数数目concat1706924、cross1709484、gated1716146、residual1773356。分支确已生效：cross来源注意力偏重边表示；gated相对增强理论来源；residual实际残差幅度不为零。诊断权重不是因果重要性，也不能据此删特征或断定上游GCN/GAT是瓶颈。五组重叠划分、单初始化和不同容量限制结论，不作显著性或独立五折声明。全部指标去padding，完整原谱内部验证和固定0.5阈值；冻结论文主表不改。
+
+原report.md/result.json/checkpoint_registry.json保持原SHA，独立heartbeat_review.json与新analysis.md、head_fusion_review_dashboard.html及均值/配对波动/诊断/结构SVG、PNG存于four_state_head_fusion_ops。四张PNG已目视核验；HTML未做浏览器渲染验证。小报告同步F:/codexout/dbond_four_state_head_fusion_results_20261023/。准确completed事件已ack、stage6 reviewed。按授权接stage7，不启动学习图。
+
+### 15.64 节点Conv1D三臂本地实现与独立静态审阅完成，待pod预检（2026-10-23）
+
+新增node_conv_mode=none/single_k5/multiscale_357，完整256维NodeEncoder之后、global创建打包及FiLM之前加入残差分支。single Conv1d256→192/k5；multi并行256→64/k3,5,7，SiLU后拼192；两候选均Linear192→256且末端weight/bias零初始化，无任意缩放常数。显式masked_fill清理输入/分支/投影/输出padding，避免NaN×0污染，不卷积global或跨肽链。新初始化隔离RNG，none保持旧状态schema；模式/kernel/channel标记及保存config在checkpoint复制前校验。描述性分支诊断默认关闭。
+
+三份配置、pod-only预检及ops已完成交叉静态审阅，无已知重要阻断；本机未运行数值测试。预检覆盖旧d4a2d1c CPU前反向/schema/RNG、两候选等参数及初始等函数、逐位置独立卷积公式与感受野、global/FiLM路由、短链/空输入/padding污染/跨样本隔离、四态CE和两步任务梯度、checkpoint防混用、实际train128/val512显存和历史五组来源SHA。前序已终态/独立审计/报告/ack；仅pod smoke全部通过后launch一次。
+
+固定256四状态α1/Brier0、原concat、static/late/nocharge、3GCN2GAT4头、base42/splitbase42、folded group_uniform、完整原谱验证、max内部有效键F1、固定.5和去padding口径及原预算。none→single_k5→multiscale_357各五组共15次，比较single−none、multi−none、multi−single；不叠加stage6赢家。单尺度k5对多尺度最大k7仍无法完全分离感受野与多分支机制。当前未声称pod预检或正式训练已运行；真实launch回执另记。完成报告提醒ack后停止自动接续，学习图仍暂缓。

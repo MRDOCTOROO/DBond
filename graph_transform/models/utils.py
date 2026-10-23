@@ -71,6 +71,9 @@ class ModelConfig:
         self.sequence_adapter_type = 'none'
         self.sequence_adapter_dim = 96
         self.sequence_conv_kernels = [3, 5, 7]
+        # Optional full-width residue Conv1D before global packing and FiLM;
+        # none preserves the legacy model state and initialization RNG.
+        self.node_conv_mode = 'none'
         self.bond_condition_mode = 'none'
         self.bond_condition_dim = 32
         self.bond_head_type = 'concat_mlp'
@@ -140,6 +143,8 @@ class ModelConfig:
         validate_edge_state_mode(self.edge_state_mode)
         from .bond_fusion_heads import validate_bond_fusion_mode
         validate_bond_fusion_mode(self.bond_fusion_mode)
+        from .node_context_conv import validate_node_conv_mode
+        validate_node_conv_mode(self.node_conv_mode)
     
     def update_config(self, config_dict: Dict):
         """更新配置参数"""
@@ -472,6 +477,10 @@ class CheckpointManager:
         if hasattr(model, 'bond_fusion_mode'):
             from .bond_fusion_heads import validate_bond_fusion_checkpoint
             validate_bond_fusion_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
+
+        if hasattr(model, 'node_conv_mode'):
+            from .node_context_conv import validate_node_conv_checkpoint
+            validate_node_conv_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
 
         # New experimental branches must never be silently dropped/left random
         # by strict=False. Legacy checkpoints have neither prefix and remain

@@ -724,6 +724,25 @@ class GraphTransformer(nn.Module):
                 dtype=torch.int64))
         self.enable_bond_fusion_diagnostics = False
         self.last_bond_fusion_diagnostics = {}
+
+        # Full-width residue sequence context is separate from the historical
+        # AA-embedding adapter. Build only after every legacy initialization.
+        from .node_context_conv import validate_node_conv_mode, node_conv_mode_code, node_conv_spec
+        self.node_conv_mode = validate_node_conv_mode(getattr(config, 'node_conv_mode', 'none'))
+        if self.node_conv_mode != 'none':
+            if self.sequence_adapter_type != 'none':
+                raise ValueError('node_conv_mode requires the legacy sequence_adapter_type=none')
+            from .node_context_conv import NodeContextConv
+            with torch.random.fork_rng(devices=[]):
+                self.node_context_conv = NodeContextConv(self.hidden_dim, self.node_conv_mode)
+            kernels, channels = node_conv_spec(self.node_conv_mode)
+            self.register_buffer('node_conv_mode_code', torch.tensor(
+                node_conv_mode_code(self.node_conv_mode), dtype=torch.int64))
+            self.register_buffer('node_conv_schema_code', torch.tensor(1, dtype=torch.int64))
+            self.register_buffer('node_conv_kernel_sizes', torch.tensor(kernels, dtype=torch.int64))
+            self.register_buffer('node_conv_branch_channels', torch.tensor(channels, dtype=torch.int64))
+        self.enable_node_conv_diagnostics = False
+        self.last_node_conv_diagnostics = {}
     
     def load_state_dict(self, state_dict, strict=True, assign=False):
         # Validate before PyTorch starts copying any shared tensors. This also
@@ -735,6 +754,7 @@ class GraphTransformer(nn.Module):
         from .theory_fusion import validate_theory_fusion_checkpoint
         from .dynamic_edges import validate_edge_state_checkpoint
         from .bond_fusion_heads import validate_bond_fusion_checkpoint
+        from .node_context_conv import validate_node_conv_checkpoint
         try:
             validate_attention_checkpoint(self, state_dict)
             validate_position_checkpoint(self, state_dict)
@@ -743,6 +763,7 @@ class GraphTransformer(nn.Module):
             validate_theory_fusion_checkpoint(self, state_dict)
             validate_edge_state_checkpoint(self, state_dict)
             validate_bond_fusion_checkpoint(self, state_dict)
+            validate_node_conv_checkpoint(self, state_dict)
         except ValueError as error:
             raise RuntimeError(str(error)) from error
         saved_ion = {k for k in state_dict if k.startswith('ion12_head.')}
@@ -781,6 +802,19 @@ class GraphTransformer(nn.Module):
         node_features = self.node_encoder(
             batch_data, self.residue_chemistry if self.use_residue_chemistry else None,
             self.sequence_adapter if self.sequence_adapter_type != 'none' else None)
+        self.last_node_conv_diagnostics = {}
+        if self.node_conv_mode != 'none':
+            self.node_context_conv.enable_node_conv_diagnostics = bool(self.enable_node_conv_diagnostics)
+            node_features = self.node_context_conv(node_features, batch_data['seq_lens'])
+            if self.enable_node_conv_diagnostics:
+                self.last_node_conv_diagnostics = self.node_context_conv.last_node_conv_diagnostics
+        elif self.enable_node_conv_diagnostics:
+            from .node_context_conv import node_conv_diagnostics
+            diagnostic_lengths = batch_data['seq_lens'].to(device=node_features.device, dtype=torch.long)
+            diagnostic_valid = (torch.arange(node_features.size(1), device=node_features.device)[None, :]
+                                < diagnostic_lengths[:, None])
+            self.last_node_conv_diagnostics = node_conv_diagnostics(
+                'none', node_features, node_features, diagnostic_valid)
         if timing_enabled:
             _maybe_sync(node_features.device, True)
             node_encode_end = time.perf_counter()
@@ -1181,6 +1215,9 @@ class GraphTransformer(nn.Module):
         if self.edge_state_mode != 'static':
             raise NotImplementedError(
                 'Legacy attention replay omits recurrent edge states; use production forward hooks')
+        if self.node_conv_mode != 'none':
+            raise NotImplementedError(
+                'Legacy attention replay omits full-width node convolution; use production forward hooks')
         attention_weights = []
 
         # 节点特征编码
