@@ -2373,3 +2373,24 @@ multi−single：F1−0.064665pp（2/5改善）、accuracy−0.114786pp、AUC−
 正式launch：2026-10-23 22:23:54 +08:00（北京时间），root /mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_node_conv_replication_batch/20261023_142354，worker 1654890，空闲GPU 0/1/2/4。none→single_k5两臂各五组，共10次从头训练。H256/四状态alpha1/Brier0/原concat/late/static/nocharge/3GCN2GAT4头，训练base43、内部splitbase42，原预算/优化器/完整原谱验证/去padding保持。前序stage7完成、独立review、报告ACK屏障已核验。
 
 ops four_state_node_conv_replication_ops；launch绑定源码、两configSHA、旧发现回执、targets和smoke SHA 6dff77f44ecf13ca7e6c4c6e6ec2472f9956d3da390a418e0cccb9ef1e05bd3a。小回执已同步F:/codexout/dbond_four_state_node_conv_replication_results_20261023/，索引stage8submitted。pod源码冻结本次8ec60bc，后续回执不pull，不读取epoch进度；仅完成/失败事件触发。完成后独立核验10权重和实际RNG/模式/来源、原始CSV八指标，分别对照seed42和43同轮k5−none，出完整报告/图表/恢复记录，提醒ack后停止。无后续新实验，学习图暂缓；原成功和全部候选/权重继续保留，冻结主表不改。
+
+### 15.69 单尺度k5独立种子复验完成：主要收益复现（2026-10-24）
+
+two-arm批次four_state_node_conv_replication_batch/20261023_142354于2026-10-23 17:44:00UTC（北京时间10月24日01:44:00）完成。训练源码8ec60bca58b879cba5632379141238d44cc2074e与tag dbond-four-state-node-conv-seed43-v1-20261023保留。pod独立审计3034项检查/296项SHA绑定通过，10权重strictCPU恢复、actual training_rng_protocol、node_conv模式/schema/kernel/channels、保存config、原始CSV八指标和配对SD/胜平负、参数耗时来源一致。每权重固定内部验证前16行通过独立unfold/Linear卷积参考与hook核对残差和global/FiLM前路由；旧seed42原始结果/来源/权重SHA与已有独立审计重新绑定。数值处理及绘图均在pod，未改自动report/result/registry。
+
+| 去padding指标 | seed43同轮none | seed43 single_k5 | k5−none | 改善划分 |
+|---|---:|---:|---:|---:|
+| 肽键micro-F1 % |79.765582|80.280602|+0.515021pp|5/5|
+| 肽键accuracy % |79.827551|80.374008|+0.546457pp|5/5|
+| ROC-AUC |0.881805|0.887817|+0.006012|5/5|
+| 谱图平均P/R调和F1 % |75.394942|75.940129|+0.545187pp|4/5|
+| q-Brier ↓ |0.067318|0.063137|−0.004180|5/5|
+| q_seq |0.605264|0.647028|+0.041765|5/5|
+
+F1配对SD0.267688pp；原seed42 F1差+0.582625pp、配对SD0.231089pp，两轮均5/5改善。新旧训练seed分别通过四门槛ΔF1≥.002、F1至少4/5、ΔAUC≥0、ΔBrier≤0。六主指标均值的改善方向复现，谱图F1由旧5/5变新4/5，排序由旧3/5变新5/5。新绝对F1 80.280602%低于旧80.534456%，但无卷积对照也从79.951831%变79.765582%，应判断同轮差，不跨轮把绝对值降低视为失效或择优挑seed。
+
+P/R机制不同：本轮谱图P+1.010859pp（4/5），R+0.009179pp（2/5）；旧P−0.400048pp、R+1.967781pp。新R均值数学上略正，但幅度近零且多数划分不改善，不能称召回增益稳健复现。k5的q_seq两轮约0.648，对照波动；新排序差更大不意味着模型机制变强。完整八指标、新旧各自差值/SD/逐划分胜平负及资源见分析/看板。
+
+none1706924参数、k5 2002284参数，增加295360；训练墙钟分别约1.6512/1.6828小时，受早停/调度影响，预检显存也不能当等批量吞吐比较。两组训练随机性复验与五组重叠80/20数据划分不是十个独立样本，仍有多轮探索/同数据反复使用与容量归因边界；不作显著性或全局最优宣称，不自动换主模型、选seed或混权重。
+
+保留原成功4da48ee、发现fba57b5及其k5候选tag和本轮8ec60bc全部权重/配置SHA。新独立heartbeat_review.json、analysis.md、node_conv_replication_review_dashboard.html、HTML/SVG/PNG均值/新旧逐划分配对波动/诊断/结构图及candidate_recovery.json存four_state_node_conv_replication_ops并同步F:/codexout/dbond_four_state_node_conv_replication_results_20261023/。当前k5为得到两组训练种子支持的候选，源码tag须搭配正确mode配置与fold权重恢复。准确终态已ACK，stage8reviewed，auto_advance=false/allowlist空；授权队列结束，学习图仍暂缓，冻结论文主表不改。

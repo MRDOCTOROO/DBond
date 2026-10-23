@@ -3,7 +3,7 @@
   "authorization_date_local": "2026-10-21",
   "thread_id": "01a1547f-f644-7d70-816a-1b3fe2ad8e80",
   "protocol": "experiments/structural_queue_v1.md",
-  "execution_policy": "only_authorized_stage8_none_vs_single_k5_seed43_replication; original_internal_split42; terminal_events_only; learned_graph_deferred",
+  "execution_policy": "authorized_stages1_2_5_3_6_7_8_completed_reviewed_acked; no_new_training_without_explicit_authorization; learned_graph_deferred",
   "compute_location": "gsj-5090.devpod:/mnt/pvc/graphtrans/DBond",
   "reference_commit": "4da48eeab50decd0a31fbf64f2f179478a6624a7",
   "structural_baseline": {
@@ -267,8 +267,8 @@
     {
       "id": 8,
       "name": "node_conv_seed_replication",
-      "status": "submitted",
-      "implementation_status": "implemented_independently_static_reviewed_pod_smoke_passed_and_launched",
+      "status": "reviewed",
+      "implementation_status": "completed_independently_reviewed_reported_and_acked",
       "requires_reviewed_stage": 7,
       "authorized_at_local": "2026-10-23",
       "protocol": "experiments/node_conv_seed_replication_v1.md",
@@ -294,7 +294,7 @@
       "report": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops/report.md",
       "review_receipt": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops/heartbeat_review.json",
       "local_receipts": "F:/codexout/dbond_four_state_node_conv_replication_results_20261023/",
-      "resume_condition": "Launched once after source-bound pod smoke passed. Do not repeat smoke/launch. Source frozen; terminal events only. Independently review/report/ack then stop; learned graph remains deferred.",
+      "resume_condition": "Completed, independently reviewed and exact terminal event acknowledged. Authorized queue finished. No new training, preflight or model promotion without explicit authorization.",
       "completion_action": "Independently verify/report new seed43 and old seed42 paired differences separately, preserve all recovery records, notify/ack, reviewed, auto_advance=false and empty allowlist; stop.",
       "gpus": [
         0,
@@ -312,12 +312,17 @@
         "single_k5": "5804b2ef8aae090050b56e23e68ff30ad6da6b648b5b92440f6b4f30aeef0ea5"
       },
       "preflight_sha256": "6dff77f44ecf13ca7e6c4c6e6ec2472f9956d3da390a418e0cccb9ef1e05bd3a",
-      "dashboard": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops/node_conv_replication_dashboard.html"
+      "dashboard": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops/node_conv_replication_review_dashboard.html",
+      "event_acknowledged": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_node_conv_replication_batch/20261023_142354|completed",
+      "analysis_report": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops/analysis.md",
+      "candidate_recovery": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops/candidate_recovery.json",
+      "outcome": "Seed43 reproduces k5 gains: F1 +0.515021pp (5/5), accuracy +0.546457pp (5/5), AUC +0.006012 (5/5), spectrum harmonicF1 +0.545187pp (4/5), Brier -0.004180 (5/5), q_seq +0.041765 (5/5). All four gates pass in seed42 and seed43 separately. P/R tradeoff differs: P +1.010859pp (4/5), R +0.009179pp (2/5), no robust recall-gain replication. Keep k5 as two-training-seed-supported candidate; no global-optimum/significance claim, no automatic promotion or new experiment.",
+      "reviewed_at_local": "2026-10-24"
     }
   ],
   "auto_advance": false,
   "scheduling_update": {
-    "date_local": "2026-10-23",
+    "date_local": "2026-10-24",
     "reason": "User explicitly authorized an independent training seed replication for single k5 versus original no-convolution256four-statealpha1, keeping exact original splits and padding-free metrics.",
     "current_fusion_action": "Completed, independently reviewed, reported and acked; no automatic follow-up.",
     "requested_combination": {
@@ -330,10 +335,8 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "None. Stage8 submitted; wait only for terminal, independently review/report/ack then stop.",
-    "serial_stage_ids": [
-      8
-    ]
+    "next_new_experiment": "None authorized. Stage8 independently reviewed/reported/acked; stop automatic continuation. Learned graph deferred.",
+    "serial_stage_ids": []
   },
   "auto_advance_allowlist": []
 }
