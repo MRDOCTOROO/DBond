@@ -2365,3 +2365,11 @@ multi−single：F1−0.064665pp（2/5改善）、accuracy−0.114786pp、AUC−
 新增协议experiments/node_conv_seed_replication_v1.md、pre_synthesis_four_state_node_conv_seed43_{none,single_k5}.yaml、新ops和pod-only预检脚本；两配置独立静态审阅确认仅训练seed及输出/缓存身份变化，split42保持。脚本静态交叉审阅完成，此处不宣称已做数值预检或提交训练。stage8仅一项allowlist，前序stage7独立审计/报告/准确ack屏障；新ops four_state_node_conv_replication_ops，batch four_state_node_conv_replication_batch，独立source/config/targets/历史回执绑定及防重复提交。仅pod有空闲GPU、smoke全通过后launch，训练后源码冻结，不查看epoch进度。
 
 完成后全报八指标/均值SD/k5-none配对差SD与胜平负、参数/耗时/显存、10权重strictCPU恢复及实际种子/卷积marker/保存config，独立卷积分支路由诊断。旧seed42与新seed43分别报告，检查F1/AUC/Brier/谱图F1/排序方向和划分一致性能否复现，不合并成10个独立样本，不按外测选择epoch/阈值/seed；四门槛保持ΔF1≥.002、F1≥4/5、ΔAUC≥0、ΔBrier≤0。报告提醒/ack后停止接续。原4da48ee、fba57b5及所有候选和冻结主表保留，学习图仍暂缓。
+
+### 15.68 单尺度k5独立种子复验已通过pod预检并提交（2026-10-23）
+
+源码8ec60bca58b879cba5632379141238d44cc2074e已同步同一origin并pod fast-forward pull；永久tag dbond-four-state-node-conv-seed43-v1-20261023。本机HTTPS故障沿用保持提交身份的Git bundle经授权pod同步，未修改生产模型/训练器/旧ops。单次pod-only smoke17项conv_checks全部通过：历史生产源码与fba57b5 gitblob一致、两配置仅训练seed/输出身份变、五组旧train/val/sourceSHA保持，新43初始化变化且同43可复现、实际split42、四态CE/unionq、梯度/padding/短链/路由/最大真实batch/strictload及实际种子保存器回环均通过。旧fixture兼容仍用42，新训练前向显式用实际fold43；预检未执行epoch或外测指标。
+
+正式launch：2026-10-23 22:23:54 +08:00（北京时间），root /mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_node_conv_replication_batch/20261023_142354，worker 1654890，空闲GPU 0/1/2/4。none→single_k5两臂各五组，共10次从头训练。H256/四状态alpha1/Brier0/原concat/late/static/nocharge/3GCN2GAT4头，训练base43、内部splitbase42，原预算/优化器/完整原谱验证/去padding保持。前序stage7完成、独立review、报告ACK屏障已核验。
+
+ops four_state_node_conv_replication_ops；launch绑定源码、两configSHA、旧发现回执、targets和smoke SHA 6dff77f44ecf13ca7e6c4c6e6ec2472f9956d3da390a418e0cccb9ef1e05bd3a。小回执已同步F:/codexout/dbond_four_state_node_conv_replication_results_20261023/，索引stage8submitted。pod源码冻结本次8ec60bc，后续回执不pull，不读取epoch进度；仅完成/失败事件触发。完成后独立核验10权重和实际RNG/模式/来源、原始CSV八指标，分别对照seed42和43同轮k5−none，出完整报告/图表/恢复记录，提醒ack后停止。无后续新实验，学习图暂缓；原成功和全部候选/权重继续保留，冻结主表不改。

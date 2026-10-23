@@ -267,15 +267,15 @@
     {
       "id": 8,
       "name": "node_conv_seed_replication",
-      "status": "ready_local_unverified",
-      "implementation_status": "implemented_independently_static_reviewed_not_pod_tested_or_launched",
+      "status": "submitted",
+      "implementation_status": "implemented_independently_static_reviewed_pod_smoke_passed_and_launched",
       "requires_reviewed_stage": 7,
       "authorized_at_local": "2026-10-23",
       "protocol": "experiments/node_conv_seed_replication_v1.md",
       "ops": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops",
       "batch_prefix": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_node_conv_replication_batch",
-      "root": null,
-      "gitrev": null,
+      "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_node_conv_replication_batch/20261023_142354",
+      "gitrev": "8ec60bca58b879cba5632379141238d44cc2074e",
       "source_tag": "dbond-four-state-node-conv-seed43-v1-20261023",
       "arms": [
         "none",
@@ -294,11 +294,28 @@
       "report": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops/report.md",
       "review_receipt": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops/heartbeat_review.json",
       "local_receipts": "F:/codexout/dbond_four_state_node_conv_replication_results_20261023/",
-      "resume_condition": "Explicitly authorized seed43 none-vs-single_k5 replication after stage7 reviewed/ack. Deploy only statically reviewed code, pod source-bound smoke once then launch once. No new architecture or data split.",
-      "completion_action": "Independently verify/report new seed43 and old seed42 paired differences separately, preserve all recovery records, notify/ack, reviewed, auto_advance=false and empty allowlist; stop."
+      "resume_condition": "Launched once after source-bound pod smoke passed. Do not repeat smoke/launch. Source frozen; terminal events only. Independently review/report/ack then stop; learned graph remains deferred.",
+      "completion_action": "Independently verify/report new seed43 and old seed42 paired differences separately, preserve all recovery records, notify/ack, reviewed, auto_advance=false and empty allowlist; stop.",
+      "gpus": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "worker_pid": 1654890,
+      "preflight_receipt": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops/smoke.json",
+      "launch_receipt": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops/launch.json",
+      "submitted_at_utc": "2026-10-23T14:23:54.4831330+00:00",
+      "checkpoint_registry": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops/checkpoint_registry.json",
+      "config_sha256": {
+        "none": "ab1daa23fb5fab5ce89c995c52505ce3a53882a22d5c3d8e4cd72afd6377c57d",
+        "single_k5": "5804b2ef8aae090050b56e23e68ff30ad6da6b648b5b92440f6b4f30aeef0ea5"
+      },
+      "preflight_sha256": "6dff77f44ecf13ca7e6c4c6e6ec2472f9956d3da390a418e0cccb9ef1e05bd3a",
+      "dashboard": "/mnt/pvc/graphtrans/four_state_node_conv_replication_ops/node_conv_replication_dashboard.html"
     }
   ],
-  "auto_advance": true,
+  "auto_advance": false,
   "scheduling_update": {
     "date_local": "2026-10-23",
     "reason": "User explicitly authorized an independent training seed replication for single k5 versus original no-convolution256four-statealpha1, keeping exact original splits and padding-free metrics.",
@@ -313,12 +330,10 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "Only stage8; after report/ack stop, no other experiment authorized.",
+    "next_new_experiment": "None. Stage8 submitted; wait only for terminal, independently review/report/ack then stop.",
     "serial_stage_ids": [
       8
     ]
   },
-  "auto_advance_allowlist": [
-    8
-  ]
+  "auto_advance_allowlist": []
 }
