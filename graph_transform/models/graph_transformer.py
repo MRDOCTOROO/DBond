@@ -24,6 +24,37 @@ def _maybe_sync(device: torch.device, enabled: bool) -> None:
         torch.cuda.synchronize(device)
 
 
+def _pool_virtual_groups(residue_features: torch.Tensor,
+                         seq_lens: torch.Tensor,
+                         group_size: int):
+    """Mean-pool contiguous, nonoverlapping true residues into virtual nodes.
+
+    The input is the complete NodeEncoder (+ optional k=5 Conv1D) output,
+    before global packing or FiLM. Padding is cleared with masked_fill so a
+    poisoned padded value cannot leak into a real group's mean.
+    """
+    batch_size, max_seq_len, hidden_dim = residue_features.shape
+    group_counts = torch.div(seq_lens + group_size - 1, group_size, rounding_mode='floor')
+    max_groups = (max_seq_len + group_size - 1) // group_size
+    if max_groups == 0:
+        return residue_features.new_zeros((batch_size, 0, hidden_dim)), group_counts
+
+    positions = torch.arange(max_seq_len, device=residue_features.device)
+    clean = residue_features.masked_fill(
+        (positions[None, :] >= seq_lens[:, None]).unsqueeze(-1), 0.)
+    padded_length = max_groups * group_size
+    if padded_length > max_seq_len:
+        clean = F.pad(clean, (0, 0, 0, padded_length - max_seq_len))
+    accumulation_dtype = (torch.float32 if clean.dtype in (torch.float16, torch.bfloat16)
+                          else clean.dtype)
+    sums = clean.reshape(batch_size, max_groups, group_size, hidden_dim).sum(
+        dim=2, dtype=accumulation_dtype)
+    starts = torch.arange(max_groups, device=residue_features.device) * group_size
+    valid_counts = (seq_lens[:, None] - starts[None, :]).clamp(min=0, max=group_size)
+    means = sums / valid_counts.clamp_min(1).unsqueeze(-1)
+    return means.to(dtype=residue_features.dtype), group_counts
+
+
 class NodeEncoder(nn.Module):
     """节点编码器：将氨基酸残基编码为特征向量"""
     
@@ -474,6 +505,13 @@ class GraphTransformer(nn.Module):
         self.edge_encoder = EdgeEncoder(config)
 
         self.use_global_node = getattr(config, 'use_global_node', False)
+        from .utils import validate_virtual_node_mode, validate_virtual_group_size
+        self.virtual_node_mode = validate_virtual_node_mode(
+            getattr(config, 'virtual_node_mode', 'single'))
+        self.virtual_group_size = validate_virtual_group_size(
+            getattr(config, 'virtual_group_size', 5))
+        if self.virtual_node_mode != 'single' and not self.use_global_node:
+            raise ValueError('Grouped virtual nodes require use_global_node=True')
         self.use_theory_features = getattr(config, 'use_theory_features', False)
         from .theory_fusion import validate_theory_fusion_stage, theory_fusion_mode_code
         self.theory_fusion_stage = validate_theory_fusion_stage(
@@ -743,6 +781,17 @@ class GraphTransformer(nn.Module):
             self.register_buffer('node_conv_branch_channels', torch.tensor(channels, dtype=torch.int64))
         self.enable_node_conv_diagnostics = False
         self.last_node_conv_diagnostics = {}
+
+        if self.virtual_node_mode != 'single':
+            # The old single-global route gains no state-dict keys. Grouped
+            # routes have no new learned weights, but require semantic markers
+            # because their topology cannot be inferred from tensor shapes.
+            from .utils import virtual_node_mode_code
+            self.register_buffer('virtual_node_mode_code', torch.tensor(
+                virtual_node_mode_code(self.virtual_node_mode), dtype=torch.int64))
+            self.register_buffer('virtual_node_schema_code', torch.tensor(1, dtype=torch.int64))
+            self.register_buffer('virtual_node_group_size_code', torch.tensor(
+                self.virtual_group_size, dtype=torch.int64))
     
     def load_state_dict(self, state_dict, strict=True, assign=False):
         # Validate before PyTorch starts copying any shared tensors. This also
@@ -755,6 +804,7 @@ class GraphTransformer(nn.Module):
         from .dynamic_edges import validate_edge_state_checkpoint
         from .bond_fusion_heads import validate_bond_fusion_checkpoint
         from .node_context_conv import validate_node_conv_checkpoint
+        from .utils import validate_virtual_node_checkpoint
         try:
             validate_attention_checkpoint(self, state_dict)
             validate_position_checkpoint(self, state_dict)
@@ -764,6 +814,7 @@ class GraphTransformer(nn.Module):
             validate_edge_state_checkpoint(self, state_dict)
             validate_bond_fusion_checkpoint(self, state_dict)
             validate_node_conv_checkpoint(self, state_dict)
+            validate_virtual_node_checkpoint(self, state_dict)
         except ValueError as error:
             raise RuntimeError(str(error)) from error
         saved_ion = {k for k in state_dict if k.startswith('ion12_head.')}
@@ -847,11 +898,21 @@ class GraphTransformer(nn.Module):
         
         # 根据真实序列长度裁剪节点特征
         seq_lens_tensor = batch_data['seq_lens'].to(device=node_features.device, dtype=torch.long)
+        group_counts = None
+        if self.virtual_node_mode != 'single':
+            group_counts = torch.div(
+                seq_lens_tensor + self.virtual_group_size - 1,
+                self.virtual_group_size, rounding_mode='floor')
+            expected_node_lens = seq_lens_tensor + group_counts + 1
         node_lens_tensor = batch_data.get('node_lens')
         if node_lens_tensor is not None:
             node_lens_tensor = node_lens_tensor.to(device=node_features.device, dtype=torch.long)
+            if self.virtual_node_mode != 'single' and not torch.equal(
+                    node_lens_tensor, expected_node_lens):
+                raise ValueError('Grouped virtual-node lengths disagree with graph construction')
         else:
-            node_lens_tensor = seq_lens_tensor + (1 if self.use_global_node else 0)
+            node_lens_tensor = (expected_node_lens if self.virtual_node_mode != 'single'
+                                else seq_lens_tensor + (1 if self.use_global_node else 0))
         batch_size = int(seq_lens_tensor.numel())
         hidden_dim = node_features.size(-1)
         max_seq_len = node_features.size(1)
@@ -869,7 +930,26 @@ class GraphTransformer(nn.Module):
             packed_nodes = node_features.new_zeros((batch_size, max_node_len, hidden_dim))
             if max_seq_len > 0:
                 packed_nodes[:, :max_seq_len] = node_features[:, :max_seq_len]
-            global_positions = seq_lens_tensor.view(-1, 1, 1).expand(-1, 1, hidden_dim)
+            if self.virtual_node_mode != 'single':
+                group_nodes, pooled_group_counts = _pool_virtual_groups(
+                    node_features, seq_lens_tensor, self.virtual_group_size)
+                max_groups = group_nodes.size(1)
+                if max_node_len < max_seq_len + max_groups + 1:
+                    raise ValueError('Grouped virtual-node packing exceeds max_node_len')
+                if max_groups:
+                    group_ids = torch.arange(max_groups, device=node_features.device)
+                    valid_groups = group_ids[None, :] < pooled_group_counts[:, None]
+                    group_positions = seq_lens_tensor[:, None] + group_ids[None, :]
+                    batch_indices = torch.arange(batch_size, device=node_features.device)[:, None]
+                    batch_indices = batch_indices.expand(-1, max_groups)
+                    packed_nodes[batch_indices[valid_groups], group_positions[valid_groups]] = (
+                        group_nodes[valid_groups].to(dtype=packed_nodes.dtype))
+                # The top/global node is last in every peptide, keeping the
+                # auxiliary peptide head's node_lens-1 convention intact.
+                global_indices = seq_lens_tensor + pooled_group_counts
+            else:
+                global_indices = seq_lens_tensor
+            global_positions = global_indices.view(-1, 1, 1).expand(-1, 1, hidden_dim)
             # Under autocast the residual global embedding can promote the
             # global node to FP32 while encoded residues stay FP16/BF16.
             packed_nodes.scatter_(1, global_positions, global_nodes.to(packed_nodes.dtype).unsqueeze(1))

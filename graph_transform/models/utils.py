@@ -14,6 +14,71 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+_VIRTUAL_NODE_MODE_CODES = {'grouped_skip': 1, 'grouped_strict': 2}
+_VIRTUAL_NODE_MARKERS = (
+    'virtual_node_mode_code',
+    'virtual_node_schema_code',
+    'virtual_node_group_size_code',
+)
+
+
+def validate_virtual_node_mode(value: str) -> str:
+    """The original single-global route remains the implicit default."""
+    if value not in ('single', 'grouped_skip', 'grouped_strict'):
+        raise ValueError(f'Unknown virtual_node_mode: {value!r}')
+    return value
+
+
+def validate_virtual_group_size(value: int) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ValueError(f'virtual_group_size must be a positive integer, got {value!r}')
+    return value
+
+
+def virtual_node_mode_code(mode: str) -> Optional[int]:
+    return _VIRTUAL_NODE_MODE_CODES.get(validate_virtual_node_mode(mode))
+
+
+def validate_virtual_node_checkpoint(model, state_dict, checkpoint_config=None) -> None:
+    """Reject a different virtual-node topology before copying shared tensors.
+
+    Grouped modes add only semantic markers, not trainable parameters. A single
+    global node has no markers, keeping historical checkpoints byte-compatible.
+    """
+    requested = validate_virtual_node_mode(model.virtual_node_mode)
+    expected_keys = set(_VIRTUAL_NODE_MARKERS) if requested != 'single' else set()
+    actual_keys = {key for key in state_dict if key.startswith('virtual_node_')}
+    if actual_keys != expected_keys:
+        raise ValueError(
+            f'Checkpoint virtual-node marker keys mismatch: '
+            f'missing={sorted(expected_keys - actual_keys)}, '
+            f'unexpected={sorted(actual_keys - expected_keys)}')
+    if expected_keys:
+        expected_state = model.state_dict()
+        for key in _VIRTUAL_NODE_MARKERS:
+            actual = state_dict[key]
+            expected = expected_state[key]
+            if (not torch.is_tensor(actual) or actual.dtype != torch.int64
+                    or actual.shape != torch.Size([])
+                    or not torch.equal(actual.detach().cpu(), expected.detach().cpu())):
+                raise ValueError(f'Checkpoint virtual-node semantics mismatch: {key}')
+
+    if checkpoint_config is not None:
+        if not isinstance(checkpoint_config, dict):
+            raise ValueError('Checkpoint config must be a dictionary')
+        declared = checkpoint_config.get('model', checkpoint_config)
+        if not isinstance(declared, dict):
+            raise ValueError('Checkpoint model config must be a dictionary')
+        saved_mode = validate_virtual_node_mode(declared.get('virtual_node_mode', 'single'))
+        if saved_mode != requested:
+            raise ValueError('Checkpoint virtual_node_mode config/state mismatch')
+        if requested != 'single':
+            saved_group_size = validate_virtual_group_size(
+                declared.get('virtual_group_size', 5))
+            if saved_group_size != model.virtual_group_size:
+                raise ValueError('Checkpoint virtual_group_size config/state mismatch')
+
+
 class ModelConfig:
     """模型配置类"""
     
@@ -74,6 +139,10 @@ class ModelConfig:
         # Optional full-width residue Conv1D before global packing and FiLM;
         # none preserves the legacy model state and initialization RNG.
         self.node_conv_mode = 'none'
+        # Grouped virtual nodes are an opt-in graph topology. The single route
+        # preserves one original global node and its checkpoint schema.
+        self.virtual_node_mode = 'single'
+        self.virtual_group_size = 5
         self.bond_condition_mode = 'none'
         self.bond_condition_dim = 32
         self.bond_head_type = 'concat_mlp'
@@ -145,6 +214,8 @@ class ModelConfig:
         validate_bond_fusion_mode(self.bond_fusion_mode)
         from .node_context_conv import validate_node_conv_mode
         validate_node_conv_mode(self.node_conv_mode)
+        validate_virtual_node_mode(self.virtual_node_mode)
+        validate_virtual_group_size(self.virtual_group_size)
     
     def update_config(self, config_dict: Dict):
         """更新配置参数"""
@@ -481,6 +552,9 @@ class CheckpointManager:
         if hasattr(model, 'node_conv_mode'):
             from .node_context_conv import validate_node_conv_checkpoint
             validate_node_conv_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
+
+        if hasattr(model, 'virtual_node_mode'):
+            validate_virtual_node_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
 
         # New experimental branches must never be silently dropped/left random
         # by strict=False. Legacy checkpoints have neither prefix and remain

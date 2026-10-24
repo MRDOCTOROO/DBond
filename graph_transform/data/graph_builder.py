@@ -46,6 +46,17 @@ class GraphBuilder:
         self.long_range_stride = max(1, int(_get_config_value(config, 'long_range_stride', 10)))
         self.long_range_hops = max(1, int(_get_config_value(config, 'long_range_hops', 1)))
         self.use_global_node = _get_config_value(config, 'use_global_node', False)
+        self.virtual_node_mode = _get_config_value(config, 'virtual_node_mode', 'single')
+        if self.virtual_node_mode not in ('single', 'grouped_skip', 'grouped_strict'):
+            raise ValueError(f"Unknown virtual_node_mode: {self.virtual_node_mode!r}")
+        group_size = _get_config_value(config, 'virtual_group_size', 5)
+        if isinstance(group_size, bool) or not isinstance(group_size, int) or group_size < 1:
+            raise ValueError('virtual_group_size must be a positive integer')
+        self.virtual_group_size = group_size
+        if self.virtual_node_mode != 'single' and not self.use_global_node:
+            raise ValueError('Grouped virtual nodes require use_global_node=True')
+        if self.virtual_node_mode != 'single' and len(self.edge_types) <= 4:
+            raise ValueError('Grouped virtual nodes require edge type 4 (global)')
         self.env_feature_name = _get_config_value(config, 'env_feature_name', 'rt')
         self.env_feature_scale = float(_get_config_value(config, 'env_feature_scale', 0.01))
         # 状态/环境特征消融开关：与 NodeEncoder / global_node_proj 保持一致，
@@ -62,6 +73,28 @@ class GraphBuilder:
         self.env_feature_mask = [bool(m) for m in _env_mask]
         self._distance_min_scale = 0.8
         self._edge_cache = {}
+
+    def node_count(self, seq_len: int) -> int:
+        """Number of packed nodes for a sequence, including virtual nodes."""
+        if not self.use_global_node:
+            return seq_len
+        if self.virtual_node_mode == 'single':
+            return seq_len + 1
+        group_count = (seq_len + self.virtual_group_size - 1) // self.virtual_group_size
+        return seq_len + group_count + 1
+
+    def _edge_cache_key(self, seq_len: int, strategy: str) -> Tuple:
+        return (
+            strategy,
+            seq_len,
+            self.max_distance,
+            self.use_long_range_edges,
+            self.long_range_stride,
+            self.long_range_hops,
+            self.use_global_node,
+            self.virtual_node_mode,
+            self.virtual_group_size,
+        )
 
     def _normalize_secondary_env_feature(self, value: float) -> float:
         """对第二环境变量做与节点编码器一致的归一化。"""
@@ -136,15 +169,7 @@ class GraphBuilder:
         }
 
     def _get_or_build_edges(self, seq_len: int, strategy: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        key = (
-            strategy,
-            seq_len,
-            self.max_distance,
-            self.use_long_range_edges,
-            self.long_range_stride,
-            self.long_range_hops,
-            self.use_global_node,
-        )
+        key = self._edge_cache_key(seq_len, strategy)
         cached = self._edge_cache.get(key)
         if cached is not None:
             return cached
@@ -245,7 +270,10 @@ class GraphBuilder:
             if self.use_long_range_edges:
                 self._add_long_range_edges(edge_indices, edge_types, edge_distances, seq_len)
             if self.use_global_node:
-                self._add_global_edges(edge_indices, edge_types, edge_distances, seq_len)
+                if self.virtual_node_mode == 'single':
+                    self._add_global_edges(edge_indices, edge_types, edge_distances, seq_len)
+                else:
+                    self._add_grouped_virtual_edges(edge_indices, edge_types, edge_distances, seq_len)
 
         if edge_indices:
             edge_map = {}
@@ -319,6 +347,33 @@ class GraphBuilder:
             edge_indices.append([i, global_idx])
             edge_indices.append([global_idx, i])
             edge_types.extend([global_type, global_type])
+            edge_distances.extend([0, 0])
+
+    def _add_grouped_virtual_edges(self,
+                                   edge_indices: List[List[int]],
+                                   edge_types: List[int],
+                                   edge_distances: List[int],
+                                   seq_len: int) -> None:
+        """Connect consecutive residue groups to one peptide-level top node.
+
+        Packed order is residues, groups, top. All new edges reuse the legacy
+        global type (4) and distance (0), preserving the EdgeEncoder schema.
+        """
+        group_count = (seq_len + self.virtual_group_size - 1) // self.virtual_group_size
+        top_idx = seq_len + group_count
+        for residue_idx in range(seq_len):
+            group_idx = seq_len + residue_idx // self.virtual_group_size
+            edge_indices.extend([[residue_idx, group_idx], [group_idx, residue_idx]])
+            edge_types.extend([4, 4])
+            edge_distances.extend([0, 0])
+            if self.virtual_node_mode == 'grouped_skip':
+                edge_indices.extend([[residue_idx, top_idx], [top_idx, residue_idx]])
+                edge_types.extend([4, 4])
+                edge_distances.extend([0, 0])
+        for group_offset in range(group_count):
+            group_idx = seq_len + group_offset
+            edge_indices.extend([[group_idx, top_idx], [top_idx, group_idx]])
+            edge_types.extend([4, 4])
             edge_distances.extend([0, 0])
     
     def _predict_distance_matrix(self, seq_len: int) -> np.ndarray:

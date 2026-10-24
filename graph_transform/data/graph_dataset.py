@@ -212,7 +212,7 @@ class GraphDataset(Dataset):
             'state_vars': torch.tensor(state_vars, dtype=torch.float32),
             'env_vars': torch.tensor(env_vars, dtype=torch.float32),
             'seq_len': len(sequence),
-            'node_len': len(sequence) + (1 if _get_config_value(self.config, 'use_global_node', False) else 0)
+            'node_len': self.graph_builder.node_count(len(sequence))
         }
         if 'scan_num' in sample_features:
             sample['scan_num'] = sample_features['scan_num']
@@ -608,6 +608,8 @@ class CachedGraphDataset(GraphDataset):
         self.long_range_stride = _get_config_value(self.config, 'long_range_stride', 10)
         self.long_range_hops = _get_config_value(self.config, 'long_range_hops', 1)
         self.use_global_node = _get_config_value(self.config, 'use_global_node', False)
+        self.virtual_node_mode = self.graph_builder.virtual_node_mode
+        self.virtual_group_size = self.graph_builder.virtual_group_size
         
         # 创建缓存目录
         os.makedirs(self.cache_dir, exist_ok=True)
@@ -639,7 +641,7 @@ class CachedGraphDataset(GraphDataset):
 
     def _edge_cache_meta(self) -> Dict[str, Any]:
         return {
-            "version": 2,
+            "version": 3,
             "graph_strategy": self.graph_strategy,
             "max_seq_len": self.max_seq_len,
             "max_distance": _get_config_value(self.config, "max_distance", 0),
@@ -648,6 +650,8 @@ class CachedGraphDataset(GraphDataset):
             "long_range_stride": self.long_range_stride,
             "long_range_hops": self.long_range_hops,
             "use_global_node": self.use_global_node,
+            "virtual_node_mode": self.virtual_node_mode,
+            "virtual_group_size": self.virtual_group_size,
         }
 
     def _cache_suffix(self) -> str:
@@ -659,10 +663,10 @@ class CachedGraphDataset(GraphDataset):
             parts.append(f"lr{self.long_range_stride}x{self.long_range_hops}")
         if self.use_global_node:
             parts.append("g1")
+        parts.append(f"vn{self.virtual_node_mode}_g{self.virtual_group_size}")
         return "_".join(parts)
 
     def _populate_edge_cache(self, edge_cache: Dict[Any, Any]):
-        max_distance = _get_config_value(self.config, "max_distance", 0)
         for seq_len, edge_data in edge_cache.items():
             if isinstance(seq_len, str):
                 seq_len = int(seq_len)
@@ -679,15 +683,7 @@ class CachedGraphDataset(GraphDataset):
                     bond_edge_map = None
             if bond_edge_map is None:
                 bond_edge_map = self.graph_builder._build_bond_edge_map(edge_index, seq_len)
-            key = (
-                self.graph_strategy,
-                seq_len,
-                max_distance,
-                self.use_long_range_edges,
-                self.long_range_stride,
-                self.long_range_hops,
-                self.use_global_node,
-            )
+            key = self.graph_builder._edge_cache_key(seq_len, self.graph_strategy)
             self.graph_builder._edge_cache[key] = (edge_index, edge_types, edge_distances, bond_edge_map)
 
     def _load_or_build_edge_cache(self):
@@ -743,7 +739,7 @@ class CachedGraphDataset(GraphDataset):
     def _load_or_build_cache(self):
         """加载或构建缓存"""
         meta = {
-            "version": 5,
+            "version": 6,
             "csv_path": self.csv_path,
             # P0-4: 缓存内容含 edge_attr/state/env（依赖 feature mask），元数据必须
             # 记录 mask 与 CSV 内容指纹，否则换数据/换 mask 会静默复用旧缓存，
@@ -757,6 +753,8 @@ class CachedGraphDataset(GraphDataset):
             "long_range_stride": self.long_range_stride,
             "long_range_hops": self.long_range_hops,
             "use_global_node": self.use_global_node,
+            "virtual_node_mode": self.virtual_node_mode,
+            "virtual_group_size": self.virtual_group_size,
             "env_feature_name": self.env_feature_name,
             "env_feature_scale": _get_config_value(self.config, 'env_feature_scale', 0.01),
             "state_feature_mask": list(getattr(self.config, 'state_feature_mask', [True, True, True])),
@@ -883,7 +881,7 @@ class CachedGraphDataset(GraphDataset):
             ),
             'env_vars': torch.tensor([sample_features['nce'], secondary_env_value], dtype=torch.float32),
             'seq_len': len(sequence),
-            'node_len': len(sequence) + (1 if _get_config_value(self.config, 'use_global_node', False) else 0)
+            'node_len': self.graph_builder.node_count(len(sequence))
         }
         if 'scan_num' in sample_features:
             sample['scan_num'] = sample_features['scan_num']
