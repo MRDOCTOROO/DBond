@@ -371,16 +371,16 @@
     {
       "id": 10,
       "name": "parallel_global_bond_cross_k5",
-      "status": "preparing",
+      "status": "submitted",
       "authorized_at_local": "2026-10-25",
       "requires_reviewed_stage": 8,
       "requires_terminal_stage": 9,
       "protocol": "experiments/parallel_global_cross_v1.md",
       "ops": "/mnt/pvc/graphtrans/four_state_parallel_global_ops",
       "batch_prefix": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_parallel_global_batch",
-      "root": null,
-      "gitrev": null,
-      "source_tag": null,
+      "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_parallel_global_batch/20261024_171434",
+      "gitrev": "ce0185c1c313a9f36410cd33701699fe8df53579",
+      "source_tag": "dbond-four-state-parallel-global-v1-20261025",
       "arms": ["single", "parallel4", "parallel4_cross"],
       "hidden_dim": 256,
       "bond_head_type": "four_state_mlp",
@@ -391,6 +391,19 @@
       "training_base_seed": 45,
       "internal_split_base_seed": 42,
       "total_training_runs": 15,
+      "submitted_at_utc": "2026-10-24T17:14:34.235562+00:00",
+      "worker_pid": 1795571,
+      "gpus": [0, 1, 2, 4],
+      "launch_receipt": "/mnt/pvc/graphtrans/four_state_parallel_global_ops/launch.json",
+      "preflight_receipt": "/mnt/pvc/graphtrans/four_state_parallel_global_ops/smoke.json",
+      "preflight_sha256": "c84470ab83e15ac45fff4b48e57ec1fc906b3a095d6e99fe37f8f4ec7a46f6e1",
+      "config_sha256": {
+        "single": "e964751b8b7153dd29557cccb2598b2f6560e6f5e52cf0e509692be65d9146af",
+        "parallel4": "7a26ed26291857b6b7fa22b57f0215728e86ea9137996f90e02e3cd3b04cf75f",
+        "parallel4_cross": "093554b8beb00c6280c52ff8b174a8a7209852d2df82c6c1647c8a07b5060fbd"
+      },
+      "checkpoint_registry": "/mnt/pvc/graphtrans/four_state_parallel_global_ops/checkpoint_registry.json",
+      "dashboard": "/mnt/pvc/graphtrans/four_state_parallel_global_ops/parallel_global_dashboard.html",
       "baseline_source_stage": 8,
       "predecessor_terminal_stage": 9,
       "report": null,
@@ -414,8 +427,8 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "Stage10 parallel global slots: single, parallel4, parallel4_cross. Stage9 failure acknowledged; stage10 uses stage8 validated k5 base and does not reuse stage9 metrics as baseline. Learned graph and chemical priors remain deferred.",
-    "serial_stage_ids": [10]
+    "next_new_experiment": "Stage10 single/parallel4/parallel4_cross was preflighted and submitted as one serial batch; only await its completion event and independently review, report, ack. No additional experiment authorized. Learned graph and chemical priors remain deferred.",
+    "serial_stage_ids": []
   },
   "auto_advance_allowlist": []
 }
