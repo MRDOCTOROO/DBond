@@ -342,7 +342,8 @@ def prior_prediction_reconstruction():
                 ('f1', 'accuracy', 'auc', 'ex_precision', 'ex_recall', 'q_brier')}
     expected['q_seq'] = float(row['q_spearman_pep_seq'])
     expected['max_seq_len'] = runtime['data']['max_seq_len']
-    return ops.recompute_prediction_metrics(Path(row['pred_csv_path']),
+    pred_path = ops.prediction_path_for_fold(fold_folder, Path(row['metric_csv_path']))
+    return ops.recompute_prediction_metrics(pred_path,
         Path(runtime['data']['test_csv_path']), checkpoints[0], expected)
 
 

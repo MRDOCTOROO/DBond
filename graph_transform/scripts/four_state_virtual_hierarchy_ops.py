@@ -290,6 +290,22 @@ def elapsed_seconds(started, finished):
     return value
 
 
+def prediction_path_for_fold(fold_folder, metric_path):
+    """Resolve the unique latest prediction paired with this fold's metric CSV."""
+    folder = Path(fold_folder).resolve()
+    metric = Path(metric_path).resolve()
+    require(metric.name == 'latest_test_metric.csv', 'Unexpected fold metric filename')
+    try:
+        metric_suffix = metric.relative_to(folder / 'metrics').parent
+    except ValueError as error:
+        raise ValueError('Metric CSV is outside this fold metric directory') from error
+    expected = folder / 'preds' / metric_suffix / 'latest_test.pred.csv'
+    matches = list(folder.glob('preds/**/latest_test.pred.csv'))
+    require(len(matches) == 1 and matches[0].resolve() == expected and expected.is_file(),
+            'Missing or ambiguous fold prediction CSV corresponding to metric path')
+    return expected
+
+
 def diagnostic_batch(runtime, provenance, fold):
     """First 16 already-bound internal-validation rows, never outer-test data."""
     from data.graph_dataset import GraphDataset, GraphDataLoader
@@ -703,7 +719,7 @@ def analyze(info):
                     f'{label}/{fold}: ambiguous validation-selected checkpoint')
             checkpoint = checkpoints[0]
             checkpoint_proof = verify_checkpoint(checkpoint, runtime, label, count, provenance, fold)
-            pred_path = Path(row['pred_csv_path'])
+            pred_path = prediction_path_for_fold(folder, raw_path)
             test_path = Path(runtime['data']['test_csv_path'])
             require(pred_path.is_file() and test_path.is_file(),
                     f'{label}/{fold}: missing per-spectrum prediction or test source')
