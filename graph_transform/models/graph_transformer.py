@@ -511,7 +511,7 @@ class GraphTransformer(nn.Module):
         self.virtual_group_size = validate_virtual_group_size(
             getattr(config, 'virtual_group_size', 5))
         if self.virtual_node_mode != 'single' and not self.use_global_node:
-            raise ValueError('Grouped virtual nodes require use_global_node=True')
+            raise ValueError('Multiple virtual nodes require use_global_node=True')
         self.use_theory_features = getattr(config, 'use_theory_features', False)
         from .theory_fusion import validate_theory_fusion_stage, theory_fusion_mode_code
         self.theory_fusion_stage = validate_theory_fusion_stage(
@@ -782,6 +782,33 @@ class GraphTransformer(nn.Module):
         self.enable_node_conv_diagnostics = False
         self.last_node_conv_diagnostics = {}
 
+        # Preserve the historical first global token and give the other three
+        # parallel tokens distinct trainable offsets. Without these offsets,
+        # identical star edges and identical initial states would keep all
+        # four tokens permutation-symmetric throughout message passing.
+        self.parallel_global_mode = self.virtual_node_mode in ('parallel4', 'parallel4_cross')
+        if self.parallel_global_mode:
+            with torch.random.fork_rng(devices=[]):
+                self.parallel_global_offsets = nn.Parameter(
+                    torch.empty(3, self.hidden_dim))
+                nn.init.normal_(self.parallel_global_offsets,
+                                mean=0.0, std=self.hidden_dim ** -0.5)
+        if self.virtual_node_mode == 'parallel4_cross':
+            if self.bond_head_type != 'four_state_mlp' or self.bond_fusion_mode != 'concat':
+                raise ValueError('parallel4_cross requires the original four-state concat MLP')
+            if not all((self.bond_use_edge_repr, self.bond_use_diff_feature,
+                        self.bond_use_product_feature, self.use_theory_features)):
+                raise ValueError('parallel4_cross requires all six original bond feature slots')
+            with torch.random.fork_rng(devices=[]):
+                self.parallel_bond_query_proj = nn.Linear(2 * self.hidden_dim, self.hidden_dim)
+                self.parallel_bond_cross_attention = nn.MultiheadAttention(
+                    self.hidden_dim, num_heads=4, dropout=0.0, batch_first=True)
+                self.parallel_bond_context_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+                nn.init.zeros_(self.parallel_bond_context_proj.weight)
+                nn.init.zeros_(self.parallel_bond_context_proj.bias)
+        self.enable_parallel_global_diagnostics = False
+        self.last_parallel_global_diagnostics = {}
+
         if self.virtual_node_mode != 'single':
             # The old single-global route gains no state-dict keys. Grouped
             # routes have no new learned weights, but require semantic markers
@@ -899,7 +926,9 @@ class GraphTransformer(nn.Module):
         # 根据真实序列长度裁剪节点特征
         seq_lens_tensor = batch_data['seq_lens'].to(device=node_features.device, dtype=torch.long)
         group_counts = None
-        if self.virtual_node_mode != 'single':
+        if self.parallel_global_mode:
+            expected_node_lens = seq_lens_tensor + 4
+        elif self.virtual_node_mode != 'single':
             group_counts = torch.div(
                 seq_lens_tensor + self.virtual_group_size - 1,
                 self.virtual_group_size, rounding_mode='floor')
@@ -909,7 +938,7 @@ class GraphTransformer(nn.Module):
             node_lens_tensor = node_lens_tensor.to(device=node_features.device, dtype=torch.long)
             if self.virtual_node_mode != 'single' and not torch.equal(
                     node_lens_tensor, expected_node_lens):
-                raise ValueError('Grouped virtual-node lengths disagree with graph construction')
+                raise ValueError('Virtual-node lengths disagree with graph construction')
         else:
             node_lens_tensor = (expected_node_lens if self.virtual_node_mode != 'single'
                                 else seq_lens_tensor + (1 if self.use_global_node else 0))
@@ -930,7 +959,16 @@ class GraphTransformer(nn.Module):
             packed_nodes = node_features.new_zeros((batch_size, max_node_len, hidden_dim))
             if max_seq_len > 0:
                 packed_nodes[:, :max_seq_len] = node_features[:, :max_seq_len]
-            if self.virtual_node_mode != 'single':
+            if self.parallel_global_mode:
+                global_indices = seq_lens_tensor[:, None] + torch.arange(
+                    4, device=node_features.device)[None, :]
+                slot_offsets = torch.cat((self.global_node_embedding.new_zeros((1, hidden_dim)),
+                                          self.parallel_global_offsets), dim=0)
+                global_values = global_nodes[:, None, :] + slot_offsets[None, :, :]
+                global_positions = global_indices.unsqueeze(-1).expand(-1, -1, hidden_dim)
+                packed_nodes.scatter_(1, global_positions,
+                                      global_values.to(packed_nodes.dtype))
+            elif self.virtual_node_mode != 'single':
                 group_nodes, pooled_group_counts = _pool_virtual_groups(
                     node_features, seq_lens_tensor, self.virtual_group_size)
                 max_groups = group_nodes.size(1)
@@ -949,10 +987,11 @@ class GraphTransformer(nn.Module):
                 global_indices = seq_lens_tensor + pooled_group_counts
             else:
                 global_indices = seq_lens_tensor
-            global_positions = global_indices.view(-1, 1, 1).expand(-1, 1, hidden_dim)
-            # Under autocast the residual global embedding can promote the
-            # global node to FP32 while encoded residues stay FP16/BF16.
-            packed_nodes.scatter_(1, global_positions, global_nodes.to(packed_nodes.dtype).unsqueeze(1))
+            if not self.parallel_global_mode:
+                global_positions = global_indices.view(-1, 1, 1).expand(-1, 1, hidden_dim)
+                # Under autocast the residual global embedding can promote the
+                # global node to FP32 while encoded residues stay FP16/BF16.
+                packed_nodes.scatter_(1, global_positions, global_nodes.to(packed_nodes.dtype).unsqueeze(1))
             node_positions = torch.arange(max_node_len, device=node_features.device)
             valid_node_mask = node_positions.unsqueeze(0) < node_lens_tensor.unsqueeze(1)
             node_features = packed_nodes[valid_node_mask]
@@ -1095,6 +1134,33 @@ class GraphTransformer(nn.Module):
         if timing_enabled:
             gat_end = time.perf_counter()
 
+        # Read the four independently updated global tokens from the actual
+        # packed GNN output. Their order is fixed by GraphBuilder: L..L+3.
+        parallel_global_tokens = None
+        self.last_parallel_global_diagnostics = {}
+        if self.parallel_global_mode:
+            slot_positions = (node_offsets[:, None] + seq_lens_tensor[:, None]
+                              + torch.arange(4, device=node_features.device)[None, :])
+            parallel_global_tokens = node_features[slot_positions]
+            if self.enable_parallel_global_diagnostics:
+                slot_norms = (torch.linalg.vector_norm(
+                    parallel_global_tokens.detach().float(), dim=-1).mean(dim=0).tolist()
+                    if batch_size else [0.0] * 4)
+                if batch_size:
+                    normalized_slots = F.normalize(parallel_global_tokens.detach().float(), dim=-1)
+                    slot_cosines = normalized_slots @ normalized_slots.transpose(1, 2)
+                    pair_i, pair_j = torch.triu_indices(4, 4, offset=1, device=node_features.device)
+                    off_diagonal = slot_cosines[:, pair_i, pair_j]
+                    slot_pair_cosine_mean = float(off_diagonal.mean().item())
+                else:
+                    slot_pair_cosine_mean = 0.0
+                self.last_parallel_global_diagnostics = {
+                    'mode': self.virtual_node_mode,
+                    'num_valid_bonds': 0,
+                    'slot_l2_mean': slot_norms,
+                    'slot_pair_cosine_mean': slot_pair_cosine_mean,
+                }
+
         # 肽级辅助头：global node 是每个样本 packed 序列的最后一个有效节点，
         # 经全部消息传递层后其表示聚合了整肽信息，回归该肽可观测断裂比例
         peptide_logits = None
@@ -1156,7 +1222,36 @@ class GraphTransformer(nn.Module):
             ion12_active = self.use_ion12_aux_head and self.training
             if self.bond_head_type == 'four_state_mlp':
                 from .four_state import union_logit
-                if self.bond_fusion_mode == 'cross_attention':
+                if self.virtual_node_mode == 'parallel4_cross':
+                    # Every valid bond reads the four post-GNN global slots
+                    # using its two endpoint representations as the query.
+                    bond_sample_indices = torch.arange(
+                        batch_size, device=node_features.device)[:, None].expand_as(
+                            valid_bond_mask)[valid_bond_mask]
+                    global_keys_values = parallel_global_tokens[bond_sample_indices]
+                    query = self.parallel_bond_query_proj(
+                        torch.cat((h_src, h_dst), dim=-1)).unsqueeze(1)
+                    global_keys_values = global_keys_values.to(dtype=query.dtype)
+                    need_attention = bool(self.enable_parallel_global_diagnostics)
+                    context, attention = self.parallel_bond_cross_attention(
+                        query, global_keys_values, global_keys_values,
+                        need_weights=need_attention, average_attn_weights=False)
+                    context_residual = self.parallel_bond_context_proj(context.squeeze(1))
+                    hidden = self.bond_head[1](self.bond_head[0](bond_features))
+                    state_logits = self.bond_head[3](
+                        self.bond_head[2](hidden + context_residual)).float()
+                    if need_attention:
+                        detached_attention = attention.detach().float().squeeze(2)
+                        self.last_parallel_global_diagnostics.update({
+                            'num_valid_bonds': int(h_src.size(0)),
+                            'attention_mean_per_head_slot': detached_attention.mean(dim=0).tolist(),
+                            'attention_entropy_mean': float((
+                                -detached_attention * detached_attention.clamp_min(1e-12).log()
+                            ).sum(dim=-1).mean().item()),
+                            'context_residual_l2_mean': float(torch.linalg.vector_norm(
+                                context_residual.detach().float(), dim=-1).mean().item()),
+                        })
+                elif self.bond_fusion_mode == 'cross_attention':
                     self.bond_head.enable_diagnostics = fusion_diagnostics
                     state_logits = self.bond_head(bond_feature_parts).float()
                     if fusion_diagnostics:
@@ -1180,6 +1275,8 @@ class GraphTransformer(nn.Module):
                         self.last_bond_fusion_diagnostics.update(residual_diagnostics(hidden, corrected))
                 else:
                     state_logits = self.bond_head(bond_features).float()
+                if self.virtual_node_mode == 'parallel4' and self.enable_parallel_global_diagnostics:
+                    self.last_parallel_global_diagnostics['num_valid_bonds'] = int(h_src.size(0))
                 if self.use_charge_partition_features:
                     tokens = self.node_encoder._encode_sequences(batch_data['sequences'], node_features.device)
                     state_logits = state_logits + self.charge_partition(tokens, batch_data['charges'], valid_bond_mask)

@@ -47,16 +47,17 @@ class GraphBuilder:
         self.long_range_hops = max(1, int(_get_config_value(config, 'long_range_hops', 1)))
         self.use_global_node = _get_config_value(config, 'use_global_node', False)
         self.virtual_node_mode = _get_config_value(config, 'virtual_node_mode', 'single')
-        if self.virtual_node_mode not in ('single', 'grouped_skip', 'grouped_strict'):
+        if self.virtual_node_mode not in ('single', 'grouped_skip', 'grouped_strict',
+                                          'parallel4', 'parallel4_cross'):
             raise ValueError(f"Unknown virtual_node_mode: {self.virtual_node_mode!r}")
         group_size = _get_config_value(config, 'virtual_group_size', 5)
         if isinstance(group_size, bool) or not isinstance(group_size, int) or group_size < 1:
             raise ValueError('virtual_group_size must be a positive integer')
         self.virtual_group_size = group_size
         if self.virtual_node_mode != 'single' and not self.use_global_node:
-            raise ValueError('Grouped virtual nodes require use_global_node=True')
+            raise ValueError('Multiple virtual nodes require use_global_node=True')
         if self.virtual_node_mode != 'single' and len(self.edge_types) <= 4:
-            raise ValueError('Grouped virtual nodes require edge type 4 (global)')
+            raise ValueError('Multiple virtual nodes require edge type 4 (global)')
         self.env_feature_name = _get_config_value(config, 'env_feature_name', 'rt')
         self.env_feature_scale = float(_get_config_value(config, 'env_feature_scale', 0.01))
         # 状态/环境特征消融开关：与 NodeEncoder / global_node_proj 保持一致，
@@ -80,6 +81,8 @@ class GraphBuilder:
             return seq_len
         if self.virtual_node_mode == 'single':
             return seq_len + 1
+        if self.virtual_node_mode in ('parallel4', 'parallel4_cross'):
+            return seq_len + 4
         group_count = (seq_len + self.virtual_group_size - 1) // self.virtual_group_size
         return seq_len + group_count + 1
 
@@ -272,6 +275,8 @@ class GraphBuilder:
             if self.use_global_node:
                 if self.virtual_node_mode == 'single':
                     self._add_global_edges(edge_indices, edge_types, edge_distances, seq_len)
+                elif self.virtual_node_mode in ('parallel4', 'parallel4_cross'):
+                    self._add_parallel_global_edges(edge_indices, edge_types, edge_distances, seq_len)
                 else:
                     self._add_grouped_virtual_edges(edge_indices, edge_types, edge_distances, seq_len)
 
@@ -375,6 +380,23 @@ class GraphBuilder:
             edge_indices.extend([[group_idx, top_idx], [top_idx, group_idx]])
             edge_types.extend([4, 4])
             edge_distances.extend([0, 0])
+
+    @staticmethod
+    def _add_parallel_global_edges(edge_indices: List[List[int]],
+                                   edge_types: List[int],
+                                   edge_distances: List[int],
+                                   seq_len: int) -> None:
+        """Four independent slots each exchange messages with all real residues.
+
+        There are deliberately no slot-to-slot edges. Both parallel modes use
+        exactly the same graph; only the bond readout differs between them.
+        """
+        for slot in range(4):
+            global_idx = seq_len + slot
+            for residue_idx in range(seq_len):
+                edge_indices.extend([[residue_idx, global_idx], [global_idx, residue_idx]])
+                edge_types.extend([4, 4])
+                edge_distances.extend([0, 0])
     
     def _predict_distance_matrix(self, seq_len: int) -> np.ndarray:
         """历史序列距离启发式矩阵；非物理距离，当前连边路径不调用。"""

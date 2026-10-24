@@ -16,7 +16,7 @@ import numpy as np
 from .metrics import (
     BinaryBondMetrics,
     order_binary_bond_metric_dict,
-    _sigmoid_if_needed,
+    _to_probabilities,
     compute_calibration_metrics,
 )
 
@@ -67,6 +67,7 @@ class Evaluator:
         # 指标计算器
         self.allow_target_aware_threshold = allow_target_aware_threshold
         self.metrics_calculator = BinaryBondMetrics(self.eval_config, allow_target_aware_threshold=allow_target_aware_threshold)
+        self._last_evaluation_cache_ready = False
         # 缓存最近一次 evaluate() 的校准分析结果（含 bin 数据），供可靠性图复用
         self.last_calibration: Dict[str, Any] = {}
 
@@ -86,12 +87,15 @@ class Evaluator:
             Dict[str, float]: 评估指标
         """
         self.model.eval()
+        self._last_evaluation_cache_ready = False
 
         prev_flag = self.metrics_calculator.allow_target_aware_threshold
         if allow_target_aware is not None:
             self.metrics_calculator.allow_target_aware_threshold = allow_target_aware
         try:
-            return self._evaluate_impl(data_loader)
+            metrics = self._evaluate_impl(data_loader)
+            self._last_evaluation_cache_ready = True
+            return metrics
         finally:
             self.metrics_calculator.allow_target_aware_threshold = prev_flag
 
@@ -281,7 +285,7 @@ class Evaluator:
                 if valid_logits and valid_targets:
                     flat_logits = np.concatenate(valid_logits, axis=0).astype(np.float32)
                     flat_targets = np.concatenate(valid_targets, axis=0).astype(np.int32)
-                    flat_probabilities = _sigmoid_if_needed(flat_logits)
+                    flat_probabilities = _to_probabilities(flat_logits, from_logits=True)
                     threshold = BinaryBondMetrics(self.eval_config, allow_target_aware_threshold=True)._get_threshold(flat_probabilities, flat_targets)
                 else:
                     threshold = float(self.eval_config.get('threshold', 0.5))
@@ -297,7 +301,7 @@ class Evaluator:
                 prob_strings.append("")
                 continue
 
-            prob_row = _sigmoid_if_needed(logit_row.astype(np.float32))
+            prob_row = _to_probabilities(logit_row, from_logits=True)
             pred_row = (prob_row > threshold).astype(np.int32)
             pred_strings.append(";".join(map(str, pred_row.tolist())))
             true_strings.append(";".join(map(str, target_row.astype(np.int32).tolist())))
@@ -308,6 +312,50 @@ class Evaluator:
             'pred_strings': pred_strings,
             'true_strings': true_strings,
             'prob_strings': prob_strings,
+        }
+
+    def collect_cached_prediction_outputs(self, expected_rows: Optional[int] = None,
+                                          threshold: Optional[float] = None) -> Dict[str, Any]:
+        """Export the valid-bond logits retained by the immediately preceding evaluate().
+
+        This avoids a second model pass and uses the same explicit logit-to-probability
+        conversion as BinaryBondMetrics. Nine significant digits round-trip float32
+        probabilities, so CSV-based audits do not change borderline predictions.
+        Target-aware threshold selection is intentionally unavailable here.
+        """
+        if not self._last_evaluation_cache_ready:
+            raise RuntimeError("collect_cached_prediction_outputs requires a successful evaluate()")
+        logits_rows = self.metrics_calculator.sample_predictions
+        target_rows = self.metrics_calculator.sample_targets
+        if len(logits_rows) != len(target_rows):
+            raise RuntimeError("Cached prediction/target row counts disagree")
+        if expected_rows is not None and len(logits_rows) != int(expected_rows):
+            raise RuntimeError(
+                f"Cached evaluation has {len(logits_rows)} rows; expected {expected_rows}"
+            )
+        if threshold is None:
+            threshold = float(self.eval_config.get('threshold', 0.5))
+        threshold = float(threshold)
+        pred_strings = []
+        true_strings = []
+        prob_strings = []
+        for logit_row, target_row in zip(logits_rows, target_rows):
+            logits = np.asarray(logit_row, dtype=np.float32).reshape(-1)
+            targets = np.asarray(target_row, dtype=np.int32).reshape(-1)
+            if logits.size != targets.size:
+                raise RuntimeError("Cached prediction/target bond counts disagree")
+            probabilities = _to_probabilities(logits, from_logits=True)
+            predictions = (probabilities > threshold).astype(np.int32)
+            pred_strings.append(";".join(map(str, predictions.tolist())))
+            true_strings.append(";".join(map(str, targets.tolist())))
+            prob_strings.append(";".join(format(float(value), '.9g') for value in probabilities))
+        return {
+            'threshold': threshold,
+            'pred_strings': pred_strings,
+            'true_strings': true_strings,
+            'prob_strings': prob_strings,
+            'source': 'same_pass_evaluate_logits',
+            'probability_precision': 'float32_roundtrip_9_significant_digits',
         }
     
     def evaluate_with_thresholds(self, data_loader: DataLoader, 

@@ -3,7 +3,7 @@
   "authorization_date_local": "2026-10-21",
   "thread_id": "01a1547f-f644-7d70-816a-1b3fe2ad8e80",
   "protocol": "experiments/structural_queue_v1.md",
-  "execution_policy": "stages1_2_5_3_6_7_8_reviewed_acked; stage9_virtual_hierarchy_explicitly_authorized_for_one_serial_batch; learned_graph_stage4_deferred",
+  "execution_policy": "stages1_2_5_3_6_7_8_reviewed_acked; stage9_failed_analysis_reported_acked_with_restricted_F1_conclusion; stage10_parallel_globals_explicitly_authorized_after_stage9_terminal; learned_graph_stage4_deferred",
   "compute_location": "gsj-5090.devpod:/mnt/pvc/graphtrans/DBond",
   "reference_commit": "4da48eeab50decd0a31fbf64f2f179478a6624a7",
   "structural_baseline": {
@@ -367,12 +367,42 @@
       "posthoc_dashboard": "/mnt/pvc/graphtrans/four_state_virtual_hierarchy_ops/posthoc_review_v2_20261024/virtual_hierarchy_dashboard.html",
       "local_review_copy": "F:/codexout/dbond_virtual_hierarchy_results_20261024/review_final/",
       "outcome": "No hierarchical candidate passed preregistered F1 gain: grouped_skip minus single -0.013164pp (2/5), grouped_strict minus single -0.365249pp (0/5); saved-weight replays agree on this restricted F1 finding. Original export audit failed and strict full-metric posthoc audit is unverified (one ex_precision export discrepancy, one variable q_seq replay). Preserve single-k5 and all artifacts; do not promote a hierarchy arm."
+    },
+    {
+      "id": 10,
+      "name": "parallel_global_bond_cross_k5",
+      "status": "preparing",
+      "authorized_at_local": "2026-10-25",
+      "requires_reviewed_stage": 8,
+      "requires_terminal_stage": 9,
+      "protocol": "experiments/parallel_global_cross_v1.md",
+      "ops": "/mnt/pvc/graphtrans/four_state_parallel_global_ops",
+      "batch_prefix": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_parallel_global_batch",
+      "root": null,
+      "gitrev": null,
+      "source_tag": null,
+      "arms": ["single", "parallel4", "parallel4_cross"],
+      "hidden_dim": 256,
+      "bond_head_type": "four_state_mlp",
+      "bond_fusion_mode": "concat",
+      "node_conv_mode": "single_k5",
+      "four_state_alpha": 1,
+      "union_brier_lambda": 0,
+      "training_base_seed": 45,
+      "internal_split_base_seed": 42,
+      "total_training_runs": 15,
+      "baseline_source_stage": 8,
+      "predecessor_terminal_stage": 9,
+      "report": null,
+      "review_receipt": null,
+      "completion_action": "Independently review three paired arms on pod, report and acknowledge exact terminal event; stop. Do not promote a test-selected candidate automatically or launch learned graph/physical priors.",
+      "local_receipts": "F:/codexout/dbond_parallel_global_results_20261025/"
     }
   ],
   "auto_advance": false,
   "scheduling_update": {
-    "date_local": "2026-10-24",
-    "reason": "User authorized an in-graph hierarchical virtual-node experiment on the validated single-k5 four-state model, with contemporaneous baseline and two topology variants.",
+    "date_local": "2026-10-25",
+    "reason": "User authorized a serial parallel-global-node and bond-query cross-attention experiment after stage9 terminal, using the independently replicated single-k5 four-state model.",
     "current_fusion_action": "Completed, independently reviewed, reported and acked; no automatic follow-up.",
     "requested_combination": {
       "bond_head_type": "four_state_mlp",
@@ -384,8 +414,8 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "None authorized. Stage9 failed-analysis terminal was reviewed and acknowledged, with limited F1 conclusion; learned graph stage4 remains deferred.",
-    "serial_stage_ids": []
+    "next_new_experiment": "Stage10 parallel global slots: single, parallel4, parallel4_cross. Stage9 failure acknowledged; stage10 uses stage8 validated k5 base and does not reuse stage9 metrics as baseline. Learned graph and chemical priors remain deferred.",
+    "serial_stage_ids": [10]
   },
   "auto_advance_allowlist": []
 }

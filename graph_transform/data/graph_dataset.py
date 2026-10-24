@@ -662,7 +662,7 @@ class CachedGraphDataset(GraphDataset):
         if self.use_long_range_edges:
             parts.append(f"lr{self.long_range_stride}x{self.long_range_hops}")
         if self.use_global_node:
-            parts.append("g1")
+            parts.append("g4" if self.virtual_node_mode in ('parallel4', 'parallel4_cross') else "g1")
         parts.append(f"vn{self.virtual_node_mode}_g{self.virtual_group_size}")
         return "_".join(parts)
 

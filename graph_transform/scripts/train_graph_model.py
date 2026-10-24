@@ -1550,7 +1550,14 @@ def main():
         test_step = history['epoch'][-1] if history['epoch'] else 0
         log_metrics_to_tensorboard(tb_writers, 'test', test_metrics, test_step)
         if config.get('evaluation', {}).get('save_outputs', True):
-            prediction_outputs = evaluator.collect_prediction_outputs(test_loader, allow_target_aware=False)
+            if config.get('evaluation', {}).get('export_from_evaluate_cache', False):
+                prediction_outputs = evaluator.collect_cached_prediction_outputs(
+                    expected_rows=len(test_dataset.data),
+                )
+            else:
+                prediction_outputs = evaluator.collect_prediction_outputs(
+                    test_loader, allow_target_aware=False,
+                )
             checkpoint_reference = best_checkpoint_path if (val_loader is not None and os.path.exists(best_checkpoint_path)) else os.path.join(checkpoint_dir, 'current_in_memory_model')
             evaluation_id = build_evaluation_id(checkpoint_reference, 'test')
             evaluation_config = config.get('evaluation', {})
@@ -1569,6 +1576,9 @@ def main():
             output_df['true'] = prediction_outputs['true_strings']
             output_df['pred'] = prediction_outputs['pred_strings']
             output_df['pred_prob'] = prediction_outputs['prob_strings']
+            if 'source' in prediction_outputs:
+                output_df['prediction_export_source'] = prediction_outputs['source']
+                output_df['prediction_probability_precision'] = prediction_outputs['probability_precision']
             save_evaluation_outputs(
                 metrics=test_metrics,
                 output_df=output_df,

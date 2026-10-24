@@ -14,7 +14,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-_VIRTUAL_NODE_MODE_CODES = {'grouped_skip': 1, 'grouped_strict': 2}
+_VIRTUAL_NODE_MODE_CODES = {
+    'grouped_skip': 1, 'grouped_strict': 2,
+    'parallel4': 3, 'parallel4_cross': 4,
+}
 _VIRTUAL_NODE_MARKERS = (
     'virtual_node_mode_code',
     'virtual_node_schema_code',
@@ -24,7 +27,8 @@ _VIRTUAL_NODE_MARKERS = (
 
 def validate_virtual_node_mode(value: str) -> str:
     """The original single-global route remains the implicit default."""
-    if value not in ('single', 'grouped_skip', 'grouped_strict'):
+    if value not in ('single', 'grouped_skip', 'grouped_strict',
+                     'parallel4', 'parallel4_cross'):
         raise ValueError(f'Unknown virtual_node_mode: {value!r}')
     return value
 
@@ -62,6 +66,20 @@ def validate_virtual_node_checkpoint(model, state_dict, checkpoint_config=None) 
                     or actual.shape != torch.Size([])
                     or not torch.equal(actual.detach().cpu(), expected.detach().cpu())):
                 raise ValueError(f'Checkpoint virtual-node semantics mismatch: {key}')
+
+    # The old single/grouped modes have no parallel-slot/readout weights.
+    # Check exact branch keys even when a legacy loader requests strict=False.
+    def parallel_keys(keys):
+        return {key for key in keys if key == 'parallel_global_offsets'
+                or key.startswith('parallel_bond_')}
+
+    actual_branch = parallel_keys(state_dict)
+    expected_branch = parallel_keys(model.state_dict())
+    if actual_branch != expected_branch:
+        raise ValueError(
+            'Checkpoint parallel-global branch keys mismatch: '
+            f'missing={sorted(expected_branch - actual_branch)}, '
+            f'unexpected={sorted(actual_branch - expected_branch)}')
 
     if checkpoint_config is not None:
         if not isinstance(checkpoint_config, dict):
@@ -139,8 +157,8 @@ class ModelConfig:
         # Optional full-width residue Conv1D before global packing and FiLM;
         # none preserves the legacy model state and initialization RNG.
         self.node_conv_mode = 'none'
-        # Grouped virtual nodes are an opt-in graph topology. The single route
-        # preserves one original global node and its checkpoint schema.
+        # Experimental grouped and parallel virtual nodes are opt-in. The
+        # single route preserves its original graph, RNG and checkpoint schema.
         self.virtual_node_mode = 'single'
         self.virtual_group_size = 5
         self.bond_condition_mode = 'none'

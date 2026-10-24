@@ -23,6 +23,7 @@ from training.metrics import (  # noqa: F401  (re-exported for backward compatib
     DBOND_M_COMPARABLE_METRIC_ORDER,
     TASK_EXTRA_METRIC_ORDER as _BASE_TASK_EXTRA_METRIC_ORDER,
     _sigmoid_if_needed,
+    _to_probabilities,
     compute_binary_bond_metrics,
     order_binary_bond_metric_dict,
 )
