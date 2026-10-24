@@ -34,4 +34,3 @@ out = {
 print(json.dumps({'formal_q_seq': formal['q_seq'],
                   'first_q_seq': first['q_seq'],
                   'repeat_q_seq': repeated['q_seq']}))
-
