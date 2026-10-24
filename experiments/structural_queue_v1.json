@@ -322,7 +322,7 @@
     {
       "id": 9,
       "name": "virtual_hierarchy_k5",
-      "status": "submitted",
+      "status": "halted",
       "requires_reviewed_stage": 8,
       "authorized_at_local": "2026-10-24",
       "protocol": "experiments/virtual_hierarchy_v1.md",
@@ -356,7 +356,17 @@
       "worker_pid": 1745527,
       "submitted_at_utc": "2026-10-24T10:43:27.312186+00:00",
       "local_receipts": "F:/codexout/dbond_virtual_hierarchy_results_20261024/",
-      "completion_action": "Independently review/report/ack new terminal event, compare all three arms with padding-free paired metrics, preserve best k5 baseline, and stop; no new training without user authorization."
+      "completion_action": "Original analysis terminal failed on exported ex_precision discrepancy after all 15 trainings completed. One-time pod-only posthoc verified source/weights and a restricted no-F1-gain conclusion; full auxiliary-metric audit remains unverified. Failed event reported and acknowledged; stop, no training rerun.",
+      "event_acknowledged": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_virtual_hierarchy_batch/20261024_104327|failed",
+      "reviewed_at_local": "2026-10-25",
+      "posthoc_audit_code_commit": "0e044e8",
+      "posthoc_audit_code_tag": "dbond-four-state-virtual-hierarchy-posthoc-v2-20261025",
+      "posthoc_audit_status": "unverified_full_precision_disagreement",
+      "posthoc_report": "/mnt/pvc/graphtrans/four_state_virtual_hierarchy_ops/posthoc_review_v2_20261024/report.md",
+      "bounded_conclusion": "/mnt/pvc/graphtrans/four_state_virtual_hierarchy_ops/posthoc_review_v2_20261024/bounded_f1_conclusion_v2.md",
+      "posthoc_dashboard": "/mnt/pvc/graphtrans/four_state_virtual_hierarchy_ops/posthoc_review_v2_20261024/virtual_hierarchy_dashboard.html",
+      "local_review_copy": "F:/codexout/dbond_virtual_hierarchy_results_20261024/review_final/",
+      "outcome": "No hierarchical candidate passed preregistered F1 gain: grouped_skip minus single -0.013164pp (2/5), grouped_strict minus single -0.365249pp (0/5); saved-weight replays agree on this restricted F1 finding. Original export audit failed and strict full-metric posthoc audit is unverified (one ex_precision export discrepancy, one variable q_seq replay). Preserve single-k5 and all artifacts; do not promote a hierarchy arm."
     }
   ],
   "auto_advance": false,
@@ -374,7 +384,7 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "Stage9 virtual hierarchy submitted after successful pod preflight; await one terminal completion event and report. Learned graph stage4 remains deferred.",
+    "next_new_experiment": "None authorized. Stage9 failed-analysis terminal was reviewed and acknowledged, with limited F1 conclusion; learned graph stage4 remains deferred.",
     "serial_stage_ids": []
   },
   "auto_advance_allowlist": []
