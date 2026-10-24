@@ -2,7 +2,7 @@
 
 This does not launch or resume training. It preserves the original failed
 terminal/result files, verifies the frozen training sources and all 15 weights,
-then writes a separately qualified report under OPS/posthoc_review_20261024.
+then writes a separately qualified report under OPS/posthoc_review_v2_20261024.
 """
 
 import argparse
@@ -31,7 +31,12 @@ from evaluation.evaluator import Evaluator
 from models.graph_transformer import GraphTransformer
 from models.utils import build_model_config
 
-POSTHOC = ops.OPS / 'posthoc_review_20261024'
+POSTHOC = ops.OPS / 'posthoc_review_v2_20261024'
+KNOWN_DIRTY_UNRELATED_SOURCE = {
+    'path': 'graph_transform/scripts/ensemble_baseline_preds.py',
+    'launch_sha256': '8202bf2b660dfb56fd79ebeae2eda57cd952c57e89cbeb30f30e416db49f4be0',
+    'git_blob_sha256': '805d4aaaffacaf8157d62cf532e24255e093e46313e59edb3710f3c5f5c6d4d4',
+}
 METRIC_NAMES = ('f1', 'accuracy', 'auc', 'ex_precision', 'ex_recall',
                 'ex_f1_harmonic', 'q_brier', 'q_seq')
 # A separately run full-precision CUDA evaluation may differ at the 0.5
@@ -51,23 +56,36 @@ def utc_now():
 
 
 def frozen_source_audit(info):
-    """Bind each live training source to both launch SHA and its Git blob.
+    """Bind each live source to launch SHA and training files to Git blobs.
 
     The new posthoc script is intentionally absent from the original manifest.
-    It must not change the set or bytes of the training files.
+    The one pre-existing unrelated dirty source is bound to its exact launch
+    SHA and its distinct Git blob, with both identities explicitly recorded.
     """
     bound = info['source_sha256']
     demand(isinstance(bound, dict) and len(bound) > 20, 'Missing training source manifest')
     checked = {}
+    exceptions = []
     for name, expected in sorted(bound.items()):
         path = REPO / name
         demand(path.is_file() and file_sha(path) == expected,
                f'Training source changed since launch: {name}')
         blob = subprocess.check_output(['git', 'show', f"{info['gitrev']}:{name}"], cwd=REPO)
-        demand(hashlib.sha256(blob).hexdigest() == expected,
-               f'Launch source differs from Git revision: {name}')
+        git_sha = hashlib.sha256(blob).hexdigest()
+        if name == KNOWN_DIRTY_UNRELATED_SOURCE['path']:
+            demand(expected == KNOWN_DIRTY_UNRELATED_SOURCE['launch_sha256']
+                   and git_sha == KNOWN_DIRTY_UNRELATED_SOURCE['git_blob_sha256'],
+                   f'Known unrelated dirty source identity changed: {name}')
+            exceptions.append({'path': name, 'launch_sha256': expected,
+                               'git_blob_sha256': git_sha,
+                               'reason': 'Pre-existing unrelated dirty script, not imported by training/evaluation'})
+        else:
+            demand(git_sha == expected,
+                   f'Launch source differs from Git revision: {name}')
         checked[name] = expected
-    return checked
+    demand(len(exceptions) == 1 and len(checked) == len(bound),
+           'Unexpected source-audit exception count')
+    return {'launch_source_sha256': checked, 'known_dirty_unrelated_sources': exceptions}
 
 
 def original_terminal_barrier(info):
@@ -433,7 +451,7 @@ def run(gpu):
     torch.cuda.set_device(gpu)
     torch.set_num_threads(2)
     ops.OPS.mkdir(parents=True, exist_ok=True)
-    claim = ops.OPS / 'posthoc_audit.claim'
+    claim = ops.OPS / 'posthoc_audit_v2.claim'
     with claim.open('x', encoding='utf-8') as stream:
         stream.write(json.dumps({'pid': os.getpid(), 'created_at': utc_now()}) + '\n')
     POSTHOC.mkdir(exist_ok=False)
