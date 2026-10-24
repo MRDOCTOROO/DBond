@@ -371,7 +371,7 @@
     {
       "id": 10,
       "name": "parallel_global_bond_cross_k5",
-      "status": "submitted",
+      "status": "reviewed",
       "authorized_at_local": "2026-10-25",
       "requires_reviewed_stage": 8,
       "requires_terminal_stage": 9,
@@ -406,8 +406,14 @@
       "dashboard": "/mnt/pvc/graphtrans/four_state_parallel_global_ops/parallel_global_dashboard.html",
       "baseline_source_stage": 8,
       "predecessor_terminal_stage": 9,
-      "report": null,
-      "review_receipt": null,
+      "report": "/mnt/pvc/graphtrans/four_state_parallel_global_ops/report.md",
+      "review_receipt": "/mnt/pvc/graphtrans/four_state_parallel_global_ops/review_receipt.json",
+      "independent_source_audit": "/mnt/pvc/graphtrans/four_state_parallel_global_ops/independent_source_audit_20261025.json",
+      "independent_metric_audit": "/mnt/pvc/graphtrans/four_state_parallel_global_ops/independent_raw_csv_metric_audit.json",
+      "independent_structural_audit": "/mnt/pvc/graphtrans/four_state_parallel_global_ops/independent_structural_diagnostics_audit.json",
+      "event_acknowledged": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_parallel_global_batch/20261024_171434|completed",
+      "reviewed_at_local": "2026-10-25",
+      "outcome": "Independent pod audits passed: 807 source/weight/probability checks, 15 strict CPU restores and all 15 same-pass prediction CSV metrics. parallel4 alone F1 -0.023098pp (2/5). parallel4_cross vs single F1 +0.260300pp (4/5), AUC +0.001806, but q-Brier +0.000528; full preregistered gate fails. Cross vs parallel4 passes four mean engineering gates (F1 +0.283399pp, Brier -0.000026), but calibration gain is tiny and only 2/5 folds. Preserve single-k5 as four-gate baseline; cross remains exploratory F1 candidate, no automatic promotion or follow-up.",
       "completion_action": "Independently review three paired arms on pod, report and acknowledge exact terminal event; stop. Do not promote a test-selected candidate automatically or launch learned graph/physical priors.",
       "local_receipts": "F:/codexout/dbond_parallel_global_results_20261025/"
     }
