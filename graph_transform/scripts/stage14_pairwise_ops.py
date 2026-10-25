@@ -1,7 +1,8 @@
 """Pod-only Stage14 same-round pairwise-ranking sweep (four lambda arms).
 
-Only `smoke` and `launch` are operator actions.  `worker` runs one immutable
-batch and writes a single terminal event; it never polls training progress.
+`smoke` and `launch` are the training operator actions. `worker` runs one
+immutable batch. `finalize` only registers an already completed batch after
+strict source/output checks; it never invokes training or polls progress.
 Independent metric recomputation and reporting belong to the review/audit
 process, after the terminal event.
 """
@@ -61,6 +62,14 @@ def write_json(path: Path, value: dict) -> None:
     temporary = path.with_suffix(path.suffix + '.tmp')
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     temporary.replace(path)
+
+
+def write_new_or_matching_json(path: Path, value: dict) -> None:
+    """Never silently replace an independently consumed audit artifact."""
+    if path.exists():
+        require(read_json(path) == value, f'Existing {path.name} differs from verified batch')
+    else:
+        write_json(path, value)
 
 
 def config_path(arm: str) -> Path:
@@ -537,6 +546,7 @@ def launch(receipt_path: Path | None, source_commit: str | None) -> None:
             bound = read_json(OPS / 'launch.json')
             write_json(OPS / 'terminal.json', {'status': 'failed', 'root': bound['root'],
                 'gitrev': bound['gitrev'], 'finished_at': utc_now(),
+                'phase': 'preworker_launch',
                 'error': traceback.format_exc(), 'retry_policy': 'No automatic relaunch'})
         raise
 
@@ -582,11 +592,14 @@ def make_audit_manifest(info: dict) -> dict:
             metric_csv = Path(row['metric_csv_path'])
             checkpoint = Path(row['checkpoint_dir']) / 'best_model.pt'
             test_csv = Path(runtime['data']['test_csv_path'])
+            training_log = Path(runtime['logging']['log_dir']) / runtime['logging'].get(
+                'log_file', 'training.log')
             try:
                 metric_relative = metric_csv.resolve().relative_to((fold_root / 'metrics').resolve())
                 checkpoint.resolve().relative_to((fold_root / 'checkpoints').resolve())
+                training_log.resolve().relative_to((fold_root / 'logs').resolve())
             except ValueError as error:
-                raise ValueError(f'{arm_name}/{fold}: metric/checkpoint escaped this fold') from error
+                raise ValueError(f'{arm_name}/{fold}: metric/checkpoint/log escaped this fold') from error
             expected_prediction = fold_root / 'preds' / metric_relative.parent / 'latest_test.pred.csv'
             pred_csv = expected_prediction
             require(metric_csv.name == 'latest_test_metric.csv'
@@ -600,8 +613,30 @@ def make_audit_manifest(info: dict) -> dict:
                     and file_sha(test_csv) == info['prior']['test_sha256'][fold]
                     and file_sha(Path(runtime['data']['four_state_targets_manifest']))
                     == info['prior']['target_manifests'][fold]
-                    and pred_csv.is_file() and metric_csv.is_file() and checkpoint.is_file(),
+                    and pred_csv.is_file() and metric_csv.is_file() and checkpoint.is_file()
+                    and training_log.is_file(),
                     f'{arm_name}/{fold}: split, test or outputs differ from reviewed source')
+            # These figures are copied from this fold's completed, SHA-bound log.
+            # The final test timer includes CSV export; it is not pure inference.
+            log_text = training_log.read_text(encoding='utf-8', errors='replace')
+            total_times = re.findall(r'Training completed in ([0-9]+(?:\.[0-9]+)?)s', log_text)
+            test_times = re.findall(r'Final test evaluation took ([0-9]+(?:\.[0-9]+)?)s', log_text)
+            epoch_peaks = re.findall(r'Epoch [0-9]+ GPU Memory - [^\n]*?peak_allocated: '
+                                     r'([0-9]+(?:\.[0-9]+)?)MB', log_text)
+            require(len(total_times) == len(test_times) == 1 and bool(epoch_peaks),
+                    f'{arm_name}/{fold}: completed timing or epoch GPU-memory source missing')
+            require(all(math.isfinite(float(value)) and float(value) >= 0
+                        for value in total_times + test_times + epoch_peaks),
+                    f'{arm_name}/{fold}: non-finite completed resource observation')
+            resource_observation = {
+                'source': 'per_fold_completed_training_log',
+                'training_plus_final_evaluation_seconds': float(total_times[0]),
+                'test_evaluation_and_export_seconds': float(test_times[0]),
+                'test_inference_only_seconds': None,
+                'epoch_peak_gpu_allocated_mb_max': max(map(float, epoch_peaks)),
+                'epoch_peak_count': len(epoch_peaks),
+                'limitations': 'Training timer includes validation and final test; test timer includes CSV '
+                               'export; epoch GPU peaks exclude final test and do not measure process RSS.'}
             saved = torch.load(checkpoint, map_location='cpu', weights_only=False)
             actual_rank = saved.get('extra_state', {}).get('ranking_loss_protocol', {})
             actual_rng = saved.get('extra_state', {}).get('training_rng_protocol', {})
@@ -671,12 +706,14 @@ def make_audit_manifest(info: dict) -> dict:
                      'metric_csv': metric_csv, 'checkpoint': checkpoint,
                      'config': runtime_path, 'train_csv': train_csv, 'val_csv': val_csv,
                      'validation_source_csv': Path(provenance['source_path']),
-                     'four_state_manifest': Path(runtime['data']['four_state_targets_manifest'])}
+                     'four_state_manifest': Path(runtime['data']['four_state_targets_manifest']),
+                     'training_log': training_log}
             entries.append({'arm': arm_name, 'fold': fold, 'seed': runtime['experiment']['seed'],
                             'split_seed': runtime['training']['validation_split_seed'],
                             'lambda': ARMS[arm_name], 'tau': .1, 'delta': .05,
                             'max_seq_len': runtime['data']['max_seq_len'],
                             'parameter_count': parameter_count,
+                             'resource_observation': resource_observation,
                             'ranking_loss_protocol': actual_rank,
                             'source_commit': info['gitrev'],
                             'evaluation_id': evaluation_id,
@@ -704,9 +741,103 @@ def make_audit_manifest(info: dict) -> dict:
                      'independent metric audit must still verify CSV row provenance and recompute metrics.'}
 
 
+def completed_terminal(info: dict, *, recovery: dict | None = None) -> dict:
+    result = {'status': 'completed', 'root': info['root'], 'gitrev': info['gitrev'],
+              'finished_at': utc_now(), 'audit_manifest': str(OPS / 'audit_manifest.json'),
+              'audit_manifest_sha256': file_sha(OPS / 'audit_manifest.json'),
+              'review_state': 'pending_independent_pod_audit'}
+    if recovery is not None:
+        result['recovery'] = recovery
+    return result
+
+
+def worker_still_active(info: dict) -> bool:
+    """A one-shot concurrency guard; this does not poll training progress."""
+    pid = info.get('worker_pid')
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        arguments = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+    except OSError:
+        return False
+    decoded = [argument.decode('utf-8', errors='replace') for argument in arguments]
+    return str(Path(__file__).resolve()) in decoded and 'worker' in decoded
+
+
+def finalize_completed(receipt_path: Path | None, source_commit: str | None,
+                       recover_failed_terminal: bool) -> None:
+    """Register only a completed frozen batch; never launch or rerun training."""
+    pod_guard(source_commit)
+    gitrev = revision(source_commit)
+    require(receipt_path is not None,
+            'Finalize requires --stage13-audit pointing to the original audited receipt')
+    info = read_json(OPS / 'launch.json')
+    require(not worker_still_active(info),
+            'Stage14 worker is still active; explicit finalize must wait for worker exit')
+    proof_path = OPS / 'smoke.json'
+    proof = read_json(proof_path)
+    require(info['gitrev'] == gitrev and info['source_root'] == str(REPO)
+            and bound_run_root(info).is_dir()
+            and info['smoke_sha256'] == file_sha(proof_path)
+            and proof['status'] == 'passed' and proof['gitrev'] == gitrev
+            and proof['source_root'] == str(REPO)
+            and info['source_sha256'] == proof['source_sha256'] == source_manifest()
+            and info['source_provenance'] == proof['source_provenance']
+            == committed_source_provenance(proof['source_sha256'], gitrev)
+            and info['configs'] == proof['configs']
+            and all(info['configs'][arm] == file_sha(config_path(arm)) for arm in ARMS)
+            and info['prior'] == proof['prior'] == prior_audit()
+            and info['stage13_audit'] == proof['stage13_audit'] == stage13_audit(receipt_path)
+            and info['arms'] == ARMS and tuple(info['folds']) == FOLDS
+            and info['training_base_seed'] == info['validation_split_base_seed'] == 42
+            and info['fold_seeds'] == {fold: _stable_fold_seed(42, fold) for fold in FOLDS},
+            'Finalize source, audit barrier, smoke, launch, config or seed binding failed')
+    verify_training_inputs(proof)
+    # make_audit_manifest requires the batch status to be completed and strictly
+    # restores all 20 checkpoint models before any recovery artifact is written.
+    manifest = make_audit_manifest(info)
+    manifest_path = OPS / 'audit_manifest.json'
+    terminal_path = OPS / 'terminal.json'
+    old_terminal = read_json(terminal_path) if terminal_path.exists() else None
+    if old_terminal is not None:
+        require(old_terminal.get('root') == info['root']
+                and old_terminal.get('gitrev') == info['gitrev'],
+                'Existing terminal does not belong to this frozen batch')
+        if old_terminal.get('status') == 'completed':
+            require(manifest_path.is_file() and read_json(manifest_path) == manifest
+                    and old_terminal.get('audit_manifest_sha256') == file_sha(manifest_path),
+                    'Existing completed terminal/audit manifest differs from verified batch')
+            print(json.dumps({'status': 'already_completed', 'root': info['root'],
+                              'audit_manifest_sha256': file_sha(manifest_path)}))
+            return
+        require(old_terminal.get('status') == 'failed' and recover_failed_terminal,
+                'Failed terminal requires explicit --recover-failed-terminal; never overwrite silently')
+        require(old_terminal.get('phase') in (None, 'post_training_finalize'),
+                'Only post-training registration failure can replace a failed terminal')
+    write_new_or_matching_json(manifest_path, manifest)
+    recovery = {'method': 'explicit_read_only_finalize', 'recovered_at': utc_now(),
+                'training_restarted': False}
+    if old_terminal is not None:
+        archive = OPS / 'terminal.failed-before-finalize.json'
+        old_bytes = terminal_path.read_bytes()
+        if archive.exists():
+            require(archive.read_bytes() == old_bytes,
+                    'Earlier failed-terminal archive differs; manual investigation required')
+        else:
+            with archive.open('xb') as stream:
+                stream.write(old_bytes)
+        recovery['prior_failed_terminal'] = str(archive)
+        recovery['prior_failed_terminal_sha256'] = file_sha(archive)
+    write_json(terminal_path, completed_terminal(info, recovery=recovery))
+    print(json.dumps({'status': 'completed', 'root': info['root'],
+                      'audit_manifest_sha256': file_sha(manifest_path),
+                      'training_restarted': False}))
+
+
 def worker() -> None:
     pod_guard()
     info = read_json(OPS / 'launch.json')
+    training_completed = False
     try:
         require(info['source_root'] == str(REPO), 'Stage14 source snapshot changed')
         revision(info['gitrev'])
@@ -723,19 +854,17 @@ def worker() -> None:
                    '--gpus', ','.join(map(str, info['gpus'])), '--run_root', info['root']]
         with (OPS / 'training.log').open('x', encoding='utf-8') as log:
             subprocess.run(command, cwd=REPO, stdout=log, stderr=subprocess.STDOUT, check=True)
+        training_completed = True
         require(info['stage13_audit'] == stage13_audit(),
                 'Audited Stage13 predecessor changed during Stage14 training')
         verify_training_inputs(read_json(OPS / 'smoke.json'))
         manifest = make_audit_manifest(info)
-        write_json(OPS / 'audit_manifest.json', manifest)
-        write_json(OPS / 'terminal.json', {'status': 'completed', 'root': info['root'],
-            'gitrev': info['gitrev'], 'finished_at': utc_now(),
-            'audit_manifest': str(OPS / 'audit_manifest.json'),
-            'audit_manifest_sha256': file_sha(OPS / 'audit_manifest.json'),
-            'review_state': 'pending_independent_pod_audit'})
+        write_new_or_matching_json(OPS / 'audit_manifest.json', manifest)
+        write_json(OPS / 'terminal.json', completed_terminal(info))
     except BaseException:
         write_json(OPS / 'terminal.json', {'status': 'failed', 'root': info['root'],
             'gitrev': info['gitrev'], 'finished_at': utc_now(),
+            'phase': 'post_training_finalize' if training_completed else 'batch_training',
             'error': traceback.format_exc(), 'retry_policy': 'No automatic rerun'})
         raise
 
@@ -743,17 +872,24 @@ def worker() -> None:
 if __name__ == '__main__':
     pod_guard()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['smoke', 'launch', 'worker'])
+    parser.add_argument('action', choices=['smoke', 'launch', 'worker', 'finalize'])
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--stage13-audit', type=Path,
                         help='Exact independent Stage13 audit receipt, required for launch')
     parser.add_argument('--source-commit',
-                        help='Exact Stage14 source commit; required for smoke and launch')
+                        help='Exact Stage14 source commit; required for smoke, launch and finalize')
+    parser.add_argument('--recover-failed-terminal', action='store_true',
+                        help='Explicitly archive and replace a failed post-training terminal')
     args = parser.parse_args()
+    require(not args.recover_failed_terminal or args.action == 'finalize',
+            '--recover-failed-terminal is only valid for finalize')
     OPS.mkdir(parents=True, exist_ok=True)
     if args.action == 'smoke':
         smoke(args.gpu, args.source_commit)
     elif args.action == 'launch':
         launch(args.stage13_audit, args.source_commit)
+    elif args.action == 'finalize':
+        finalize_completed(args.stage13_audit, args.source_commit,
+                           args.recover_failed_terminal)
     else:
         worker()
