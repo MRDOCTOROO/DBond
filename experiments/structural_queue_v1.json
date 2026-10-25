@@ -502,7 +502,7 @@
     {
       "id": 13,
       "name": "single_k5_same_fold_seed_ensemble_ranking_v2",
-      "status": "submitted",
+      "status": "failed_reviewed",
       "authorized_at_local": "2026-10-25",
       "predecessor_failed_stage": 12,
       "protocol": "experiments/k5_seed_ensemble_ranking_v2.md",
@@ -523,7 +523,10 @@
       "training_base_seeds": [42, 43, 45],
       "fold_ids": [1222, 2252, 3514, 6072, 9075],
       "arms": ["seed42_single_k5", "seed43_single_k5", "seed45_single_k5", "equal_q_mean_3seed"],
-      "action": "From scratch replay all five folds. Source identity is SHA plus smooth/classification metric replay; historical q_seq/Top10 drift recorded only as diagnostics. Fixed same-pass three-seed equal q mean and 0.5 threshold; independently recompute saved NPZ and report before exact completion-event ack. No auto-follow-up."
+      "action": "From scratch replay all five folds. Frozen v2 stopped on a marginal historical ex_precision scalar replay gate in seed42/fold1222 before saving any fold result; preserve failed root and do not reuse it.",
+      "finished_at_utc": "2026-10-25T11:18:51.261654+00:00",
+      "event_acknowledged": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_k5_seed_ensemble_v2_batch/20261025_111655|failed",
+      "failure": "seed42/fold1222 ex_precision archived-vs-replayed difference 0.000020537313304647142 exceeded the 0.0000200000 scalar tolerance by 0.0000005373133; other metrics nearly matched. This is a floating-point replay gate failure, not an observed ensemble ranking result."
     }
   ],
   "auto_advance": false,
