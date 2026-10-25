@@ -31,6 +31,8 @@ from train_5fold import _stable_fold_seed, make_fold_config
 
 OPS = Path('/mnt/pvc/graphtrans/dbond_s14_pairwise_ranking_20261026_ops')
 CHECKPOINT_BASE = Path('/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/stage14_pairwise_batch')
+STAGE13_OPS = Path('/mnt/pvc/graphtrans/dbond_s13_multiscale_conv_20261026_ops')
+STAGE13_AUDIT = STAGE13_OPS / 'independent_audit/audit_receipt.json'
 PRIOR = Path('/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops')
 TARGETS = Path('/mnt/pvc/graphtrans/four_state_targets_v1')
 ARMS = {'lambda0': 0.0, 'lambda001': 0.01, 'lambda005': 0.05, 'lambda010': 0.10}
@@ -104,6 +106,42 @@ def bound_run_root(info: dict) -> Path:
     require(root.parent == CHECKPOINT_BASE.resolve() and root.name,
             'Stage14 run root escaped the dedicated graph_transform checkpoint namespace')
     return root
+
+
+def stage13_audit(receipt_path: Path = STAGE13_AUDIT) -> dict:
+    """Stage14 may start only after the immediately preceding round is audited."""
+    require(receipt_path.resolve() == STAGE13_AUDIT.resolve(),
+            'Stage13 audit receipt must be in its dedicated independent ops namespace')
+    files = {'receipt': STAGE13_AUDIT,
+             'launch': STAGE13_OPS / 'launch.json',
+             'terminal': STAGE13_OPS / 'terminal.json',
+             'manifest': STAGE13_OPS / 'audit_manifest.json'}
+    require(all(path.is_file() for path in files.values()),
+            'Stage13 launch, terminal, audit manifest or independent audit receipt missing')
+    objects = {name: read_json(path) for name, path in files.items()}
+    receipt, launch, terminal, manifest = (objects[name] for name in
+                                           ('receipt', 'launch', 'terminal', 'manifest'))
+    root = launch.get('root')
+    source = launch.get('source_revision')
+    require(receipt.get('status') == 'audited' and receipt.get('stage') == 'S13'
+            and Path(receipt.get('ops', '')).resolve() == STAGE13_OPS.resolve()
+            and launch.get('stage') == terminal.get('stage') == manifest.get('stage') == 'S13'
+            and launch.get('ops_root') == str(STAGE13_OPS)
+            and root == launch.get('run_root') == terminal.get('root')
+            == terminal.get('run_root') == manifest.get('root') == receipt.get('root')
+            and source == terminal.get('source_revision')
+            == manifest.get('source_commit') == receipt.get('source_commit')
+            and terminal.get('status') == 'completed'
+            and receipt.get('manifest_sha256') == file_sha(files['manifest'])
+            and len(manifest.get('arms', [])) == 15,
+            'Stage13 independent audit, run root, source or manifest binding failed')
+    require(Path(root).resolve().parent == Path('/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform').resolve(),
+            'Stage13 audited run root escaped graph_transform checkpoints')
+    return {'path': str(STAGE13_AUDIT), 'receipt_sha256': file_sha(files['receipt']),
+            'launch_sha256': file_sha(files['launch']),
+            'terminal_sha256': file_sha(files['terminal']),
+            'manifest_sha256': file_sha(files['manifest']),
+            'root': root, 'source_commit': source}
 
 
 def canonical_config(value: dict, arm: str) -> dict:
@@ -203,6 +241,7 @@ def smoke(gpu: int) -> None:
 
     require(torch.cuda.is_available(), 'Pod CUDA required for smoke')
     torch.cuda.set_device(gpu)
+    predecessor = stage13_audit()
     old = prior_audit()
     configs = {arm: yaml.safe_load(config_path(arm).read_text(encoding='utf-8')) for arm in ARMS}
     canonical = None
@@ -373,7 +412,8 @@ def smoke(gpu: int) -> None:
              'source_sha256': bound_source,
              'source_provenance': committed_source_provenance(bound_source, gitrev),
              'configs': {arm: file_sha(config_path(arm)) for arm in ARMS},
-             'prior': old, 'folds': evidence, 'smoke_losses': losses,
+             'stage13_audit': predecessor, 'prior': old,
+             'folds': evidence, 'smoke_losses': losses,
              'smoke_ranking_stats': checks,
              'definition': 'train-only folded soft-q; condition-first/sequence-second aggregation; '
                            'distinct-sequence unordered pairs with |target gap|>0.05; '
@@ -389,8 +429,10 @@ def smoke(gpu: int) -> None:
     print(json.dumps({'status': proof['status'], 'gitrev': proof['gitrev'], 'checks': proof['checks']}))
 
 
-def launch() -> None:
+def launch(receipt_path: Path | None) -> None:
     pod_guard()
+    require(receipt_path is not None,
+            'Launch requires --stage13-audit pointing to the audited Stage13 receipt')
     claim = OPS / 'launch.claim'
     worker_started = False
     try:
@@ -406,7 +448,9 @@ def launch() -> None:
                 and proof['source_provenance'] == committed_source_provenance(proof['source_sha256'], revision())
                 and all(proof['configs'][arm] == file_sha(config_path(arm)) for arm in ARMS),
                 'Stale or incomplete source/config-bound pod smoke')
-        require(proof['prior'] == prior_audit(), 'Reviewed predecessor changed')
+        require(proof['stage13_audit'] == stage13_audit(receipt_path),
+                'Stage13 audit receipt changed or was not independently passed')
+        require(proof['prior'] == prior_audit(), 'Reviewed historical baseline changed')
         verify_training_inputs(proof)
         from four_state_ops import idle
         devices, gpu_rows, processes = idle()
@@ -417,6 +461,7 @@ def launch() -> None:
                 'fold_seeds': {fold: _stable_fold_seed(42, fold) for fold in FOLDS},
                 'configs': proof['configs'], 'smoke_sha256': file_sha(OPS / 'smoke.json'),
                 'source_sha256': proof['source_sha256'], 'prior': proof['prior'],
+                'stage13_audit': proof['stage13_audit'],
                 'source_provenance': proof['source_provenance'],
                 'gpus': devices, 'gpu_preflight': gpu_rows,
                 'compute_processes': processes,
@@ -526,7 +571,8 @@ def make_audit_manifest(info: dict) -> dict:
                             'prediction_rows': prediction_rows,
                             **{name: str(path) for name, path in files.items()},
                             **{name + '_sha256': file_sha(path) for name, path in files.items()}})
-    return {'stage': 14, 'root': info['root'], 'source_commit': info['gitrev'],
+    return {'stage': 14, 'ops': str(OPS), 'root': info['root'],
+            'source_commit': info['gitrev'], 'stage13_audit': info['stage13_audit'],
             'arms': entries, 'same_round_control': 'lambda0',
             'pairwise_mode': 'train-only logistic, tau0.1, delta0.05; no sequence-aware sampler',
             'scope': 'Manifest binds training fold, internal validation and same-pass external prediction; '
@@ -538,6 +584,8 @@ def worker() -> None:
     info = read_json(OPS / 'launch.json')
     try:
         bound_run_root(info)
+        require(info['stage13_audit'] == stage13_audit(),
+                'Audited Stage13 predecessor changed after Stage14 launch')
         require(revision() == info['gitrev'] and source_manifest() == info['source_sha256']
                 and all(file_sha(config_path(arm)) == info['configs'][arm] for arm in ARMS),
                 'Source/config changed after launch')
@@ -548,6 +596,8 @@ def worker() -> None:
                    '--gpus', ','.join(map(str, info['gpus'])), '--run_root', info['root']]
         with (OPS / 'training.log').open('x', encoding='utf-8') as log:
             subprocess.run(command, cwd=REPO, stdout=log, stderr=subprocess.STDOUT, check=True)
+        require(info['stage13_audit'] == stage13_audit(),
+                'Audited Stage13 predecessor changed during Stage14 training')
         verify_training_inputs(read_json(OPS / 'smoke.json'))
         manifest = make_audit_manifest(info)
         write_json(OPS / 'audit_manifest.json', manifest)
@@ -568,11 +618,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['smoke', 'launch', 'worker'])
     parser.add_argument('--gpu', type=int, default=0)
+    parser.add_argument('--stage13-audit', type=Path,
+                        help='Exact independent Stage13 audit receipt, required for launch')
     args = parser.parse_args()
     OPS.mkdir(parents=True, exist_ok=True)
     if args.action == 'smoke':
         smoke(args.gpu)
     elif args.action == 'launch':
-        launch()
+        launch(args.stage13_audit)
     else:
         worker()
