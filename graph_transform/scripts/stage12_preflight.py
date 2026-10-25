@@ -289,12 +289,19 @@ def run(args):
         poisoned = dict(batch)
         poisoned['bond_theory'] = batch['bond_theory'].clone()
         poisoned['bond_theory'][~mask] = float('nan')
+        poisoned_cpu = dict(small_cpu)
+        poisoned_cpu['bond_theory'] = small_cpu['bond_theory'].clone()
+        cpu_mask = small_cpu['label_mask'].bool()
+        poisoned_cpu['bond_theory'][~cpu_mask] = float('nan')
+        require(torch.equal(batch['bond_theory'][mask], poisoned['bond_theory'][mask])
+                and torch.isnan(poisoned['bond_theory'][~mask]).all(),
+                'Theory poison altered a valid source or missed padded positions')
         require(len(first_train) >= 128 and len(first_val) >= 512,
                 'Longest train128/val512 resource checks require full batches')
         train128_cpu = collate(first_train, longest_indices(first_train, 128))
         val512_cpu = collate(first_val, longest_indices(first_val, 512))
         initial_shared = None
-        initial_fused = {}
+        initial_fused_cpu = {}
         expected_heads = stage12_head_parameters()
         for arm, mode in zip(ARMS, MODES):
             torch.manual_seed(first_runtime[arm]['experiment']['seed'])
@@ -311,16 +318,49 @@ def run(args):
             state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
             restored = GraphTransformer(build_model_config(first_runtime[arm])).cpu()
             restored.load_state_dict(state, strict=True)
+            restored.eval()
             model.eval()
+            prior_cpu_threads = torch.get_num_threads()
+            try:
+                torch.set_num_threads(1)
+                with torch.no_grad():
+                    clean_cpu = restored(small_cpu)[cpu_mask]
+                    poisoned_cpu_output = restored(poisoned_cpu)[cpu_mask]
+            finally:
+                torch.set_num_threads(prior_cpu_threads)
             with torch.no_grad():
-                initial_fused[mode] = model(batch)[mask].detach().clone()
-                poisoned_output = model(poisoned)[mask]
-                require(torch.equal(initial_fused[mode], poisoned_output),
-                        f'{arm}: padded theory changed valid-bond prediction')
+                require(torch.isfinite(clean_cpu).all()
+                        and torch.isfinite(poisoned_cpu_output).all()
+                        and torch.equal(clean_cpu, poisoned_cpu_output),
+                        f'{arm}: deterministic CPU forward detected padded-theory leakage')
+                initial_fused_cpu[mode] = clean_cpu.detach().clone()
+                clean_gpu_1 = model(batch)[mask]
+                clean_gpu_2 = model(batch)[mask]
+                poisoned_gpu_1 = model(poisoned)[mask]
+                poisoned_gpu_2 = model(poisoned)[mask]
+                require(all(torch.isfinite(value).all() for value in
+                            (clean_gpu_1, clean_gpu_2, poisoned_gpu_1, poisoned_gpu_2)),
+                        f'{arm}: padded theory produced nonfinite GPU prediction')
+                repeat_delta = max(float((clean_gpu_1 - clean_gpu_2).abs().max()),
+                                   float((poisoned_gpu_1 - poisoned_gpu_2).abs().max()))
+                perturb_delta = max(float((clean_gpu_1 - poisoned_gpu_1).abs().max()),
+                                    float((clean_gpu_2 - poisoned_gpu_2).abs().max()))
+                scale = max(1., *(float(value.abs().max()) for value in
+                                  (clean_gpu_1, clean_gpu_2, poisoned_gpu_1, poisoned_gpu_2)))
+                tolerance = max(4 * repeat_delta + 1e-6 * scale, 2e-5 * scale)
+                require(repeat_delta <= 1e-4 * scale and perturb_delta <= tolerance,
+                        f'{arm}: GPU padding perturbation exceeds repeat-forward variation '
+                        f'(repeat={repeat_delta:.3g}, perturb={perturb_delta:.3g}, '
+                        f'limit={tolerance:.3g})')
+                padding_diagnostic = {'cpu_exact': True,
+                    'gpu_repeat_max_abs': repeat_delta,
+                    'gpu_poison_max_abs': perturb_delta,
+                    'gpu_tolerance': tolerance}
             if mode in ('equal', 'softmax_gate', 'softmax_gate_residual'):
                 receipt['arms'][arm] = mask_check(model.bond_head, device)
             else:
                 receipt['arms'][arm] = {}
+            receipt['arms'][arm]['padding_isolation'] = padding_diagnostic
             model.train()
             model.zero_grad(set_to_none=True)
             model.enable_stage12_diagnostics = mode in ('softmax_gate', 'softmax_gate_residual')
@@ -389,9 +429,9 @@ def run(args):
                 torch.cuda.max_memory_allocated(device))
             del val512, val_output, model
             torch.cuda.empty_cache()
-        require(torch.allclose(initial_fused['equal'], initial_fused['softmax_gate'], atol=1e-6)
-                and torch.allclose(initial_fused['softmax_gate'],
-                                   initial_fused['softmax_gate_residual'], atol=1e-6),
+        require(torch.equal(initial_fused_cpu['equal'], initial_fused_cpu['softmax_gate'])
+                and torch.equal(initial_fused_cpu['softmax_gate'],
+                                initial_fused_cpu['softmax_gate_residual']),
                 'Equal/gated/residual initial functions differ')
     receipt['status'] = 'passed'
     out.write_text(json.dumps(receipt, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
