@@ -3,7 +3,7 @@
   "authorization_date_local": "2026-10-21",
   "thread_id": "01a1547f-f644-7d70-816a-1b3fe2ad8e80",
   "protocol": "experiments/structural_queue_v1.md",
-  "execution_policy": "stages1_2_5_3_6_7_8_10_reviewed_acked; stage9_failed_analysis_reported_acked_with_restricted_F1_conclusion; stage11_parallel_global_seed42_same_round_replication_authorized; learned_graph_stage4_deferred",
+  "execution_policy": "stages1_2_5_3_6_7_8_10_11_reviewed_acked; stage9_failed_analysis_reported_acked_with_restricted_F1_conclusion; learned_graph_stage4_deferred; no_auto_advance",
   "compute_location": "gsj-5090.devpod:/mnt/pvc/graphtrans/DBond",
   "reference_commit": "4da48eeab50decd0a31fbf64f2f179478a6624a7",
   "structural_baseline": {
@@ -420,7 +420,7 @@
     {
       "id": 11,
       "name": "parallel_global_seed42_replication_k5",
-      "status": "submitted",
+      "status": "reviewed",
       "authorized_at_local": "2026-10-25",
       "requires_reviewed_stage": 10,
       "protocol": "experiments/parallel_global_seed_replication_v1.md",
@@ -457,7 +457,18 @@
       "source_discovery_ops": "/mnt/pvc/graphtrans/four_state_parallel_global_ops",
       "source_discovery_root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_parallel_global_batch/20261024_171434",
       "source_discovery_gitrev": "ce0185c1c313a9f36410cd33701699fe8df53579",
-      "completion_action": "Independently audit pod-only same-round seed42 results, compare separately with seed45 paired deltas and paper baselines, report and acknowledge exact terminal event; stop. No automatic paper promotion or further experiment."
+      "completion_action": "Independently audited, reported and acknowledged; stop. No automatic paper promotion or further experiment.",
+      "event_acknowledged": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_parallel_global_replication_batch/20261025_052100|completed",
+      "reviewed_at_local": "2026-10-25",
+      "report": "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops/report.md",
+      "analysis_report": "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops/analysis.md",
+      "review_receipt": "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops/review_receipt.json",
+      "independent_source_audit": "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops/independent_source_audit_20261025.json",
+      "independent_metric_audit": "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops/independent_metrics_agent_20261025.json",
+      "checkpoint_registry": "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops/checkpoint_registry.json",
+      "dashboard": "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops/parallel_global_dashboard.html",
+      "local_receipts": "F:/codexout/dbond_parallel_global_replication_results_20261025/",
+      "outcome": "Seed42 same-round cross vs single: F1 +0.031680pp (3/5), AUC -0.000382, q-Brier +0.001713, spectrum harmonic F1 -0.000979pp. All four preregistered engineering gates failed. q_seq +0.001994 and Top10 +0.007288 have weak positive mean directions, not robust ordering evidence. Source and raw CSV independent audits passed; retain single-k5 as stronger candidate. Untouched sequence-disjoint confirmation needed before paper-main promotion."
     }
   ],
   "auto_advance": false,
@@ -475,7 +486,7 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "Stage11 seed42 single/parallel4_cross same-round replication is authorized and planned; pod smoke must pass before one launch, then completion-event-only audit/report/ack. No other experiment authorized. Learned graph and chemical priors remain deferred.",
+    "next_new_experiment": "No automatic experiment. Stage11 reviewed and acked. Any confirmatory untouched sequence-disjoint evaluation needs separate user authorization; learned graph and chemical priors remain deferred.",
     "serial_stage_ids": []
   },
   "auto_advance_allowlist": []
