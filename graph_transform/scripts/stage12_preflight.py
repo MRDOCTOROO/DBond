@@ -153,10 +153,10 @@ def mask_check(head, device):
         require(torch.equal(weights[~mask], torch.zeros_like(weights[~mask])),
                 'Unavailable source received nonzero weight')
         changed = [part.clone() for part in parts]
-        changed[2][0] += 1000  # edge unavailable for bond 0
-        changed[5][1] += 1000  # theory unavailable for bond 1
+        changed[2][0] = float('nan')  # edge unavailable for bond 0
+        changed[5][1] = float('inf')  # theory unavailable for bond 1
         for index in (0, 1, 3, 4):
-            changed[index][2] += 1000  # residue branch unavailable for bond 2
+            changed[index][2] = float('-inf')  # residue branch unavailable for bond 2
         altered = head(changed, mask)
         require(torch.allclose(original, altered, atol=1e-6, rtol=1e-6),
                 'Masked source changed prediction')
@@ -254,6 +254,7 @@ def run(args):
                 'val_split_sha256': sha(val.csv_path),
                 'outer_train_sha256': sha(cfg['data']['train_csv_path']),
                 'outer_test_sha256': sha(cfg['data']['test_csv_path']),
+                'validation_source_sha256': sha(cfg['data']['validation_source_csv_path']),
                 'four_state_manifest_sha256': sha(cfg['data']['four_state_targets_manifest'])}
             if first_train is None:
                 first_train = train

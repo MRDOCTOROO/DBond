@@ -22,13 +22,15 @@ import traceback
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / 'graph_transform/scripts'
 sys.path[:0] = [str(ROOT / 'graph_transform'), str(SCRIPTS)]
-from train_5fold import _stable_fold_seed
+from train_5fold import _stable_fold_seed, TRAIN_SUFFIX, TEST_SUFFIX
 
 ARMS = ('a_legacy', 'b_wide_mlp', 'c_equal', 'd_softmax_gate',
         'e_softmax_gate_residual')
 MODES = ('legacy', 'wide_mlp', 'equal', 'softmax_gate',
          'softmax_gate_residual')
 FOLDS = ('1222', '2252', '3514', '6072', '9075')
+OPS_PATH = Path('/mnt/pvc/graphtrans/dbond_s12_gated_fusion_20261026_ops')
+RUN_PARENT = Path('/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/dbond_s12_gated_fusion_batch')
 
 
 def now():
@@ -86,9 +88,47 @@ def pod_only():
             'Stage 12 ops run only in the authorized pod source snapshot')
 
 
+def require_ops(ops):
+    require(ops == OPS_PATH, f'Stage 12 ops must use {OPS_PATH}')
+
+
+def require_root(root):
+    require(root != RUN_PARENT and RUN_PARENT in root.parents,
+            f'Stage 12 run root must be below {RUN_PARENT}')
+
+
+def verify_smoke_data(ops):
+    """Bind the still-live outer data and targets to the pod smoke receipt."""
+    import yaml
+    smoke = read(ops / 'smoke.json')
+    require(smoke.get('status') == 'passed'
+            and set(smoke.get('folds', {})) == set(FOLDS),
+            'Incomplete Stage 12 smoke data receipt')
+    folded = (ROOT / 'dataset/5fold_folded').resolve()
+    soft = (ROOT / 'dataset/5fold_soft').resolve()
+    require(smoke['data_roots'] == {'folded': str(folded), 'soft': str(soft)},
+            'Dataset symlink targets differ from smoke')
+    base = yaml.safe_load(config(ARMS[0]).read_text(encoding='utf-8'))['data']
+    for fold in FOLDS:
+        expected = smoke['folds'][fold]
+        paths = {
+            'outer_train_sha256': folded / f'{fold}{TRAIN_SUFFIX}',
+            'outer_test_sha256': folded / f'{fold}{TEST_SUFFIX}',
+            'validation_source_sha256': absolute(
+                base['validation_source_csv_template'].format(fold=fold)),
+            'four_state_manifest_sha256': absolute(
+                base['four_state_targets_manifest_template'].format(fold=fold)),
+        }
+        for name, path in paths.items():
+            require(path.is_file() and sha(path) == expected.get(name),
+                    f'{fold}: {name} differs from pod smoke')
+    return smoke
+
+
 def preflight(args):
     pod_only()
     ops = Path(args.ops).resolve()
+    require_ops(ops)
     ops.mkdir(parents=True, exist_ok=True)
     require(not (ops / 'smoke.json').exists(), 'Preflight receipt exists; do not overwrite')
     bound = sources()
@@ -103,6 +143,7 @@ def preflight(args):
     smoke = read(ops / 'smoke.json')
     require(smoke.get('status') == 'passed' and bound == sources(),
             'Source changed during preflight')
+    verify_smoke_data(ops)
     write_new(ops / 'source_manifest.json', bound)
     print(json.dumps({'status': 'smoke_passed', 'ops': str(ops),
                       'smoke_sha256': sha(ops / 'smoke.json')}))
@@ -112,11 +153,14 @@ def launch(args):
     pod_only()
     ops = Path(args.ops).resolve()
     root = Path(args.root).resolve()
+    require_ops(ops)
+    require_root(root)
     require((ops / 'smoke.json').is_file()
             and read(ops / 'smoke.json').get('status') == 'passed',
             'Smoke must pass before launch')
     require(read(ops / 'source_manifest.json') == sources(),
             'Source differs from preflight snapshot')
+    verify_smoke_data(ops)
     require(args.source_commit and re.fullmatch(r'[0-9a-f]{40}', args.source_commit),
             'Pass the frozen source commit SHA')
     actual_commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'],
@@ -129,43 +173,49 @@ def launch(args):
             'Invalid GPU allocation')
     write_new(ops / 'launch.claim', {'pid': os.getpid(), 'claimed_at': now(),
                                      'root': str(root)})
-    root.mkdir(parents=True, exist_ok=False)
-    arm_rows = []
-    for arm, mode in zip(ARMS, MODES):
-        folder = root / 'arms' / arm
-        folder.mkdir(parents=True)
-        snapshot = folder / 'config.yaml'
-        snapshot.write_bytes(config(arm).read_bytes())
-        arm_rows.append({'arm': arm, 'mode': mode, 'config': str(snapshot),
-                         'config_sha256': sha(snapshot), 'cv_root': str(folder / 'cv'),
-                         'log_root': str(folder / 'logs'), 'status': 'planned'})
-    launch_record = {
-        'stage': 'S12', 'status': 'submitted', 'created_at': now(),
-        'ops': str(ops), 'root': str(root), 'source_root': str(ROOT),
-        'source_commit': args.source_commit,
-        'source_manifest_sha256': sha(ops / 'source_manifest.json'),
-        'smoke_sha256': sha(ops / 'smoke.json'), 'gpus': devices,
-        'folds': list(FOLDS), 'base_seed': 42, 'split_base_seed': 42,
-        'fold_seeds': {fold: {'training': _stable_fold_seed(42, fold),
-                              'split': _stable_fold_seed(42, fold)} for fold in FOLDS},
-        'arms': arm_rows,
-        'checkpoint_selection': 'internal full-spectrum validation max_f1',
-        'prediction_export': 'same_pass_evaluate_logits, float32 roundtrip 9 significant digits',
-    }
-    write_new(ops / 'launch.json', launch_record)
-    write_new(root / 'manifest.json', launch_record)
     try:
+        root.mkdir(parents=True, exist_ok=False)
+        arm_rows = []
+        for arm, mode in zip(ARMS, MODES):
+            folder = root / 'arms' / arm
+            folder.mkdir(parents=True)
+            snapshot = folder / 'config.yaml'
+            snapshot.write_bytes(config(arm).read_bytes())
+            arm_rows.append({'arm': arm, 'mode': mode, 'config': str(snapshot),
+                             'config_sha256': sha(snapshot), 'cv_root': str(folder / 'cv'),
+                             'log_root': str(folder / 'logs'), 'status': 'planned'})
+        launch_record = {
+            'stage': 'S12', 'status': 'submitted', 'created_at': now(),
+            'ops': str(ops), 'root': str(root), 'source_root': str(ROOT),
+            'source_commit': args.source_commit,
+            'source_manifest_sha256': sha(ops / 'source_manifest.json'),
+            'smoke_sha256': sha(ops / 'smoke.json'), 'gpus': devices,
+            'folds': list(FOLDS), 'base_seed': 42, 'split_base_seed': 42,
+            'fold_seeds': {fold: {'training': _stable_fold_seed(42, fold),
+                                  'split': _stable_fold_seed(42, fold)} for fold in FOLDS},
+            'arms': arm_rows,
+            'checkpoint_selection': 'internal full-spectrum validation max_f1',
+            'prediction_export': 'same_pass_evaluate_logits, float32 roundtrip 9 significant digits',
+        }
+        write_new(ops / 'launch.json', launch_record)
+        write_new(root / 'manifest.json', launch_record)
         env = dict(os.environ, PYTHONUNBUFFERED='1')
         with (ops / 'worker.log').open('x', encoding='utf-8') as log:
             worker = subprocess.Popen([sys.executable, __file__, 'worker',
                 '--ops', str(ops)], cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-        launch_record['worker_pid'] = worker.pid
-        atomic(ops / 'launch.json', launch_record)
-        atomic(root / 'manifest.json', launch_record)
     except BaseException:
-        write_new(ops / 'terminal.json', {'status': 'failed', 'time': now(),
-            'root': str(root), 'error': traceback.format_exc()})
+        error = traceback.format_exc()
+        write_new(ops / 'terminal.json', {'stage': 'S12', 'status': 'failed',
+            'time': now(), 'root': str(root), 'phase': 'launch_after_claim',
+            'error': error})
+        write_new(ops / 'recovery.json', {'stage': 'S12',
+            'status': 'manual_review_required', 'time': now(),
+            'claim': str(ops / 'launch.claim'), 'root': str(root),
+            'launch_manifest': str(ops / 'launch.json'),
+            'source_commit': args.source_commit,
+            'instruction': 'Inspect partial root, claim, and terminal before any deliberate repair; never rerun automatically.',
+            'error': error})
         raise
     print(json.dumps({'status': 'submitted', 'worker_pid': worker.pid,
                       'root': str(root), 'ops': str(ops)}))
@@ -174,8 +224,10 @@ def launch(args):
 def worker(args):
     pod_only()
     ops = Path(args.ops).resolve()
+    require_ops(ops)
     info = read(ops / 'launch.json')
     root = Path(info['root'])
+    require_root(root.resolve())
     status_path = ops / 'status.json'
     status = {'stage': 'S12', 'status': 'running', 'time': now(),
               'root': str(root), 'worker_pid': os.getpid(), 'arms': []}
@@ -184,10 +236,12 @@ def worker(args):
     try:
         require(read(ops / 'source_manifest.json') == sources(),
                 'Source changed before worker start')
+        smoke = verify_smoke_data(ops)
         for arm in info['arms']:
             label = arm['arm']
             require(read(ops / 'source_manifest.json') == sources(),
                     f'Source changed before {label}')
+            verify_smoke_data(ops)
             require(sha(arm['config']) == arm['config_sha256'],
                     f'{label}: config snapshot changed')
             cv = Path(arm['cv_root'])
@@ -216,6 +270,8 @@ def worker(args):
                    'config_sha256': arm['config_sha256'], 'cv_root': str(cv),
                    'run_log': str(root / 'arms' / label / 'run.log')}
             if result == 0 and (cv / '5fold_metrics.csv').is_file():
+                verify_smoke_data(ops)
+                verify_completed_arm_data(cv, smoke)
                 row['metrics_sha256'] = sha(cv / '5fold_metrics.csv')
             else:
                 row['status'] = 'failed'
@@ -246,6 +302,35 @@ def unique(folder, pattern):
     paths = list(folder.glob(pattern))
     require(len(paths) == 1, f'Expected one {pattern} under {folder}; got {len(paths)}')
     return paths[0].resolve()
+
+
+def verify_completed_arm_data(cv, smoke):
+    """Match formal run splits to the smoke splits before an arm can complete."""
+    import yaml
+    for fold in FOLDS:
+        folder = cv / f'fold_{fold}'
+        expected = smoke['folds'][fold]
+        runtime = yaml.safe_load((folder / 'config.yaml').read_text(encoding='utf-8'))
+        provenance_path = unique(folder, 'checkpoints/**/row_validation_provenance.json')
+        provenance = read(provenance_path)
+        paths = {
+            'outer_train_sha256': absolute(runtime['data']['train_csv_path']),
+            'outer_test_sha256': absolute(runtime['data']['test_csv_path']),
+            'validation_source_sha256': absolute(provenance['source_path']),
+            'train_split_sha256': absolute(provenance['split_train_csv']),
+            'val_split_sha256': absolute(provenance['split_val_csv']),
+            'four_state_manifest_sha256': absolute(
+                runtime['data']['four_state_targets_manifest']),
+        }
+        for name, path in paths.items():
+            require(path.is_file() and sha(path) == expected.get(name),
+                    f'{folder}: formal {name} differs from pod smoke')
+        require(provenance['source_sha256'] == expected['validation_source_sha256']
+                and provenance['folded_source_sha256'] == expected['outer_train_sha256'],
+                f'{folder}: validation provenance differs from pod smoke')
+        target_provenance = read(provenance_path.with_name('four_state_provenance.json'))
+        require(target_provenance['manifest_sha256'] == expected['four_state_manifest_sha256'],
+                f'{folder}: four-state provenance differs from pod smoke')
 
 
 def verify_prediction(path, checkpoint):
@@ -284,9 +369,12 @@ def finalize(args):
     from models.utils import build_model_config
 
     ops = Path(args.ops).resolve()
+    require_ops(ops)
     info = read(ops / 'launch.json')
     terminal = read(ops / 'terminal.json')
     root = Path(info['root']).resolve()
+    require_root(root)
+    smoke = verify_smoke_data(ops)
     require(terminal['root'] == str(root) and terminal['status'] in ('completed', 'failed'),
             'Missing/mismatched terminal event')
     require(read(ops / 'source_manifest.json') == sources()
@@ -307,6 +395,7 @@ def finalize(args):
             continue
         cv = Path(arm['cv_root']).resolve()
         require(sha(arm['config']) == arm['config_sha256'], f'{label}: config SHA changed')
+        verify_completed_arm_data(cv, smoke)
         for fold in FOLDS:
             folder = cv / f'fold_{fold}'
             runtime_path = folder / 'config.yaml'

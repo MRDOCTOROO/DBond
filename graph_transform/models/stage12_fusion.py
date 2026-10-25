@@ -125,13 +125,17 @@ class ThreeBranchFusionHead(nn.Module):
         if explicit_mask and n and not bool(source_mask.any(dim=1).all()):
             raise ValueError('Stage 12 requires at least one source per valid bond')
 
-        raw = torch.cat(parts, dim=-1)
-        groups = (torch.cat((parts[0], parts[1], parts[3], parts[4]), dim=-1),
-                  parts[2], parts[5])
+        source_roles = (0, 0, 1, 0, 0, 2)
+        masked_parts = [part.masked_fill(~source_mask[:, role:role + 1], 0)
+                        for part, role in zip(parts, source_roles)]
+        raw = torch.cat(masked_parts, dim=-1)
+        groups = (torch.cat((masked_parts[0], masked_parts[1], masked_parts[3],
+                             masked_parts[4]), dim=-1),
+                  masked_parts[2], masked_parts[5])
         projected = torch.stack([F.relu(layer(group)) for layer, group in
                                  zip(self.projections, groups)], dim=1)
         # A missing branch must not influence active gate logits either.
-        projected = projected * source_mask.unsqueeze(-1)
+        projected = projected.masked_fill(~source_mask.unsqueeze(-1), 0)
         if self.mode == 'equal':
             weights = source_mask.to(projected.dtype)
             weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1)
@@ -149,7 +153,8 @@ class ThreeBranchFusionHead(nn.Module):
             raw_mask = torch.stack((source_mask[:, 0], source_mask[:, 0],
                                     source_mask[:, 1], source_mask[:, 0],
                                     source_mask[:, 0], source_mask[:, 2]), dim=-1)
-            masked_raw = raw.reshape(n, 6, self.hidden_dim) * raw_mask.unsqueeze(-1)
+            masked_raw = raw.reshape(n, 6, self.hidden_dim).masked_fill(
+                ~raw_mask.unsqueeze(-1), 0)
             logits = logits + self.raw_residual(masked_raw.flatten(start_dim=1))
         self.last_source_weights = weights.detach() if self.enable_diagnostics else None
         return logits
