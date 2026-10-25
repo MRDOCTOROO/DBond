@@ -30,6 +30,9 @@ CONFIGS = {
     'S13-C': ROOT / 'graph_transform/config/stage13_multiscale/s13_c_multiscale_357_c64.yaml',
 }
 FOLDS = ('1222', '2252', '3514', '6072', '9075')
+ALIASES = [{'arm': 'S13-D', 'alias_of': 'S13-A',
+            'independent_training': False,
+            'reason': 'The original k5 192-channel branch already exactly matches S13-C parameters.'}]
 STAGE12_OPS = Path('/mnt/pvc/graphtrans/dbond_s12_gated_fusion_20261026_ops')
 STAGE13_OPS = Path('/mnt/pvc/graphtrans/dbond_s13_multiscale_conv_20261026_ops')
 STAGE13_RUN_BASE = Path('/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform')
@@ -72,6 +75,17 @@ def replace_json(path, value):
     temporary = Path(path).with_name(Path(path).name + f'.{uuid.uuid4().hex}.tmp')
     write_new_json(temporary, value)
     os.replace(temporary, path)
+
+
+def write_new_or_matching_json(path, value):
+    """Allow registration to resume after a partial ops write, never change it."""
+    path = Path(path)
+    if path.exists():
+        canonical = json.loads(json.dumps(value, allow_nan=False))
+        require(read_json(path) == canonical,
+                f'Existing {path.name} differs from reconstructed output')
+    else:
+        write_new_json(path, value)
 
 
 def pod_only(ops_dir):
@@ -173,28 +187,48 @@ def queue_state(status, run_root=None, detail=None):
 def smoke(args):
     ops = pod_only(args.ops_dir)
     ops.mkdir(parents=True, exist_ok=True)
-    require(not any(ops.iterdir()), 'This Stage 13 ops namespace is not empty')
     require(args.gpu is not None, 'smoke requires --gpu')
-    before = source_fingerprint()
+    require(not (ops / 'launch.json').exists() and not (ops / 'terminal.json').exists(),
+            'Stage 13 was submitted; preflight cannot be repeated')
+    allowed = {'smoke_attempts', 'smoke.json', 'queue.json'}
+    require({path.name for path in ops.iterdir()} <= allowed,
+            'This Stage 13 ops namespace contains non-preflight outputs')
+    prior_smoke = ops / 'smoke.json'
+    if prior_smoke.exists():
+        require(read_json(prior_smoke).get('status') == 'failed',
+                'Passing Stage 13 preflight cannot be repeated')
+    prior_queue = ops / 'queue.json'
+    if prior_queue.exists():
+        require(read_json(prior_queue).get('status') in ('failed', 'smoke_passed'),
+                'Stage 13 queue has advanced past preflight')
+    attempts = ops / 'smoke_attempts'
+    attempts.mkdir(exist_ok=True)
+    previous = sorted(attempts.glob('attempt_*'))
+    require(all(path.is_dir() and (path / 'receipt.json').is_file()
+                for path in previous), 'Incomplete prior Stage 13 preflight receipt')
+    attempt = attempts / f'attempt_{len(previous) + 1:04d}'
+    attempt.mkdir()
     try:
-        structural = ops / 'structural_preflight.json'
-        gpu_proof = ops / 'gpu_smoke.json'
+        before = source_fingerprint()
+        structural = attempt / 'structural_preflight.json'
+        gpu_proof = attempt / 'gpu_smoke.json'
         command = [sys.executable, str(SCRIPTS / 'stage13_multiscale_preflight.py'),
                    '--output', str(structural)]
-        require(run_logged(command, ops / 'structural_preflight.log') == 0,
+        require(run_logged(command, attempt / 'structural_preflight.log') == 0,
                 'Structural preflight failed')
         require(read_json(structural)['status'] == 'passed', 'Structural preflight rejected')
         gpu_environment = dict(os.environ, CUDA_VISIBLE_DEVICES=str(args.gpu),
                                PYTHONUNBUFFERED='1', OMP_NUM_THREADS='2', MKL_NUM_THREADS='2')
         command = [sys.executable, str(SCRIPTS / 'stage13_multiscale_gpu_smoke.py'),
                    '--gpu', '0', '--output', str(gpu_proof)]
-        require(run_logged(command, ops / 'gpu_smoke.log', gpu_environment) == 0,
+        require(run_logged(command, attempt / 'gpu_smoke.log', gpu_environment) == 0,
                 'Real-batch GPU smoke failed')
         require(read_json(gpu_proof)['status'] == 'passed', 'Real-batch GPU smoke rejected')
         require(source_fingerprint() == before, 'Source changed during smoke')
         fold_sources = read_json(gpu_proof)['folds']
         check_fold_sources(fold_sources)
         proof = {'status': 'passed', 'stage': 'S13', 'created_at': now(),
+                 'attempt': str(attempt),
                  'source_revision': git_revision(),
                  'source_tree_sha256': fingerprint_sha(before),
                  'source_files_sha256': before,
@@ -205,19 +239,21 @@ def smoke(args):
                  'smoke_gpu': args.gpu,
                  'fold_sources': fold_sources,
                  'D_alias_of_A': True}
-        write_new_json(ops / 'smoke.json', proof)
-        write_new_json(ops / 'queue.json', queue_state('smoke_passed'))
-        print(json.dumps({'status': 'passed', 'smoke': str(ops / 'smoke.json')}))
+        write_new_json(attempt / 'checks_passed.json', proof)
+        write_new_json(attempt / 'receipt.json', proof)
+        replace_json(ops / 'queue.json', queue_state('smoke_passed'))
+        replace_json(ops / 'smoke.json', proof)
     except BaseException as error:
-        if not (ops / 'smoke.json').exists():
-            write_new_json(ops / 'smoke.json',
-                           {'status': 'failed', 'stage': 'S13', 'at': now(),
-                            'error': f'{type(error).__name__}: {error}',
-                            'traceback': traceback.format_exc()})
-        if not (ops / 'queue.json').exists():
-            write_new_json(ops / 'queue.json', queue_state('failed',
-                           detail=f'{type(error).__name__}: {error}'))
+        failure = {'status': 'failed', 'stage': 'S13', 'at': now(),
+                   'attempt': str(attempt),
+                   'error': f'{type(error).__name__}: {error}',
+                   'traceback': traceback.format_exc()}
+        replace_json(attempt / 'receipt.json', failure)
+        replace_json(ops / 'smoke.json', failure)
+        replace_json(ops / 'queue.json', queue_state('failed', detail=failure['error']))
         raise
+    print(json.dumps({'status': 'passed', 'smoke': str(ops / 'smoke.json'),
+                      'attempt': str(attempt)}))
 
 
 def launch(args):
@@ -227,6 +263,10 @@ def launch(args):
     proof = read_json(ops / 'smoke.json')
     require(proof['status'] == 'passed' and proof['stage'] == 'S13',
             'Passing Stage 13 pod smoke is required before launch')
+    attempt = Path(proof['attempt']).resolve()
+    require(attempt.parent == (ops / 'smoke_attempts').resolve()
+            and read_json(attempt / 'receipt.json') == proof,
+            'Stage 13 passing smoke is not bound to its immutable attempt receipt')
     require(proof['source_files_sha256'] == source_fingerprint()
             and proof['source_tree_sha256'] == fingerprint_sha(source_fingerprint())
             and all(proof['config_sha256'][arm] == sha(path)
@@ -276,6 +316,7 @@ def launch(args):
     info = {'status': 'submitted', 'stage': 'S13', 'created_at': now(),
             'ops': str(ops), 'ops_root': str(ops), 'root': str(run_root),
             'run_root': str(run_root),
+            'source_root': str(ROOT.resolve()),
             'source_revision': source_commit,
             'source_tree_sha256': proof['source_tree_sha256'],
             'source_files_sha256': proof['source_files_sha256'],
@@ -366,7 +407,8 @@ def register_outputs(info, ops):
 
     root = Path(info['run_root'])
     require(info['ops'] == info['ops_root'] == str(ops)
-            and info['root'] == info['run_root'] == str(root),
+            and info['root'] == info['run_root'] == str(root)
+            and Path(info['source_root']).resolve() == ROOT.resolve(),
             'Stage 13 launch/ops/run-root binding mismatch')
     status = read_json(root / 'status.json')
     manifest = read_json(root / 'manifest.json')
@@ -381,14 +423,16 @@ def register_outputs(info, ops):
             'Batch source snapshot or arm completion record mismatch')
     registry = {'status': 'completed_unreviewed', 'stage': 'S13',
                 'ops': str(ops), 'root': str(root),
-                'created_at': now(), 'source_revision': info['source_revision'],
+                'created_at': info['created_at'],
+                'source_root': info['source_root'],
+                'source_revision': info['source_revision'],
                 'source_tree_sha256': info['source_tree_sha256'],
                 'source_files_sha256': info['source_files_sha256'],
                 'run_root': str(root), 'manifest_sha256': sha(root / 'manifest.json'),
                 'status_sha256': sha(root / 'status.json'),
                 'summary': str(root / 'summary/summary.json'),
                 'summary_sha256': sha(root / 'summary/summary.json'),
-                'arms': {}, 'D_alias_of_A': True,
+                'arms': {}, 'D_alias_of_A': True, 'aliases': ALIASES,
                 'required_independent_metrics': ['bond_f1', 'bond_accuracy',
                     'roc_auc', 'pr_auc', 'mcc', 'spectrum_precision',
                     'spectrum_recall', 'spectrum_f1_harmonic', 'q_brier',
@@ -598,24 +642,24 @@ def register_outputs(info, ops):
             'Formal checkpoint parameter counts violate the declared A/C matching')
     audit_manifest = {
         'stage': 'S13', 'ops': str(ops), 'root': str(root),
+        'source_root': info['source_root'],
         'source_commit': info['source_revision'],
         'source_tree_sha256': info['source_tree_sha256'],
         'source_files_sha256': info['source_files_sha256'],
         'arms': audit_rows,
-        'aliases': [{'arm': 'S13-D', 'alias_of': 'S13-A',
-                     'independent_training': False,
-                     'reason': 'The original k5 192-channel branch already exactly matches S13-C parameters.'}],
+        'aliases': ALIASES,
         'required_independent_metrics': registry['required_independent_metrics'],
         'audit_status': 'pending',
     }
-    write_new_json(ops / 'registry.json', registry)
-    write_new_json(ops / 'audit_manifest.json', audit_manifest)
+    write_new_or_matching_json(ops / 'registry.json', registry)
+    write_new_or_matching_json(ops / 'audit_manifest.json', audit_manifest)
     return registry
 
 
 def worker(args):
     ops = pod_only(args.ops_dir)
     info = read_json(ops / 'launch.json')
+    phase = 'frozen_launch_check'
     try:
         replace_json(ops / 'queue.json',
                      queue_state('running', info['run_root']))
@@ -625,6 +669,7 @@ def worker(args):
                 'Stage 13 run root escaped the dedicated checkpoint namespace')
         require(info['ops'] == info['ops_root'] == str(ops)
                 and info['root'] == info['run_root']
+                and Path(info['source_root']).resolve() == ROOT.resolve()
                 and info['status'] == 'submitted'
                 and info['source_files_sha256'] == source_fingerprint()
                 and info['source_tree_sha256'] == fingerprint_sha(source_fingerprint())
@@ -636,6 +681,7 @@ def worker(args):
                 and info['batch_runner_sha256'] == sha(info['batch_runner']),
                 'Frozen launch source, smoke, or predecessor changed')
         check_fold_sources(read_json(ops / 'smoke.json')['fold_sources'])
+        phase = 'training'
         command = [sys.executable, str(SCRIPTS / 'run_architecture_batch.py'),
                    '--configs', *(str(path) for path in CONFIGS.values()),
                    '--fold_data_dir', info['fold_data_dir'],
@@ -645,7 +691,9 @@ def worker(args):
         require(info['source_files_sha256'] == source_fingerprint(),
                 'Frozen Stage 13 source changed during training')
         check_fold_sources(read_json(ops / 'smoke.json')['fold_sources'])
+        phase = 'registration'
         register_outputs(info, ops)
+        phase = 'terminal_event'
         replace_json(ops / 'queue.json',
                      queue_state('completed', info['run_root'],
                                  detail='Independent metric audit pending'))
@@ -653,6 +701,7 @@ def worker(args):
                        {'status': 'completed', 'stage': 'S13', 'finished_at': now(),
                         'ops': str(ops),
                         'root': info['root'], 'run_root': info['run_root'],
+                        'source_root': info['source_root'],
                         'source_revision': info['source_revision'],
                         'registry': str(ops / 'registry.json'),
                         'registry_sha256': sha(ops / 'registry.json'),
@@ -667,20 +716,108 @@ def worker(args):
                        {'status': 'failed', 'stage': 'S13', 'finished_at': now(),
                         'ops': str(ops),
                         'root': info['root'], 'run_root': info['run_root'],
+                        'source_root': info['source_root'],
                         'source_revision': info['source_revision'],
+                        'failure_phase': phase,
                         'error': f'{type(error).__name__}: {error}',
                         'traceback': traceback.format_exc(),
                         'training_log': str(ops / 'training.log')})
         raise
 
 
+def finalize(args):
+    """Recover registration after completed training; never rerun or edit the batch."""
+    ops = pod_only(args.ops_dir)
+    info = read_json(ops / 'launch.json')
+    failed = read_json(ops / 'terminal.json')
+    root = Path(info['run_root']).resolve()
+    require(failed.get('status') == 'failed'
+            and failed.get('failure_phase') in ('registration', 'terminal_event')
+            and failed.get('stage') == info.get('stage') == 'S13'
+            and failed.get('ops') == info.get('ops') == info.get('ops_root') == str(ops)
+            and failed.get('root') == failed.get('run_root')
+            == info.get('root') == info.get('run_root') == str(root)
+            and failed.get('source_revision') == info.get('source_revision')
+            and failed.get('source_root') == info.get('source_root')
+            and root.parent == STAGE13_RUN_BASE
+            and root.name.startswith('dbond_s13_multiscale_conv_20261026_'),
+            'Finalize requires a completed-training Stage 13 registration failure')
+    require(Path(info['source_root']).resolve() == ROOT.resolve()
+            and info['source_files_sha256'] == source_fingerprint()
+            and info['source_tree_sha256'] == fingerprint_sha(source_fingerprint())
+            and info['smoke_sha256'] == sha(ops / 'smoke.json')
+            and info['batch_runner_sha256'] == sha(info['batch_runner'])
+            and info['stage12_audit_sha256'] == sha(info['stage12_audit'])
+            and info['stage12_launch_sha256'] == sha(STAGE12_OPS / 'launch.json')
+            and (info['stage12_queue_sha256'] is None
+                 or info['stage12_queue_sha256'] == sha(STAGE12_OPS / 'queue.json'))
+            and git_revision() in (None, info['source_revision']),
+            'Frozen Stage 13 source, smoke, or predecessor changed before finalize')
+    check_fold_sources(read_json(ops / 'smoke.json')['fold_sources'])
+    batch_status = read_json(root / 'status.json')
+    require(batch_status.get('status') == 'completed'
+            and batch_status.get('root') == str(root),
+            'Finalize cannot recover a failed or incomplete training batch')
+    attempts = ops / 'finalize_attempts'
+    attempts.mkdir(exist_ok=True)
+    attempt = attempts / f'attempt_{uuid.uuid4().hex}'
+    attempt.mkdir()
+    write_new_json(attempt / 'prior_terminal.json', failed)
+    if (ops / 'queue.json').is_file():
+        write_new_json(attempt / 'prior_queue.json', read_json(ops / 'queue.json'))
+    try:
+        register_outputs(info, ops)
+        checks = {'status': 'passed', 'stage': 'S13', 'at': now(),
+                  'mode': 'registration_only_no_retraining',
+                  'ops': str(ops), 'root': str(root),
+                  'source_root': info['source_root'],
+                  'source_revision': info['source_revision'],
+                  'batch_status_sha256': sha(root / 'status.json'),
+                  'batch_manifest_sha256': sha(root / 'manifest.json'),
+                  'prior_terminal': str(attempt / 'prior_terminal.json'),
+                  'prior_terminal_sha256': sha(attempt / 'prior_terminal.json'),
+                  'registry_sha256': sha(ops / 'registry.json'),
+                  'audit_manifest_sha256': sha(ops / 'audit_manifest.json')}
+        write_new_json(attempt / 'checks_passed.json', checks)
+        write_new_json(attempt / 'receipt.json', checks)
+        replace_json(ops / 'queue.json',
+                     queue_state('completed', str(root),
+                                 detail='Recovered registration; independent metric audit pending'))
+        replace_json(ops / 'terminal.json',
+                     {'status': 'completed', 'stage': 'S13', 'finished_at': now(),
+                      'ops': str(ops), 'root': str(root), 'run_root': str(root),
+                      'source_root': info['source_root'],
+                      'source_revision': info['source_revision'],
+                      'registry': str(ops / 'registry.json'),
+                      'registry_sha256': checks['registry_sha256'],
+                      'audit_manifest': str(ops / 'audit_manifest.json'),
+                      'audit_manifest_sha256': checks['audit_manifest_sha256'],
+                      'audit_status': 'pending',
+                      'recovered_from': checks['prior_terminal'],
+                      'recovered_from_sha256': checks['prior_terminal_sha256'],
+                      'finalize_receipt': str(attempt / 'receipt.json'),
+                      'finalize_receipt_sha256': sha(attempt / 'receipt.json')})
+    except BaseException as error:
+        failure = {'status': 'failed', 'stage': 'S13', 'at': now(),
+                   'mode': 'registration_only_no_retraining',
+                   'root': str(root), 'source_revision': info['source_revision'],
+                   'error': f'{type(error).__name__}: {error}',
+                   'traceback': traceback.format_exc()}
+        replace_json(attempt / 'receipt.json', failure)
+        raise
+    print(json.dumps({'status': 'completed', 'mode': 'registration_only_no_retraining',
+                      'terminal_event': str(ops / 'terminal.json'),
+                      'finalize_receipt': str(attempt / 'receipt.json')}))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('smoke', 'launch', 'worker'))
+    parser.add_argument('action', choices=('smoke', 'launch', 'worker', 'finalize'))
     parser.add_argument('--ops-dir', required=True)
     parser.add_argument('--gpu', type=int)
     parser.add_argument('--gpus')
     parser.add_argument('--stage12-audit')
     parser.add_argument('--source-commit')
     arguments = parser.parse_args()
-    {'smoke': smoke, 'launch': launch, 'worker': worker}[arguments.action](arguments)
+    {'smoke': smoke, 'launch': launch, 'worker': worker,
+     'finalize': finalize}[arguments.action](arguments)

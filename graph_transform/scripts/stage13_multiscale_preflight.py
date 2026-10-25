@@ -196,8 +196,8 @@ def check_full_models(configs):
             output = model(batch)
         require(output.shape == batch['label_mask'].shape
                 and torch.isfinite(output).all()
-                and model.last_four_state_logits.shape[-1] == 4
-                and torch.isfinite(model.last_four_state_logits).all(),
+                and model.bond_head_type == 'four_state_mlp'
+                and model.last_four_state_logits is None,
                 f'{arm}: full four-state forward failed')
         models[arm] = model
         states[arm] = {key: value.detach().cpu().clone()

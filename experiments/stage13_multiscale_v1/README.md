@@ -30,18 +30,27 @@ The pod entry point is `graph_transform/scripts/stage13_multiscale_ops.py`.
 An orchestrator first runs its `smoke` action in a fresh
 `/mnt/pvc/graphtrans/dbond_s13_multiscale_conv_20261026_ops` directory, then runs `launch` only
 after receiving an audited Stage 12 receipt and checking GPU availability.
+Failed smoke attempts retain their own numbered receipts and logs; before
+launch, a new `smoke` attempt can run after a source correction without deleting
+that evidence. A passing smoke is immutable and cannot be repeated.
 The required receipt is
 `/mnt/pvc/graphtrans/dbond_s12_gated_fusion_20261026_ops/independent_audit/audit_receipt.json`;
 its audited status, ops path, and run root must agree with the Stage 12 launch.
 `launch` records the source commit, config hashes, worker PID, and independent
 batch root under `/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/`.
-The worker writes `terminal.json` once on completion or failure.
+The worker writes `terminal.json` on completion or failure. If all three arms
+finished but output registration failed, the pod-only `finalize` action can
+strictly recheck the frozen source, all training outputs, selected checkpoints,
+and source hashes without retraining or changing any batch result. It preserves
+the original failed terminal in `finalize_attempts/` before replacing the ops
+terminal with a completed, recovery-linked event.
 The completed batch writes `registry.json` and `audit_manifest.json`; it is
 **not** considered audited until the independent auditor checks all fifteen
 weights, source bindings, raw predictions, and metrics. D is recorded only as
 an alias. Stage 14 may start only after that audit passes.
 
-The `audit_manifest.json` interface is `{stage, ops, root, source_commit, arms}`.
+The `audit_manifest.json` interface is
+`{stage, ops, root, source_root, source_commit, arms, aliases}`.
 Each arm/fold record includes seed, prediction CSV, test CSV, metric CSV,
 checkpoint, runtime config, internal train/validation CSVs, and SHA-256 hashes.
 The worker rechecks folded train, test, full-row validation, target manifest,

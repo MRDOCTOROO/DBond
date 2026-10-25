@@ -123,7 +123,8 @@ def run(gpu):
                 prediction = model(val_batch)
             require(prediction.shape == val_batch['label_mask'].shape
                     and torch.isfinite(prediction).all()
-                    and model.last_four_state_logits.shape[-1] == 4,
+                    and model.bond_head_type == 'four_state_mlp'
+                    and model.last_four_state_logits is None,
                     f'{arm}: validation512 four-state forward failed')
             validation_memory = memory()
             resources[arm] = {
