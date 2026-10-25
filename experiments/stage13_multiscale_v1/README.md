@@ -44,6 +44,9 @@ an alias. Stage 14 may start only after that audit passes.
 The `audit_manifest.json` interface is `{stage, root, source_commit, arms}`.
 Each arm/fold record includes seed, prediction CSV, test CSV, metric CSV,
 checkpoint, runtime config, internal train/validation CSVs, and SHA-256 hashes.
+The worker rechecks folded train, test, full-row validation, target manifest,
+and internal split hashes after training, then strictly restores every selected
+checkpoint with its mode and seed/split metadata before releasing the manifest.
 It asks the independent auditor to recalculate Bond-F1/Acc, ROC/PR AUC, MCC,
 spectrum P/R/F1, q-Brier, ECE, q_seq, Top10, and Top20. Resource records from
 the pod smoke and training batch are separate from the metrics. Formal fold

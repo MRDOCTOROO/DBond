@@ -10,6 +10,7 @@ import csv
 import datetime
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -55,9 +56,15 @@ def read_json(path):
     return json.loads(Path(path).read_text(encoding='utf-8'))
 
 
+def source_path(path):
+    path = Path(path)
+    return (path if path.is_absolute() else ROOT / path).resolve()
+
+
 def write_new_json(path, value):
     with Path(path).open('x', encoding='utf-8') as stream:
-        json.dump(value, stream, indent=2, sort_keys=True, ensure_ascii=False)
+        json.dump(value, stream, indent=2, sort_keys=True, ensure_ascii=False,
+                  allow_nan=False)
         stream.write('\n')
 
 
@@ -113,9 +120,7 @@ def check_fold_sources(fold_sources):
                 ('test_csv', 'test_csv_sha256'),
                 ('validation_source_csv', 'validation_source_sha256'),
                 ('target_manifest', 'target_manifest_sha256')):
-            path = Path(row[path_key])
-            if not path.is_absolute():
-                path = ROOT / path
+            path = source_path(row[path_key])
             require(path.is_file() and sha(path) == row[sha_key],
                     f'{fold}: {path_key} changed since Stage 13 smoke')
 
@@ -156,7 +161,8 @@ def run_logged(command, log_path, env=None):
 
 def queue_state(status, run_root=None, detail=None):
     return {'namespace': 'stage13_multiscale_v1', 'stage': 'S13',
-            'status': status, 'updated_at': now(), 'run_root': run_root,
+            'status': status, 'updated_at': now(), 'root': run_root,
+            'run_root': run_root,
             'detail': detail,
             'arms': [{'arm': arm, 'status': status, 'independent_training': True}
                      for arm in CONFIGS] +
@@ -186,6 +192,8 @@ def smoke(args):
                 'Real-batch GPU smoke failed')
         require(read_json(gpu_proof)['status'] == 'passed', 'Real-batch GPU smoke rejected')
         require(source_fingerprint() == before, 'Source changed during smoke')
+        fold_sources = read_json(gpu_proof)['folds']
+        check_fold_sources(fold_sources)
         proof = {'status': 'passed', 'stage': 'S13', 'created_at': now(),
                  'source_revision': git_revision(),
                  'source_tree_sha256': fingerprint_sha(before),
@@ -195,7 +203,7 @@ def smoke(args):
                  'structural_preflight_sha256': sha(structural),
                  'gpu_smoke': str(gpu_proof), 'gpu_smoke_sha256': sha(gpu_proof),
                  'smoke_gpu': args.gpu,
-                 'fold_sources': read_json(gpu_proof)['folds'],
+                 'fold_sources': fold_sources,
                  'D_alias_of_A': True}
         write_new_json(ops / 'smoke.json', proof)
         write_new_json(ops / 'queue.json', queue_state('smoke_passed'))
@@ -266,7 +274,8 @@ def launch(args):
     require(current_revision is None or current_revision == source_commit,
             'Declared source commit differs from pod Git HEAD')
     info = {'status': 'submitted', 'stage': 'S13', 'created_at': now(),
-            'ops_root': str(ops), 'run_root': str(run_root),
+            'ops_root': str(ops), 'root': str(run_root),
+            'run_root': str(run_root),
             'source_revision': source_commit,
             'source_tree_sha256': proof['source_tree_sha256'],
             'source_files_sha256': proof['source_files_sha256'],
@@ -280,17 +289,34 @@ def launch(args):
             'batch_runner_sha256': sha(SCRIPTS / 'run_architecture_batch.py'),
             'fold_data_dir': str(ROOT / 'dataset/5fold_folded'),
             'D_alias_of_A': True}
-    write_new_json(ops / 'launch.json', info)
-    replace_json(ops / 'queue.json', queue_state('submitted', str(run_root)))
-    environment = dict(os.environ, PYTHONUNBUFFERED='1',
-                       OMP_NUM_THREADS='2', MKL_NUM_THREADS='2')
-    with (ops / 'worker.log').open('x', encoding='utf-8') as log:
-        process = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), 'worker', '--ops-dir', str(ops)],
-            cwd=ROOT, env=environment, stdin=subprocess.DEVNULL,
-            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-    info['worker_pid'] = process.pid
-    replace_json(ops / 'launch.json', info)
+    process = None
+    try:
+        write_new_json(ops / 'launch.json', info)
+        replace_json(ops / 'queue.json', queue_state('submitted', str(run_root)))
+        environment = dict(os.environ, PYTHONUNBUFFERED='1',
+                           OMP_NUM_THREADS='2', MKL_NUM_THREADS='2')
+        with (ops / 'worker.log').open('x', encoding='utf-8') as log:
+            process = subprocess.Popen(
+                [sys.executable, str(Path(__file__).resolve()), 'worker', '--ops-dir', str(ops)],
+                cwd=ROOT, env=environment, stdin=subprocess.DEVNULL,
+                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        info['worker_pid'] = process.pid
+        replace_json(ops / 'launch.json', info)
+    except BaseException as error:
+        # Once a worker exists, only that worker may issue the terminal event.
+        if process is None and (ops / 'launch.json').is_file():
+            failure = {'status': 'failed', 'stage': 'S13', 'finished_at': now(),
+                       'root': str(run_root), 'run_root': str(run_root),
+                       'source_revision': source_commit,
+                       'error': f'Launch initialization failed: {type(error).__name__}: {error}',
+                       'traceback': traceback.format_exc()}
+            try:
+                replace_json(ops / 'queue.json', queue_state('failed', str(run_root),
+                             detail=failure['error']))
+            except OSError:
+                pass
+            write_new_json(ops / 'terminal.json', failure)
+        raise
     print(json.dumps({'status': 'submitted', 'pid': process.pid,
                       'run_root': str(run_root), 'terminal_event': str(ops / 'terminal.json')}))
 
@@ -302,6 +328,8 @@ def collect_resource_record(history_path, fold_log, best_epoch):
     selected = [row for row in history if row.get('epoch') == str(best_epoch)]
     require(len(selected) == 1, f'{history_path}: best epoch missing from training history')
     train_f1, val_f1 = (float(selected[0][key]) for key in ('train_f1', 'val_f1'))
+    require(math.isfinite(train_f1) and math.isfinite(val_f1),
+            f'{history_path}: nonfinite train/validation F1 at best epoch')
     log_text = fold_log.read_text(encoding='utf-8', errors='replace')
     epoch_seconds = {int(epoch): float(seconds) for epoch, seconds in re.findall(
         r'Epoch\s+(\d+)\s+wall time:\s*([0-9]+(?:\.[0-9]+)?)s', log_text)}
@@ -329,12 +357,24 @@ def collect_resource_record(history_path, fold_log, best_epoch):
 
 
 def register_outputs(info, ops):
+    sys.path.insert(0, str(ROOT / 'graph_transform'))
+    import torch
+    from models.graph_transformer import GraphTransformer
+    from models.utils import build_model_config
+    from train_5fold import _stable_fold_seed, make_fold_config
+
     root = Path(info['run_root'])
     status = read_json(root / 'status.json')
     manifest = read_json(root / 'manifest.json')
     require(status['status'] == 'completed' and len(manifest['arms']) == 3,
             'Batch did not finish all three independent training arms')
     require(status['root'] == manifest['root'] == str(root), 'Run-root binding mismatch')
+    require(Path(manifest['repo_root']).resolve() == ROOT
+            and status.get('gitrev') == manifest.get('gitrev')
+            and status.get('gitrev') in (None, info['source_revision'])
+            and len(status['arms']) == 3
+            and all(item['status'] == 'completed' for item in status['arms']),
+            'Batch source snapshot or arm completion record mismatch')
     registry = {'status': 'completed_unreviewed', 'stage': 'S13',
                 'created_at': now(), 'source_revision': info['source_revision'],
                 'source_tree_sha256': info['source_tree_sha256'],
@@ -350,9 +390,16 @@ def register_outputs(info, ops):
                     'ece', 'q_seq', 'top10', 'top20']}
     audit_rows = []
     smoke_folds = read_json(ops / 'smoke.json')['fold_sources']
-    for arm_id, manifest_arm in zip(CONFIGS, manifest['arms']):
-        require(manifest_arm['config_sha256'] == info['configs'][arm_id],
-                f'{arm_id}: batch used a different config')
+    for index, (arm_id, manifest_arm) in enumerate(zip(CONFIGS, manifest['arms']), 1):
+        arm_root = root / 'arms' / f'{index:02d}_{CONFIGS[arm_id].stem}'
+        snapshot = Path(manifest_arm['config_snapshot'])
+        require(manifest_arm['config_sha256'] == info['configs'][arm_id]
+                and sha(snapshot) == info['configs'][arm_id]
+                and snapshot.resolve() == (arm_root / 'config.yaml').resolve()
+                and Path(manifest_arm['cv_root']).resolve() == (arm_root / 'cv').resolve()
+                and Path(manifest_arm['work_root']).resolve() == (arm_root / 'logs').resolve(),
+                f'{arm_id}: batch used a different config or output namespace')
+        base_config = yaml.safe_load(snapshot.read_text(encoding='utf-8'))
         metrics_path = Path(manifest_arm['metrics_csv'])
         with metrics_path.open(encoding='utf-8-sig', newline='') as stream:
             rows = list(csv.DictReader(stream))
@@ -372,17 +419,62 @@ def register_outputs(info, ops):
             require(len(provenance_paths) == 1,
                     f'{arm_id}/{fold}: ambiguous validation split provenance')
             runtime = yaml.safe_load(config.read_text(encoding='utf-8'))
+            expected_runtime, _, _ = make_fold_config(
+                base_config, fold, info['fold_data_dir'], manifest_arm['cv_root'],
+                _stable_fold_seed(42, fold))
+            require(runtime == expected_runtime,
+                    f'{arm_id}/{fold}: runtime config differs from the frozen fold recipe')
             provenance = read_json(provenance_paths[0])
             require(int(runtime['data']['max_seq_len']) == 32,
                     f'{arm_id}/{fold}: formal loader max_seq_len changed')
-            train_csv = Path(provenance['split_train_csv'])
-            val_csv = Path(provenance['split_val_csv'])
-            test_csv = Path(runtime['data']['test_csv_path'])
+            train_csv = source_path(provenance['split_train_csv'])
+            val_csv = source_path(provenance['split_val_csv'])
+            test_csv = source_path(runtime['data']['test_csv_path'])
+            folded_source = source_path(runtime['data']['train_csv_path'])
+            validation_source = source_path(runtime['data']['validation_source_csv_path'])
+            target_manifest = source_path(runtime['data']['four_state_targets_manifest'])
             require(sha(train_csv) == smoke_folds[fold]['train_csv_sha256']
                     and sha(val_csv) == smoke_folds[fold]['val_csv_sha256']
                     and sha(test_csv) == smoke_folds[fold]['test_csv_sha256']
+                    and sha(folded_source) == smoke_folds[fold]['folded_training_source_sha256']
+                    and sha(validation_source) == smoke_folds[fold]['validation_source_sha256']
+                    and sha(target_manifest) == smoke_folds[fold]['target_manifest_sha256']
+                    and source_path(provenance['source_path']) == validation_source
+                    and provenance['source_sha256'] == smoke_folds[fold]['validation_source_sha256']
+                    and provenance['folded_source_sha256'] == smoke_folds[fold]['folded_training_source_sha256']
                     and provenance['outer_test_used_for_internal_validation'] is False,
                     f'{arm_id}/{fold}: source or split SHA differs from smoke')
+            four_state_paths = list(folder.glob('checkpoints/**/four_state_provenance.json'))
+            require(len(four_state_paths) == 1
+                    and read_json(four_state_paths[0])['manifest_sha256'] == sha(target_manifest),
+                    f'{arm_id}/{fold}: four-state target manifest binding failed')
+            saved = torch.load(checkpoints[0], map_location='cpu', weights_only=False)
+            expected_mode = {'S13-A': 'single_k5', 'S13-B': 'multiscale_357_c32',
+                             'S13-C': 'multiscale_357'}[arm_id]
+            require(runtime['model']['node_conv_mode'] == expected_mode
+                    and saved['config']['node_conv_mode'] == expected_mode
+                    and saved['config']['state_feature_mask'] == [True, True, False]
+                    and saved['config']['env_feature_mask'] == [True, False],
+                    f'{arm_id}/{fold}: checkpoint architecture or feature mask changed')
+            expected_rng = {
+                'training_seed': int(row['seed']),
+                'validation_split_seed': int(provenance['split_seed']),
+                'hidden_dim': 256, 'bond_head_type': 'four_state_mlp',
+                'theory_fusion_stage': 'late',
+                'four_state_conditional_weight': 1.,
+                'four_state_union_brier_weight': 0.}
+            require(saved.get('extra_state', {}).get('training_rng_protocol') == expected_rng
+                    and int(saved['epoch']) + 1 == int(row['best_epoch']),
+                    f'{arm_id}/{fold}: checkpoint seed, split, loss, or selected epoch mismatch')
+            effective = dict(runtime, model=saved['config'])
+            with torch.random.fork_rng(devices=[]):
+                model = GraphTransformer(build_model_config(effective)).cpu()
+            model.load_state_dict(saved['model_state_dict'], strict=True)
+            require(all(torch.isfinite(parameter).all().item()
+                        for parameter in model.parameters()),
+                    f'{arm_id}/{fold}: nonfinite selected checkpoint parameter')
+            parameter_count = sum(parameter.numel() for parameter in model.parameters())
+            del saved, model
             prediction = predictions[0]
             with prediction.open(encoding='utf-8-sig', newline='') as stream:
                 reader = csv.DictReader(stream)
@@ -433,6 +525,7 @@ def register_outputs(info, ops):
                 'runtime_config': str(config), 'runtime_config_sha256': sha(config),
                 'checkpoint': str(checkpoints[0]),
                 'checkpoint_sha256': sha(checkpoints[0]),
+                'parameter_count': parameter_count,
                 'prediction_csv': str(prediction),
                 'prediction_sha256': sha(prediction),
                 'prediction_rows': prediction_rows,
@@ -446,6 +539,14 @@ def register_outputs(info, ops):
                 'train_csv': str(train_csv), 'train_csv_sha256': sha(train_csv),
                 'val_csv': str(val_csv), 'val_csv_sha256': sha(val_csv),
                 'test_csv': str(test_csv), 'test_csv_sha256': sha(test_csv),
+                'folded_training_source': str(folded_source),
+                'folded_training_source_sha256': sha(folded_source),
+                'validation_source_csv': str(validation_source),
+                'validation_source_sha256': sha(validation_source),
+                'target_manifest': str(target_manifest),
+                'target_manifest_sha256': sha(target_manifest),
+                'four_state_provenance': str(four_state_paths[0]),
+                'four_state_provenance_sha256': sha(four_state_paths[0]),
             }
             audit_rows.append({
                 'arm': arm_id, 'fold': fold, 'seed': int(row['seed']),
@@ -457,9 +558,18 @@ def register_outputs(info, ops):
                 'metric_csv': str(metrics[0]), 'metric_csv_sha256': sha(metrics[0]),
                 'checkpoint': str(checkpoints[0]),
                 'checkpoint_sha256': sha(checkpoints[0]),
+                'parameter_count': parameter_count,
                 'config': str(config), 'config_sha256': sha(config),
                 'train_csv': str(train_csv), 'train_csv_sha256': sha(train_csv),
                 'val_csv': str(val_csv), 'val_csv_sha256': sha(val_csv),
+                'folded_training_source': str(folded_source),
+                'folded_training_source_sha256': sha(folded_source),
+                'validation_source_csv': str(validation_source),
+                'validation_source_sha256': sha(validation_source),
+                'target_manifest': str(target_manifest),
+                'target_manifest_sha256': sha(target_manifest),
+                'four_state_provenance': str(four_state_paths[0]),
+                'four_state_provenance_sha256': sha(four_state_paths[0]),
                 'evaluation_id': evaluation_id,
                 'prediction_export_source': export_source,
                 'prediction_probability_precision': precision,
@@ -474,6 +584,13 @@ def register_outputs(info, ops):
             'run_log': manifest_arm['run_log'],
             'folds': records,
         }
+    parameter_counts = {arm: {row['parameter_count'] for row in audit_rows
+                              if row['arm'] == arm} for arm in CONFIGS}
+    require(all(len(counts) == 1 for counts in parameter_counts.values())
+            and parameter_counts['S13-A'] == parameter_counts['S13-C']
+            and next(iter(parameter_counts['S13-B']))
+                < next(iter(parameter_counts['S13-C'])),
+            'Formal checkpoint parameter counts violate the declared A/C matching')
     audit_manifest = {
         'stage': 'S13', 'root': str(root), 'source_commit': info['source_revision'],
         'source_tree_sha256': info['source_tree_sha256'],
@@ -496,7 +613,11 @@ def worker(args):
     try:
         replace_json(ops / 'queue.json',
                      queue_state('running', info['run_root']))
-        require(info['status'] == 'submitted'
+        run_root = Path(info['run_root']).resolve()
+        require(run_root.parent == STAGE13_RUN_BASE
+                and run_root.name.startswith('dbond_s13_multiscale_conv_20261026_'),
+                'Stage 13 run root escaped the dedicated checkpoint namespace')
+        require(info['root'] == info['run_root'] and info['status'] == 'submitted'
                 and info['source_files_sha256'] == source_fingerprint()
                 and info['source_tree_sha256'] == fingerprint_sha(source_fingerprint())
                 and info['smoke_sha256'] == sha(ops / 'smoke.json')
@@ -515,13 +636,15 @@ def worker(args):
                 'Stage 13 batch failed; inspect the independent batch status event')
         require(info['source_files_sha256'] == source_fingerprint(),
                 'Frozen Stage 13 source changed during training')
+        check_fold_sources(read_json(ops / 'smoke.json')['fold_sources'])
         register_outputs(info, ops)
         replace_json(ops / 'queue.json',
                      queue_state('completed', info['run_root'],
                                  detail='Independent metric audit pending'))
         write_new_json(ops / 'terminal.json',
                        {'status': 'completed', 'stage': 'S13', 'finished_at': now(),
-                        'run_root': info['run_root'], 'source_revision': info['source_revision'],
+                        'root': info['root'], 'run_root': info['run_root'],
+                        'source_revision': info['source_revision'],
                         'registry': str(ops / 'registry.json'),
                         'registry_sha256': sha(ops / 'registry.json'),
                         'audit_manifest': str(ops / 'audit_manifest.json'),
@@ -533,7 +656,8 @@ def worker(args):
                                  detail=f'{type(error).__name__}: {error}'))
         write_new_json(ops / 'terminal.json',
                        {'status': 'failed', 'stage': 'S13', 'finished_at': now(),
-                        'run_root': info['run_root'], 'source_revision': info['source_revision'],
+                        'root': info['root'], 'run_root': info['run_root'],
+                        'source_revision': info['source_revision'],
                         'error': f'{type(error).__name__}: {error}',
                         'traceback': traceback.format_exc(),
                         'training_log': str(ops / 'training.log')})
