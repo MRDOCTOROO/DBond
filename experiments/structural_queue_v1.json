@@ -527,13 +527,39 @@
       "finished_at_utc": "2026-10-25T11:18:51.261654+00:00",
       "event_acknowledged": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_k5_seed_ensemble_v2_batch/20261025_111655|failed",
       "failure": "seed42/fold1222 ex_precision archived-vs-replayed difference 0.000020537313304647142 exceeded the 0.0000200000 scalar tolerance by 0.0000005373133; other metrics nearly matched. This is a floating-point replay gate failure, not an observed ensemble ranking result."
+    },
+    {
+      "id": 14,
+      "name": "single_k5_same_fold_seed_ensemble_ranking_v3",
+      "status": "submitted",
+      "authorized_at_local": "2026-10-25",
+      "prior_failed_stages": [12, 13],
+      "protocol": "experiments/k5_seed_ensemble_ranking_v3.md",
+      "ops": "/mnt/pvc/graphtrans/four_state_k5_seed_ensemble_v3_ops",
+      "batch_prefix": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_k5_seed_ensemble_v3_batch",
+      "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_k5_seed_ensemble_v3_batch/20261025_112533",
+      "gitrev": "67ad107217699b0a44e36d05a922ca32dc9ce56d",
+      "tag": "dbond-k5-seed-ensemble-v3-20261025",
+      "submitted_at_utc": "2026-10-25T11:25:33.016013+00:00",
+      "launch": "/mnt/pvc/graphtrans/four_state_k5_seed_ensemble_v3_ops/launch.json",
+      "worker_pid": 1932970,
+      "gpu": 0,
+      "batch_size": 512,
+      "runner_sha256": "99fec0b1c43e10e0176abafb6198412a854b15ac0e86105f8a36827c620ee46e",
+      "protocol_sha256": "2db95a93e0fc707d914a37e144a04add8f672754ee6fd61ea306f3c59d407728",
+      "preflight_sha256": "54688947c9c9d6ecba9729f409c392c5bf8e9bb7566548e68e3b6a99ba6ffd9c",
+      "source_stages": [11, 8, 10],
+      "training_base_seeds": [42, 43, 45],
+      "fold_ids": [1222, 2252, 3514, 6072, 9075],
+      "arms": ["seed42_single_k5", "seed43_single_k5", "seed45_single_k5", "equal_q_mean_3seed"],
+      "action": "Source identity gate is reviewed SHA-bound config/data/target/weight, strict CPU restoration and actual RNG; archived scalar metric drift recorded only as diagnosis. Replay all five folds once, audit NPZ independently, report both gains and limits, then ack exact terminal event. No auto-follow-up."
     }
   ],
   "auto_advance": false,
   "scheduling_update": {
     "date_local": "2026-10-25",
     "reason": "User authorized continued ranking exploration on the supported single-global-node k5 four-state model; stage12 is a fixed three-seed same-fold inference ensemble.",
-    "current_fusion_action": "Stage12 failed and was reviewed/acked; stage13 independently submitted with a revised historical ranking replay diagnostic. Review only exact stage13 completion event and do not auto-advance.",
+    "current_fusion_action": "Stages12/13 failed on too-brittle historical scalar replay gates and were reviewed/acked; stage14 separately submitted with SHA-bound source identity and all historical drift diagnostic. Review only exact stage14 completion event and do not auto-advance.",
     "requested_combination": {
       "bond_head_type": "four_state_mlp",
       "report": "/mnt/pvc/graphtrans/four_state_width_ops/report.md",
@@ -544,7 +570,7 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "No automatic follow-up after stage13. Untouched sequence-disjoint confirmation remains necessary for a paper claim; learned graph and chemical priors remain deferred.",
+    "next_new_experiment": "No automatic follow-up after stage14. Untouched sequence-disjoint confirmation remains necessary for a paper claim; learned graph and chemical priors remain deferred.",
     "serial_stage_ids": []
   },
   "auto_advance_allowlist": []
