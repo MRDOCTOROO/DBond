@@ -17,6 +17,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -37,7 +38,9 @@ PRIOR = Path('/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops')
 TARGETS = Path('/mnt/pvc/graphtrans/four_state_targets_v1')
 ARMS = {'lambda0': 0.0, 'lambda001': 0.01, 'lambda005': 0.05, 'lambda010': 0.10}
 FOLDS = ('1222', '2252', '3514', '6072', '9075')
-PY = str(REPO / '.venv/bin/python')
+# The shared venv supplies only the interpreter and installed packages.  Every
+# script, config, and Python import used by this batch comes from REPO.
+PY = '/mnt/pvc/graphtrans/DBond/.venv/bin/python'
 
 
 def require(condition: bool, message: str) -> None:
@@ -64,8 +67,29 @@ def config_path(arm: str) -> Path:
     return REPO / f'graph_transform/config/pre_synthesis_stage14_pairwise_{arm}.yaml'
 
 
-def revision() -> str:
-    return subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip()
+def git_revision() -> str | None:
+    """Return HEAD only when this snapshot itself is a Git checkout."""
+    try:
+        top = subprocess.run(['git', 'rev-parse', '--show-toplevel'], cwd=REPO,
+                             capture_output=True, text=True)
+        if top.returncode != 0 or Path(top.stdout.strip()).resolve() != REPO.resolve():
+            return None
+        result = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=REPO,
+                                capture_output=True, text=True)
+    except OSError:
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def revision(declared: str | None = None) -> str:
+    """Bind a Git-free source snapshot to the operator-declared full commit."""
+    actual = git_revision()
+    require(declared is not None and re.fullmatch(r'[0-9a-f]{40}', declared),
+            'Supply the exact 40-character Stage14 source commit')
+    require(actual is None or actual == declared,
+            'Declared Stage14 source commit differs from snapshot Git HEAD')
+    pod_guard(declared)
+    return declared
 
 
 def source_manifest() -> dict[str, str]:
@@ -74,7 +98,16 @@ def source_manifest() -> dict[str, str]:
 
 
 def committed_source_provenance(bound: dict[str, str], gitrev: str) -> dict:
-    """Verify the actual training code is Git-bound, save one old unrelated exception."""
+    """Bind the frozen source fingerprint to a checkout or declared snapshot."""
+    current = git_revision()
+    if current is None:
+        require(REPO.name == f'dbond_s14_source_{gitrev[:7]}',
+                'Git-free source snapshot directory does not match source commit')
+        digest = hashlib.sha256(json.dumps(bound, sort_keys=True,
+                                  separators=(',', ':')).encode('utf-8')).hexdigest()
+        return {'gitrev': gitrev, 'source_root': str(REPO),
+                'source_tree_sha256': digest, 'method': 'declared_git_free_snapshot'}
+    require(current == gitrev, 'Source snapshot HEAD changed')
     exceptions = []
     for relative, actual_sha in sorted(bound.items()):
         try:
@@ -92,13 +125,18 @@ def committed_source_provenance(bound: dict[str, str], gitrev: str) -> dict:
         blob = subprocess.check_output(['git', 'show', f'{gitrev}:{relative}'], cwd=REPO)
         require(hashlib.sha256(blob).hexdigest() == file_sha(config_path(arm)),
                 f'{arm}: config differs from committed source')
-    return {'gitrev': gitrev, 'known_unrelated_source_exception': exceptions}
+    return {'gitrev': gitrev, 'source_root': str(REPO),
+            'method': 'git_checkout', 'known_unrelated_source_exception': exceptions}
 
 
-def pod_guard() -> None:
+def pod_guard(source_commit: str | None = None) -> None:
     require(sys.platform.startswith('linux')
-            and REPO.resolve() == Path('/mnt/pvc/graphtrans/DBond').resolve(),
-            'Stage14 numerical work and training must run on the authorized pod')
+            and REPO.resolve().parent == Path('/mnt/pvc/graphtrans').resolve()
+            and re.fullmatch(r'dbond_s14_source_[0-9a-f]{7}', REPO.name),
+            'Stage14 must run from its isolated source snapshot on the authorized pod')
+    if source_commit is not None:
+        require(REPO.name == f'dbond_s14_source_{source_commit[:7]}',
+                'Stage14 source snapshot name and declared commit mismatch')
 
 
 def bound_run_root(info: dict) -> Path:
@@ -224,8 +262,9 @@ def verify_training_inputs(proof: dict) -> None:
                 f'{fold}: train/test/full-spectrum source/target changed after smoke')
 
 
-def smoke(gpu: int) -> None:
-    pod_guard()
+def smoke(gpu: int, source_commit: str | None) -> None:
+    pod_guard(source_commit)
+    gitrev = revision(source_commit)
     require(not (OPS / 'launch.json').exists() and not (OPS / 'smoke.json').exists(),
             'Stage14 smoke/launch already exists; refuse duplicate')
     import torch
@@ -406,9 +445,10 @@ def smoke(gpu: int) -> None:
                     and torch.equal(cuda_rng, torch.cuda.get_rng_state(gpu)),
                     'Invalid padding polluted gradients or ranking computation consumed RNG')
 
-    bound_source, gitrev = source_manifest(), revision()
+    bound_source = source_manifest()
     verify_training_inputs({'folds': evidence})
     proof = {'status': 'passed', 'created_at': utc_now(), 'gitrev': gitrev,
+             'source_root': str(REPO),
              'source_sha256': bound_source,
              'source_provenance': committed_source_provenance(bound_source, gitrev),
              'configs': {arm: file_sha(config_path(arm)) for arm in ARMS},
@@ -429,8 +469,9 @@ def smoke(gpu: int) -> None:
     print(json.dumps({'status': proof['status'], 'gitrev': proof['gitrev'], 'checks': proof['checks']}))
 
 
-def launch(receipt_path: Path | None) -> None:
-    pod_guard()
+def launch(receipt_path: Path | None, source_commit: str | None) -> None:
+    pod_guard(source_commit)
+    gitrev = revision(source_commit)
     require(receipt_path is not None,
             'Launch requires --stage13-audit pointing to the audited Stage13 receipt')
     claim = OPS / 'launch.claim'
@@ -443,7 +484,8 @@ def launch(receipt_path: Path | None) -> None:
     try:
         require(not (OPS / 'launch.json').exists(), 'Stage14 launch already exists')
         proof = read_json(OPS / 'smoke.json')
-        require(proof['status'] == 'passed' and proof['gitrev'] == revision()
+        require(proof['status'] == 'passed' and proof['gitrev'] == gitrev
+                and proof['source_root'] == str(REPO)
                 and proof['source_sha256'] == source_manifest()
                 and proof['source_provenance'] == committed_source_provenance(proof['source_sha256'], revision())
                 and all(proof['configs'][arm] == file_sha(config_path(arm)) for arm in ARMS),
@@ -455,7 +497,8 @@ def launch(receipt_path: Path | None) -> None:
         from four_state_ops import idle
         devices, gpu_rows, processes = idle()
         root = CHECKPOINT_BASE / dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d_%H%M%S')
-        info = {'schema_version': 1, 'root': str(root), 'gitrev': revision(),
+        info = {'schema_version': 1, 'root': str(root), 'gitrev': gitrev,
+                'source_root': str(REPO),
                 'created_at': utc_now(), 'arms': ARMS, 'folds': FOLDS,
                 'training_base_seed': 42, 'validation_split_base_seed': 42,
                 'fold_seeds': {fold: _stable_fold_seed(42, fold) for fold in FOLDS},
@@ -521,7 +564,6 @@ def make_audit_manifest(info: dict) -> dict:
             provenance = read_json(provenance_files[0])
             train_csv = Path(provenance['split_train_csv'])
             val_csv = Path(provenance['split_val_csv'])
-            pred_csv = Path(row['pred_csv_path'])
             metric_csv = Path(row['metric_csv_path'])
             checkpoint = Path(row['checkpoint_dir']) / 'best_model.pt'
             test_csv = Path(runtime['data']['test_csv_path'])
@@ -531,9 +573,10 @@ def make_audit_manifest(info: dict) -> dict:
             except ValueError as error:
                 raise ValueError(f'{arm_name}/{fold}: metric/checkpoint escaped this fold') from error
             expected_prediction = fold_root / 'preds' / metric_relative.parent / 'latest_test.pred.csv'
+            pred_csv = expected_prediction
             require(metric_csv.name == 'latest_test_metric.csv'
-                    and pred_csv.resolve() == expected_prediction.resolve(),
-                    f'{arm_name}/{fold}: prediction CSV is not paired to metric CSV')
+                    and len(list(fold_root.glob('preds/**/latest_test.pred.csv'))) == 1,
+                    f'{arm_name}/{fold}: prediction CSV is missing or ambiguous for metric CSV')
             expected = info['prior']['folds'][fold]
             require(file_sha(train_csv) == expected['train_sha256']
                     and file_sha(val_csv) == expected['val_sha256']
@@ -547,33 +590,64 @@ def make_audit_manifest(info: dict) -> dict:
             with pred_csv.open(encoding='utf-8-sig', newline='') as stream:
                 reader = csv.DictReader(stream)
                 require(reader.fieldnames is not None and
-                        {'checkpoint_path', 'evaluation_id', 'threshold', 'pred_prob'} <= set(reader.fieldnames),
+                        {'checkpoint_path', 'evaluation_id', 'threshold', 'pred_prob',
+                         'true', 'pred', 'soft_multi', 'seq', 'charge', 'nce',
+                         'prediction_export_source',
+                         'prediction_probability_precision'} <= set(reader.fieldnames),
                         f'{arm_name}/{fold}: prediction source columns missing')
                 evaluation_ids, prediction_rows = set(), 0
                 for prediction in reader:
                     require(Path(prediction['checkpoint_path']).resolve() == checkpoint.resolve()
-                            and float(prediction['threshold']) == .5,
-                            f'{arm_name}/{fold}: same-pass checkpoint or threshold mismatch')
+                            and float(prediction['threshold']) == .5
+                            and prediction['prediction_export_source'] == 'same_pass_evaluate_logits'
+                            and prediction['prediction_probability_precision']
+                            == 'float32_roundtrip_9_significant_digits',
+                            f'{arm_name}/{fold}: same-pass source, checkpoint or threshold mismatch')
                     evaluation_ids.add(prediction['evaluation_id'])
                     prediction_rows += 1
             require(prediction_rows > 0 and len(evaluation_ids) == 1
                     and bool(next(iter(evaluation_ids))),
                     f'{arm_name}/{fold}: empty/mixed prediction evaluation')
-            files = {'pred_csv': pred_csv, 'test_csv': test_csv,
+            evaluation_id = next(iter(evaluation_ids))
+            pred_archive = pred_csv.with_name(
+                f'{pred_csv.stem}__{evaluation_id}{pred_csv.suffix}')
+            metric_archive = metric_csv.with_name(
+                f'{metric_csv.stem}__{evaluation_id}{metric_csv.suffix}')
+            require(pred_archive.is_file() and metric_archive.is_file()
+                    and file_sha(pred_archive) == file_sha(pred_csv)
+                    and file_sha(metric_archive) == file_sha(metric_csv),
+                    f'{arm_name}/{fold}: same-pass prediction/metric archive missing or changed')
+            files = {'pred_csv': pred_csv, 'pred_archive': pred_archive,
+                     'metric_archive': metric_archive, 'test_csv': test_csv,
                      'metric_csv': metric_csv, 'checkpoint': checkpoint,
-                     'config': runtime_path, 'train_csv': train_csv, 'val_csv': val_csv}
+                     'config': runtime_path, 'train_csv': train_csv, 'val_csv': val_csv,
+                     'validation_source_csv': Path(provenance['source_path']),
+                     'four_state_manifest': Path(runtime['data']['four_state_targets_manifest'])}
             entries.append({'arm': arm_name, 'fold': fold, 'seed': runtime['experiment']['seed'],
                             'split_seed': runtime['training']['validation_split_seed'],
                             'lambda': ARMS[arm_name], 'tau': .1, 'delta': .05,
                             'max_seq_len': runtime['data']['max_seq_len'],
                             'source_commit': info['gitrev'],
-                            'evaluation_id': next(iter(evaluation_ids)),
+                            'evaluation_id': evaluation_id,
                             'prediction_rows': prediction_rows,
                             **{name: str(path) for name, path in files.items()},
                             **{name + '_sha256': file_sha(path) for name, path in files.items()}})
-    return {'stage': 14, 'ops': str(OPS), 'root': info['root'],
-            'source_commit': info['gitrev'], 'stage13_audit': info['stage13_audit'],
-            'arms': entries, 'same_round_control': 'lambda0',
+    require(len(entries) == len(ARMS) * len(FOLDS)
+            and {(entry['arm'], entry['fold']) for entry in entries}
+            == {(arm, fold) for arm in ARMS for fold in FOLDS},
+            'Stage14 audit manifest is not a complete unique four-arm/five-fold matrix')
+    for fold in FOLDS:
+        paired = [entry for entry in entries if entry['fold'] == fold]
+        require(all(len({entry[key] for entry in paired}) == 1
+                    for key in ('train_csv_sha256', 'val_csv_sha256', 'test_csv_sha256',
+                                'validation_source_csv_sha256', 'four_state_manifest_sha256')),
+                f'{fold}: same-round arms do not share train/validation/test/target source SHA')
+    return {'stage': 'S14', 'schema_version': 1, 'status': 'completed_pending_audit',
+            'ops': str(OPS), 'root': info['root'],
+            'source_commit': info['gitrev'], 'source_root': info['source_root'],
+            'stage13_audit': info['stage13_audit'],
+            'arms': entries, 'baseline_arm': 'lambda0',
+            'same_round_control': 'lambda0',
             'pairwise_mode': 'train-only logistic, tau0.1, delta0.05; no sequence-aware sampler',
             'scope': 'Manifest binds training fold, internal validation and same-pass external prediction; '
                      'independent metric audit must still verify CSV row provenance and recompute metrics.'}
@@ -583,10 +657,12 @@ def worker() -> None:
     pod_guard()
     info = read_json(OPS / 'launch.json')
     try:
+        require(info['source_root'] == str(REPO), 'Stage14 source snapshot changed')
+        revision(info['gitrev'])
         bound_run_root(info)
         require(info['stage13_audit'] == stage13_audit(),
                 'Audited Stage13 predecessor changed after Stage14 launch')
-        require(revision() == info['gitrev'] and source_manifest() == info['source_sha256']
+        require(source_manifest() == info['source_sha256']
                 and all(file_sha(config_path(arm)) == info['configs'][arm] for arm in ARMS),
                 'Source/config changed after launch')
         verify_training_inputs(read_json(OPS / 'smoke.json'))
@@ -620,11 +696,13 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--stage13-audit', type=Path,
                         help='Exact independent Stage13 audit receipt, required for launch')
+    parser.add_argument('--source-commit',
+                        help='Exact Stage14 source commit; required for smoke and launch')
     args = parser.parse_args()
     OPS.mkdir(parents=True, exist_ok=True)
     if args.action == 'smoke':
-        smoke(args.gpu)
+        smoke(args.gpu, args.source_commit)
     elif args.action == 'launch':
-        launch(args.stage13_audit)
+        launch(args.stage13_audit, args.source_commit)
     else:
         worker()
