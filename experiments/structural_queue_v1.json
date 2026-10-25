@@ -3,7 +3,7 @@
   "authorization_date_local": "2026-10-21",
   "thread_id": "01a1547f-f644-7d70-816a-1b3fe2ad8e80",
   "protocol": "experiments/structural_queue_v1.md",
-  "execution_policy": "stages1_2_5_3_6_7_8_reviewed_acked; stage9_failed_analysis_reported_acked_with_restricted_F1_conclusion; stage10_parallel_globals_explicitly_authorized_after_stage9_terminal; learned_graph_stage4_deferred",
+  "execution_policy": "stages1_2_5_3_6_7_8_10_reviewed_acked; stage9_failed_analysis_reported_acked_with_restricted_F1_conclusion; stage11_parallel_global_seed42_same_round_replication_authorized; learned_graph_stage4_deferred",
   "compute_location": "gsj-5090.devpod:/mnt/pvc/graphtrans/DBond",
   "reference_commit": "4da48eeab50decd0a31fbf64f2f179478a6624a7",
   "structural_baseline": {
@@ -416,12 +416,37 @@
       "outcome": "Independent pod audits passed: 807 source/weight/probability checks, 15 strict CPU restores and all 15 same-pass prediction CSV metrics. parallel4 alone F1 -0.023098pp (2/5). parallel4_cross vs single F1 +0.260300pp (4/5), AUC +0.001806, but q-Brier +0.000528; full preregistered gate fails. Cross vs parallel4 passes four mean engineering gates (F1 +0.283399pp, Brier -0.000026), but calibration gain is tiny and only 2/5 folds. Preserve single-k5 as four-gate baseline; cross remains exploratory F1 candidate, no automatic promotion or follow-up.",
       "completion_action": "Independently review three paired arms on pod, report and acknowledge exact terminal event; stop. Do not promote a test-selected candidate automatically or launch learned graph/physical priors.",
       "local_receipts": "F:/codexout/dbond_parallel_global_results_20261025/"
+    },
+    {
+      "id": 11,
+      "name": "parallel_global_seed42_replication_k5",
+      "status": "authorized",
+      "authorized_at_local": "2026-10-25",
+      "requires_reviewed_stage": 10,
+      "protocol": "experiments/parallel_global_seed_replication_v1.md",
+      "ops": "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops",
+      "batch_prefix": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_parallel_global_replication_batch",
+      "root": null,
+      "gitrev": null,
+      "arms": ["single", "parallel4_cross"],
+      "hidden_dim": 256,
+      "bond_head_type": "four_state_mlp",
+      "node_conv_mode": "single_k5",
+      "four_state_alpha": 1,
+      "union_brier_lambda": 0,
+      "training_base_seed": 42,
+      "internal_split_base_seed": 42,
+      "total_training_runs": 10,
+      "source_discovery_ops": "/mnt/pvc/graphtrans/four_state_parallel_global_ops",
+      "source_discovery_root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_parallel_global_batch/20261024_171434",
+      "source_discovery_gitrev": "ce0185c1c313a9f36410cd33701699fe8df53579",
+      "completion_action": "Independently audit pod-only same-round seed42 results, compare separately with seed45 paired deltas and paper baselines, report and acknowledge exact terminal event; stop. No automatic paper promotion or further experiment."
     }
   ],
   "auto_advance": false,
   "scheduling_update": {
     "date_local": "2026-10-25",
-    "reason": "User authorized a serial parallel-global-node and bond-query cross-attention experiment after stage9 terminal, using the independently replicated single-k5 four-state model.",
+    "reason": "User authorized a seed42 same-round independent replication of single-k5 versus parallel4_cross-k5 after stage10 review, followed by a paper-readiness decision.",
     "current_fusion_action": "Completed, independently reviewed, reported and acked; no automatic follow-up.",
     "requested_combination": {
       "bond_head_type": "four_state_mlp",
@@ -433,7 +458,7 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "Stage10 single/parallel4/parallel4_cross was preflighted and submitted as one serial batch; only await its completion event and independently review, report, ack. No additional experiment authorized. Learned graph and chemical priors remain deferred.",
+    "next_new_experiment": "Stage11 seed42 single/parallel4_cross same-round replication is authorized and planned; pod smoke must pass before one launch, then completion-event-only audit/report/ack. No other experiment authorized. Learned graph and chemical priors remain deferred.",
     "serial_stage_ids": []
   },
   "auto_advance_allowlist": []
