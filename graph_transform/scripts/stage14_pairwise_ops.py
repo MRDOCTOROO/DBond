@@ -284,7 +284,7 @@ def smoke(gpu: int, source_commit: str | None) -> None:
     from training.four_state_loss import four_state_cross_entropy
     from training.trainer import Trainer
     from training.pairwise_sequence_ranking import pairwise_sequence_logistic_loss
-    from train_graph_model import (create_datasets, create_optimizer,
+    from train_graph_model import (apply_ablation_config, create_datasets, create_optimizer,
                                    ranking_loss_checkpoint_protocol)
     from test_four_state_dynamic_edges import seed as seed_everything
 
@@ -309,6 +309,10 @@ def smoke(gpu: int, source_commit: str | None) -> None:
             runtime, _, _ = make_fold_config(configs['lambda0'], fold,
                 str(REPO / 'dataset/5fold_folded'), str(Path(temporary) / fold),
                 _stable_fold_seed(42, fold))
+            runtime = apply_ablation_config(runtime)
+            require(runtime['model']['state_feature_mask'] == [True, True, False]
+                    and runtime['model']['env_feature_mask'] == [True, False],
+                    f'{fold}: smoke did not apply the training pre-synthesis feature mask')
             runtime['data']['cache_graphs'] = False
             runtime['data']['cache_dir'] = str(Path(temporary) / fold / 'cache')
             train_ds, val_ds, test_ds = create_datasets(runtime)
@@ -353,6 +357,10 @@ def smoke(gpu: int, source_commit: str | None) -> None:
                 arm_runtime, _, _ = make_fold_config(value, fold,
                     str(REPO / 'dataset/5fold_folded'), str(Path(temporary) / fold / arm),
                     _stable_fold_seed(42, fold))
+                arm_runtime = apply_ablation_config(arm_runtime)
+                require(arm_runtime['model']['state_feature_mask'] == [True, True, False]
+                        and arm_runtime['model']['env_feature_mask'] == [True, False],
+                        f'{arm}: smoke model differs from the training pre-synthesis mask')
                 seed_everything(_stable_fold_seed(42, fold))
                 model = GraphTransformer(build_model_config(arm_runtime)).cuda(gpu)
                 model.train()
