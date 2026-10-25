@@ -3,7 +3,7 @@
   "authorization_date_local": "2026-10-21",
   "thread_id": "01a1547f-f644-7d70-816a-1b3fe2ad8e80",
   "protocol": "experiments/structural_queue_v1.md",
-  "execution_policy": "stages1_2_5_3_6_7_8_10_11_reviewed_acked; stage9_failed_analysis_reported_acked_with_restricted_F1_conclusion; learned_graph_stage4_deferred; no_auto_advance",
+  "execution_policy": "stages1_2_5_3_6_7_8_10_11_14_reviewed_acked; stages12_13_failed_reviewed_acked; stage9_failed_analysis_reported_acked_with_restricted_F1_conclusion; learned_graph_stage4_deferred; no_auto_advance",
   "compute_location": "gsj-5090.devpod:/mnt/pvc/graphtrans/DBond",
   "reference_commit": "4da48eeab50decd0a31fbf64f2f179478a6624a7",
   "structural_baseline": {
@@ -531,7 +531,7 @@
     {
       "id": 14,
       "name": "single_k5_same_fold_seed_ensemble_ranking_v3",
-      "status": "submitted",
+      "status": "reviewed",
       "authorized_at_local": "2026-10-25",
       "prior_failed_stages": [12, 13],
       "protocol": "experiments/k5_seed_ensemble_ranking_v3.md",
@@ -552,14 +552,24 @@
       "training_base_seeds": [42, 43, 45],
       "fold_ids": [1222, 2252, 3514, 6072, 9075],
       "arms": ["seed42_single_k5", "seed43_single_k5", "seed45_single_k5", "equal_q_mean_3seed"],
-      "action": "Source identity gate is reviewed SHA-bound config/data/target/weight, strict CPU restoration and actual RNG; archived scalar metric drift recorded only as diagnosis. Replay all five folds once, audit NPZ independently, report both gains and limits, then ack exact terminal event. No auto-follow-up."
+      "action": "Source identity gate is reviewed SHA-bound config/data/target/weight, strict CPU restoration and actual RNG; archived scalar metric drift recorded only as diagnosis. All five folds completed and were independently audited; no auto-follow-up.",
+      "finished_at_utc": "2026-10-25T11:35:16.161728+00:00",
+      "event_acknowledged": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_k5_seed_ensemble_v3_batch/20261025_112533|completed",
+      "reviewed_at_local": "2026-10-25",
+      "result": "/mnt/pvc/graphtrans/four_state_k5_seed_ensemble_v3_ops/result.json",
+      "report": "/mnt/pvc/graphtrans/four_state_k5_seed_ensemble_v3_ops/report.md",
+      "review_receipt": "/mnt/pvc/graphtrans/four_state_k5_seed_ensemble_v3_ops/audit_receipt.json",
+      "independent_audit": "/mnt/pvc/graphtrans/four_state_k5_seed_ensemble_v3_ops/audit_v3_npz_receipt.json",
+      "dashboard": "/mnt/pvc/graphtrans/four_state_k5_seed_ensemble_v3_ops/dashboard.html",
+      "local_receipts": "F:/codexout/dbond_k5_seed_ensemble_results_20261025/",
+      "outcome": "Fixed same-fold equal-q ensemble passed the predeclared exploratory ranking gate against seed42: q_seq +0.017391 (4/5), Top10 +0.016379 (4/5), F1 +0.278193 percentage points (5/5), AUC +0.003871 (5/5), q-Brier -0.003942 (5/5). Independent pod audit passed 163 SHA/provenance checks and all numerical recomputations. Reused overlapping folds preclude a confirmatory paper claim; the supported single-model main candidate remains one-global-node k5 four-state."
     }
   ],
   "auto_advance": false,
   "scheduling_update": {
     "date_local": "2026-10-25",
     "reason": "User authorized continued ranking exploration on the supported single-global-node k5 four-state model; stage12 is a fixed three-seed same-fold inference ensemble.",
-    "current_fusion_action": "Stages12/13 failed on too-brittle historical scalar replay gates and were reviewed/acked; stage14 separately submitted with SHA-bound source identity and all historical drift diagnostic. Review only exact stage14 completion event and do not auto-advance.",
+    "current_fusion_action": "Stages12/13 failed on too-brittle historical scalar replay gates and were reviewed/acked; stage14 completed, independently audited, reported and acked. Fixed three-seed inference ensemble is exploratory and is not an automatically promoted single-model main architecture. Do not auto-advance.",
     "requested_combination": {
       "bond_head_type": "four_state_mlp",
       "report": "/mnt/pvc/graphtrans/four_state_width_ops/report.md",
