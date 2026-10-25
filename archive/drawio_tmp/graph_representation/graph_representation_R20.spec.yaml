@@ -1,0 +1,1045 @@
+meta:
+  theme: tech-blue
+  layout: horizontal
+  source: edited
+  title: Graph Representation
+modules: []
+nodes:
+  - id: nL_title
+    label: Linear Peptide Sequence
+    type: text
+    position:
+      x: 376
+      'y': 72
+    bounds:
+      x: 262
+      'y': 60
+      width: 220
+      height: 30
+    size: xl
+    style:
+      fontSize: 16
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+  - id: nL_h3n
+    label: H 3 N +
+    type: text
+    position:
+      x: 56
+      'y': 288
+    bounds:
+      x: 34.5
+      'y': 274.5
+      width: 50
+      height: 30
+    size: tiny
+    style:
+      fontSize: 14
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+  - id: nL_ala1
+    label: Ala 1
+    type: user
+    position:
+      x: 136
+      'y': 288
+    bounds:
+      x: 104.5
+      'y': 257.5
+      width: 55
+      height: 55
+    size: small
+    style:
+      fillColor: '#B9CDE5'
+      strokeColor: '#366092'
+      fontSize: 12
+      fontFamily: Helvetica
+  - id: nL_gly2
+    label: Gly 2
+    type: user
+    position:
+      x: 232
+      'y': 288
+    bounds:
+      x: 204.5
+      'y': 257.5
+      width: 55
+      height: 55
+    size: small
+    style:
+      fillColor: '#D2E4CD'
+      strokeColor: '#76933C'
+      fontSize: 12
+      fontFamily: Helvetica
+  - id: nL_leu3
+    label: Leu 3
+    type: user
+    position:
+      x: 336
+      'y': 288
+    bounds:
+      x: 304.5
+      'y': 257.5
+      width: 55
+      height: 55
+    size: small
+    style:
+      fillColor: '#F9F0D1'
+      strokeColor: '#948A54'
+      fontSize: 12
+      fontFamily: Helvetica
+  - id: nL_ser4
+    label: Ser 4
+    type: user
+    position:
+      x: 432
+      'y': 288
+    bounds:
+      x: 404.5
+      'y': 257.5
+      width: 55
+      height: 55
+    size: small
+    style:
+      fillColor: '#E4DFEC'
+      strokeColor: '#60497A'
+      fontSize: 12
+      fontFamily: Helvetica
+  - id: nL_lys5
+    label: Lys 5
+    type: user
+    position:
+      x: 536
+      'y': 288
+    bounds:
+      x: 504.5
+      'y': 257.5
+      width: 55
+      height: 55
+    size: small
+    style:
+      fillColor: '#F2DCDB'
+      strokeColor: '#953734'
+      fontSize: 12
+      fontFamily: Helvetica
+  - id: nL_tyr6
+    label: Tyr 6
+    type: user
+    position:
+      x: 632
+      'y': 288
+    bounds:
+      x: 604.5
+      'y': 257.5
+      width: 55
+      height: 55
+    size: small
+    style:
+      fillColor: '#DCE6F1'
+      strokeColor: '#31859C'
+      fontSize: 12
+      fontFamily: Helvetica
+  - id: nL_coo
+    label: '- COO -'
+    type: text
+    position:
+      x: 704
+      'y': 288
+    bounds:
+      x: 674.5
+      'y': 274.5
+      width: 55
+      height: 30
+    size: tiny
+    style:
+      fontSize: 14
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+  - id: nL_q1
+    label: y 1
+    type: text
+    position:
+      x: 176
+      'y': 256
+    bounds:
+      x: 156
+      'y': 238.5
+      width: 38
+      height: 28
+    size: tiny
+    style:
+      fontColor: '#C00000'
+      fontSize: 14
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+      fontStyle: 1
+  - id: nL_q2
+    label: y 2
+    type: text
+    position:
+      x: 272
+      'y': 256
+    bounds:
+      x: 256
+      'y': 238.5
+      width: 38
+      height: 28
+    size: tiny
+    style:
+      fontColor: '#C00000'
+      fontSize: 14
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+      fontStyle: 1
+  - id: nL_q3
+    label: y 3
+    type: text
+    position:
+      x: 376
+      'y': 256
+    bounds:
+      x: 356
+      'y': 238.5
+      width: 38
+      height: 28
+    size: tiny
+    style:
+      fontColor: '#C00000'
+      fontSize: 14
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+      fontStyle: 1
+  - id: nL_q4
+    label: y 4
+    type: text
+    position:
+      x: 472
+      'y': 256
+    bounds:
+      x: 456
+      'y': 238.5
+      width: 38
+      height: 28
+    size: tiny
+    style:
+      fontColor: '#C00000'
+      fontSize: 14
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+      fontStyle: 1
+  - id: nL_q5
+    label: y 5
+    type: text
+    position:
+      x: 576
+      'y': 256
+    bounds:
+      x: 556
+      'y': 238.5
+      width: 38
+      height: 28
+    size: tiny
+    style:
+      fontColor: '#C00000'
+      fontSize: 14
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+      fontStyle: 1
+  - id: nM_arrow
+    label: nM_arrow
+    type: service
+    position:
+      x: 800
+      'y': 200
+    bounds:
+      x: 750
+      'y': 175
+      width: 100
+      height: 55
+    size: medium
+    style:
+      fillColor: '#B9CDE5'
+      fontSize: 12
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+  - id: nM_label
+    label: Transform to Graph
+    type: text
+    position:
+      x: 792
+      'y': 256
+    bounds:
+      x: 720
+      'y': 240
+      width: 140
+      height: 25
+    size: medium
+    style:
+      fontSize: 13
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+  - id: nR_title
+    label: Graph Representation (DBond-GT)
+    type: text
+    position:
+      x: 1064
+      'y': 72
+    bounds:
+      x: 920
+      'y': 60
+      width: 290
+      height: 30
+    size: xl
+    style:
+      fontSize: 16
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+  - id: nR_G
+    label: G
+    type: user
+    position:
+      x: 1080
+      'y': 160
+    bounds:
+      x: 1045
+      'y': 127
+      width: 65
+      height: 65
+    size: small
+    style:
+      fillColor: '#DDD9C4'
+      strokeColor: '#595959'
+      fontSize: 18
+      fontFamily: Helvetica
+  - id: nR_ala1
+    label: Ala 1
+    type: user
+    position:
+      x: 920
+      'y': 240
+    bounds:
+      x: 892.5
+      'y': 210
+      width: 55
+      height: 55
+    size: small
+    style:
+      fillColor: '#B9CDE5'
+      strokeColor: '#366092'
+      fontSize: 12
+      fontFamily: Helvetica
+  - id: nR_gly2
+    label: Gly 2
+    type: user
+    position:
+      x: 944
+      'y': 328
+    bounds:
+      x: 920
+      'y': 298
+      width: 55
+      height: 55
+    size: small
+    style:
+      fillColor: '#D2E4CD'
+      strokeColor: '#76933C'
+      fontSize: 12
+      fontFamily: Helvetica
+  - id: nR_leu3
+    label: Leu 3
+    type: user
+    position:
+      x: 1040
+      'y': 392
+    bounds:
+      x: 1012
+      'y': 367.5
+      width: 55
+      height: 55
+    size: small
+    style:
+      fillColor: '#F9F0D1'
+      strokeColor: '#948A54'
+      fontSize: 12
+      fontFamily: Helvetica
+  - id: nR_ser4
+    label: Ser 4
+    type: user
+    position:
+      x: 1136
+      'y': 392
+    bounds:
+      x: 1110
+      'y': 367.5
+      width: 55
+      height: 55
+    size: small
+    style:
+      fillColor: '#E4DFEC'
+      strokeColor: '#60497A'
+      fontSize: 12
+      fontFamily: Helvetica
+  - id: nR_lys5
+    label: Lys 5
+    type: user
+    position:
+      x: 1224
+      'y': 344
+    bounds:
+      x: 1195
+      'y': 312.5
+      width: 55
+      height: 55
+    size: small
+    style:
+      fillColor: '#F2DCDB'
+      strokeColor: '#953734'
+      fontSize: 12
+      fontFamily: Helvetica
+  - id: nR_tyr6
+    label: Tyr 6
+    type: user
+    position:
+      x: 1256
+      'y': 240
+    bounds:
+      x: 1225
+      'y': 210
+      width: 55
+      height: 55
+    size: small
+    style:
+      fillColor: '#DCE6F1'
+      strokeColor: '#31859C'
+      fontSize: 12
+      fontFamily: Helvetica
+  - id: nR_q12
+    label: y 1
+    type: text
+    position:
+      x: 920
+      'y': 288
+    bounds:
+      x: 901
+      'y': 274
+      width: 38
+      height: 28
+    size: tiny
+    style:
+      fontColor: '#C00000'
+      fontSize: 14
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+      fontStyle: 1
+  - id: nR_q23
+    label: y 2
+    type: text
+    position:
+      x: 968
+      'y': 392
+    bounds:
+      x: 946
+      'y': 381
+      width: 38
+      height: 28
+    size: tiny
+    style:
+      fontColor: '#C00000'
+      fontSize: 14
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+      fontStyle: 1
+  - id: nR_q34
+    label: y 3
+    type: text
+    position:
+      x: 1088
+      'y': 416
+    bounds:
+      x: 1071
+      'y': 401
+      width: 38
+      height: 28
+    size: tiny
+    style:
+      fontColor: '#C00000'
+      fontSize: 14
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+      fontStyle: 1
+  - id: nR_q45
+    label: y 4
+    type: text
+    position:
+      x: 1192
+      'y': 392
+    bounds:
+      x: 1176
+      'y': 381
+      width: 38
+      height: 28
+    size: tiny
+    style:
+      fontColor: '#C00000'
+      fontSize: 14
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+      fontStyle: 1
+  - id: nR_q56
+    label: y 5
+    type: text
+    position:
+      x: 1240
+      'y': 288
+    bounds:
+      x: 1221
+      'y': 274
+      width: 38
+      height: 28
+    size: tiny
+    style:
+      fontColor: '#C00000'
+      fontSize: 14
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+      fontStyle: 1
+  - id: nLeg_box
+    label: nLeg_box
+    type: service
+    position:
+      x: 712
+      'y': 512
+    bounds:
+      x: 90
+      'y': 458
+      width: 1240
+      height: 110
+    size: xl
+    style:
+      strokeColor: '#999999'
+  - id: nLeg_title
+    label: Legend
+    type: text
+    position:
+      x: 136
+      'y': 472
+    bounds:
+      x: 105
+      'y': 463
+      width: 60
+      height: 20
+    size: tiny
+    style:
+      fontSize: 13
+      fontFamily: Helvetica
+      align: left
+      verticalAlign: middle
+  - id: nLeg1_circle
+    label: nLeg1_circle
+    type: user
+    position:
+      x: 128
+      'y': 512
+    bounds:
+      x: 110
+      'y': 498
+      width: 35
+      height: 35
+    size: tiny
+    style:
+      fillColor: '#B9CDE5'
+      strokeColor: '#366092'
+      fontSize: 10
+  - id: nLeg1_text
+    label: Residue (node)
+    type: text
+    position:
+      x: 200
+      'y': 512
+    bounds:
+      x: 152
+      'y': 503
+      width: 100
+      height: 20
+    size: small
+    style:
+      fontSize: 12
+      fontFamily: Helvetica
+      align: left
+      verticalAlign: middle
+  - id: nLeg2_text
+    label: Peptide bond (sequence adjacency)
+    type: text
+    position:
+      x: 424
+      'y': 520
+    bounds:
+      x: 360
+      'y': 496
+      width: 120
+      height: 40
+    size: medium
+    style:
+      fontSize: 12
+      fontFamily: Helvetica
+      align: left
+      verticalAlign: middle
+  - id: nLeg3_text
+    label: Sequence-window edge (non-adjacent seq-distance)
+    type: text
+    position:
+      x: 672
+      'y': 520
+    bounds:
+      x: 580
+      'y': 496
+      width: 190
+      height: 40
+    size: large
+    style:
+      fontSize: 10
+      fontFamily: Helvetica
+      align: left
+      verticalAlign: middle
+  - id: nLeg4_text
+    label: Global connection to virtual node
+    type: text
+    position:
+      x: 872
+      'y': 520
+    bounds:
+      x: 820
+      'y': 496
+      width: 110
+      height: 40
+    size: small
+    style:
+      fontSize: 12
+      fontFamily: Helvetica
+      align: left
+      verticalAlign: middle
+  - id: nLeg5_circle
+    label: G
+    type: user
+    position:
+      x: 976
+      'y': 512
+    bounds:
+      x: 960
+      'y': 498
+      width: 35
+      height: 35
+    size: tiny
+    style:
+      fillColor: '#DDD9C4'
+      strokeColor: '#595959'
+      fontSize: 12
+      fontFamily: Helvetica
+  - id: nLeg5_text
+    label: Global virtual node (captures global context)
+    type: text
+    position:
+      x: 1064
+      'y': 520
+    bounds:
+      x: 1002
+      'y': 496
+      width: 130
+      height: 40
+    size: medium
+    style:
+      fontSize: 12
+      fontFamily: Helvetica
+      align: left
+      verticalAlign: middle
+  - id: nLeg6_q
+    label: y i
+    type: text
+    position:
+      x: 1160
+      'y': 512
+    bounds:
+      x: 1141
+      'y': 499
+      width: 38
+      height: 28
+    size: tiny
+    style:
+      fontColor: '#C00000'
+      fontSize: 14
+      fontFamily: Helvetica
+      align: center
+      verticalAlign: middle
+      fontStyle: 1
+  - id: nLeg6_text
+    label: 'Bond-label marker: y i (cleavage label)'
+    type: text
+    position:
+      x: 1280
+      'y': 512
+    bounds:
+      x: 1185
+      'y': 493
+      width: 185
+      height: 40
+    size: large
+    style:
+      fontSize: 10
+      fontFamily: Helvetica
+      align: left
+      verticalAlign: middle
+edges:
+  - from: nL_h3n
+    to: nL_ala1
+    type: bidirectional
+    style:
+      strokeColor: '#000000'
+      strokeWidth: 1.5
+      endArrow: none
+      startArrow: none
+      exitX: 1
+      exitY: 0.5
+      exitDx: 0
+      exitDy: 0
+      entryX: 0
+      entryY: 0.5
+      entryDx: 0
+      entryDy: 0
+  - from: nL_ala1
+    to: nL_gly2
+    type: bidirectional
+    style:
+      strokeColor: '#000000'
+      strokeWidth: 1.5
+      endArrow: none
+      startArrow: none
+      exitX: 1
+      exitY: 0.5
+      exitDx: 0
+      exitDy: 0
+      entryX: 0
+      entryY: 0.5
+      entryDx: 0
+      entryDy: 0
+  - from: nL_gly2
+    to: nL_leu3
+    type: bidirectional
+    style:
+      strokeColor: '#000000'
+      strokeWidth: 1.5
+      endArrow: none
+      startArrow: none
+      exitX: 1
+      exitY: 0.5
+      exitDx: 0
+      exitDy: 0
+      entryX: 0
+      entryY: 0.5
+      entryDx: 0
+      entryDy: 0
+  - from: nL_leu3
+    to: nL_ser4
+    type: bidirectional
+    style:
+      strokeColor: '#000000'
+      strokeWidth: 1.5
+      endArrow: none
+      startArrow: none
+      exitX: 1
+      exitY: 0.5
+      exitDx: 0
+      exitDy: 0
+      entryX: 0
+      entryY: 0.5
+      entryDx: 0
+      entryDy: 0
+  - from: nL_ser4
+    to: nL_lys5
+    type: bidirectional
+    style:
+      strokeColor: '#000000'
+      strokeWidth: 1.5
+      endArrow: none
+      startArrow: none
+      exitX: 1
+      exitY: 0.5
+      exitDx: 0
+      exitDy: 0
+      entryX: 0
+      entryY: 0.5
+      entryDx: 0
+      entryDy: 0
+  - from: nL_lys5
+    to: nL_tyr6
+    type: bidirectional
+    style:
+      strokeColor: '#000000'
+      strokeWidth: 1.5
+      endArrow: none
+      startArrow: none
+      exitX: 1
+      exitY: 0.5
+      exitDx: 0
+      exitDy: 0
+      entryX: 0
+      entryY: 0.5
+      entryDx: 0
+      entryDy: 0
+  - from: nL_tyr6
+    to: nL_coo
+    type: bidirectional
+    style:
+      strokeColor: '#000000'
+      strokeWidth: 1.5
+      endArrow: none
+      startArrow: none
+      exitX: 1
+      exitY: 0.5
+      exitDx: 0
+      exitDy: 0
+      entryX: 0
+      entryY: 0.5
+      entryDx: 0
+      entryDy: 0
+  - from: nR_ala1
+    to: nR_gly2
+    type: bidirectional
+    style:
+      strokeColor: '#1F497D'
+      strokeWidth: 2.5
+      endArrow: none
+      startArrow: none
+      exitX: 0.5
+      exitY: 1
+      exitDx: 0
+      exitDy: 0
+      entryX: 0.5
+      entryY: 0
+      entryDx: 0
+      entryDy: 0
+  - from: nR_gly2
+    to: nR_leu3
+    type: bidirectional
+    style:
+      strokeColor: '#1F497D'
+      strokeWidth: 2.5
+      endArrow: none
+      startArrow: none
+      exitX: 0.25
+      exitY: 1
+      exitDx: 0
+      exitDy: 0
+      entryX: 0
+      entryY: 0.5
+      entryDx: 0
+      entryDy: 0
+  - from: nR_leu3
+    to: nR_ser4
+    type: bidirectional
+    style:
+      strokeColor: '#1F497D'
+      strokeWidth: 2.5
+      endArrow: none
+      startArrow: none
+      exitX: 1
+      exitY: 0.5
+      exitDx: 0
+      exitDy: 0
+      entryX: 0
+      entryY: 0.5
+      entryDx: 0
+      entryDy: 0
+  - from: nR_ser4
+    to: nR_lys5
+    type: bidirectional
+    style:
+      strokeColor: '#1F497D'
+      strokeWidth: 2.5
+      endArrow: none
+      startArrow: none
+      exitX: 1
+      exitY: 0.5
+      exitDx: 0
+      exitDy: 0
+      entryX: 0.75
+      entryY: 1
+      entryDx: 0
+      entryDy: 0
+  - from: nR_lys5
+    to: nR_tyr6
+    type: bidirectional
+    style:
+      strokeColor: '#1F497D'
+      strokeWidth: 2.5
+      endArrow: none
+      startArrow: none
+      exitX: 0.5
+      exitY: 0
+      exitDx: 0
+      exitDy: 0
+      entryX: 0.5
+      entryY: 1
+      entryDx: 0
+      entryDy: 0
+  - from: nR_G
+    to: nR_ala1
+    type: data
+    style:
+      strokeColor: '#60497A'
+      strokeWidth: 1.2
+      dashed: true
+      dashPattern: 6 3
+      endArrow: none
+      startArrow: none
+      exitX: 0.25
+      exitY: 1
+      exitDx: 0
+      exitDy: 0
+      entryX: 0.5
+      entryY: 0
+      entryDx: 0
+      entryDy: 0
+  - from: nR_G
+    to: nR_gly2
+    type: data
+    style:
+      strokeColor: '#60497A'
+      strokeWidth: 1.2
+      dashed: true
+      dashPattern: 6 3
+      endArrow: none
+      startArrow: none
+      exitX: 0
+      exitY: 0.75
+      exitDx: 0
+      exitDy: 0
+      entryX: 0.5
+      entryY: 0
+      entryDx: 0
+      entryDy: 0
+  - from: nR_G
+    to: nR_leu3
+    type: data
+    style:
+      strokeColor: '#60497A'
+      strokeWidth: 1.2
+      dashed: true
+      dashPattern: 6 3
+      endArrow: none
+      startArrow: none
+      exitX: 0.25
+      exitY: 1
+      exitDx: 0
+      exitDy: 0
+      entryX: 0.5
+      entryY: 0
+      entryDx: 0
+      entryDy: 0
+  - from: nR_G
+    to: nR_ser4
+    type: data
+    style:
+      strokeColor: '#60497A'
+      strokeWidth: 1.2
+      dashed: true
+      dashPattern: 6 3
+      endArrow: none
+      startArrow: none
+      exitX: 0.75
+      exitY: 1
+      exitDx: 0
+      exitDy: 0
+      entryX: 0.5
+      entryY: 0
+      entryDx: 0
+      entryDy: 0
+  - from: nR_G
+    to: nR_lys5
+    type: data
+    style:
+      strokeColor: '#60497A'
+      strokeWidth: 1.2
+      dashed: true
+      dashPattern: 6 3
+      endArrow: none
+      startArrow: none
+      exitX: 1
+      exitY: 0.75
+      exitDx: 0
+      exitDy: 0
+      entryX: 0.5
+      entryY: 0
+      entryDx: 0
+      entryDy: 0
+  - from: nR_G
+    to: nR_tyr6
+    type: data
+    style:
+      strokeColor: '#60497A'
+      strokeWidth: 1.2
+      dashed: true
+      dashPattern: 6 3
+      endArrow: none
+      startArrow: none
+      exitX: 0.75
+      exitY: 1
+      exitDx: 0
+      exitDy: 0
+      entryX: 0.5
+      entryY: 0
+      entryDx: 0
+      entryDy: 0
+  - from: nR_ala1
+    to: nR_leu3
+    type: data
+    style:
+      strokeColor: '#76933C'
+      strokeWidth: 1.5
+      dashed: true
+      dashPattern: 2 4
+      endArrow: none
+      startArrow: none
+      exitX: 0.5
+      exitY: 1
+      exitDx: 0
+      exitDy: 0
+      entryX: 0.455
+      entryY: 0.16
+      entryDx: 0
+      entryDy: 0
+    waypoints:
+      - x: 745
+        'y': 392
+  - from: nR_ser4
+    to: nR_tyr6
+    type: data
+    style:
+      strokeColor: '#76933C'
+      strokeWidth: 1.5
+      dashed: true
+      dashPattern: 2 4
+      endArrow: none
+      startArrow: none
+      exitX: 0.5
+      exitY: 0
+      exitDx: 0
+      exitDy: 0
+    waypoints:
+      - x: 1240
+        'y': 279

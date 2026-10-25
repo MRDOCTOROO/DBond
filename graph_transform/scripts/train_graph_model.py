@@ -1,0 +1,1598 @@
+#!/usr/bin/env python3
+"""
+图神经网络训练脚本
+
+本脚本用于训练图神经网络键级别二分类模型。
+支持配置文件、命令行参数和完整的训练流程。
+"""
+
+import os
+import sys
+import argparse
+import re
+import yaml
+import logging
+import json
+import math
+import time
+from datetime import datetime
+from typing import Dict, Any, Optional, List
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+
+# 添加项目根目录到Python路径
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from models import GraphTransformer
+from torch.nn.parameter import UninitializedParameter
+from models.utils import build_model_config, CheckpointManager, LearningRateScheduler
+from data import GraphDataset, GraphDataLoader, CachedGraphDataset
+try:
+    from data.optimized_graph_dataset import PreprocessedGraphDataset, OptimizedGraphDataLoader
+except ImportError:
+    PreprocessedGraphDataset = None
+    OptimizedGraphDataLoader = None
+from training import Trainer, BinaryBondLoss
+from training.checkpoint_selection import CheckpointSelection
+from training.transfer_optimizer import (
+    validate_transfer_optimizer_request, create_transfer_optimizer, create_transfer_scheduler,
+    get_optimizer_provenance, write_optimizer_provenance,
+)
+from evaluation import Evaluator
+from evaluation.metrics import metric_rows, metric_display_name
+
+
+def setup_logging(config: Dict[str, Any]) -> logging.Logger:
+    """设置日志"""
+    log_config = config.get('logging', {})
+    log_level = getattr(logging, log_config.get('level', 'INFO'))
+    
+    # 创建日志目录
+    log_dir = log_config.get('log_dir', 'logs/graph_transform')
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # 设置日志格式
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    
+    # 配置logger
+    logger = logging.getLogger('graph_transform')
+    logger.setLevel(log_level)
+    logger.handlers.clear()
+    logger.propagate = False
+    
+    # 控制台处理器
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter(log_format))
+    logger.addHandler(console_handler)
+    
+    # 文件处理器
+    log_file = os.path.join(log_dir, log_config.get('log_file', 'training.log'))
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(logging.Formatter(log_format))
+    logger.addHandler(file_handler)
+    
+    return logger
+
+
+def resolve_plot_dir(checkpoint_dir: str, log_config: Dict[str, Any]) -> str:
+    """解析训练曲线输出目录。"""
+    plot_dir = log_config.get('plot_dir')
+    if not plot_dir:
+        plot_dir = os.path.join(checkpoint_dir, 'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    return plot_dir
+
+
+def resolve_tensorboard_dir(checkpoint_dir: str, log_config: Dict[str, Any]) -> str:
+    """解析TensorBoard日志目录，按运行目录隔离。"""
+    base_dir = log_config.get('tensorboard_log_dir') or os.path.join(checkpoint_dir, 'tensorboard')
+    tb_dir = os.path.join(base_dir, os.path.basename(checkpoint_dir))
+    os.makedirs(tb_dir, exist_ok=True)
+    return tb_dir
+
+
+def create_tensorboard_writers(
+    checkpoint_dir: str,
+    log_config: Dict[str, Any],
+    config: Dict[str, Any],
+    logger: logging.Logger,
+) -> Dict[str, 'SummaryWriter']:
+    """仿照 dbond_m，为 train/val/test 分别创建 TensorBoard writer。"""
+    if SummaryWriter is None:
+        logger.warning("TensorBoard is enabled in config but tensorboard is not installed; event logging is disabled.")
+        return {}
+
+    tb_root = resolve_tensorboard_dir(checkpoint_dir, log_config)
+    config_yaml = yaml.safe_dump(config, sort_keys=False)
+    writers: Dict[str, SummaryWriter] = {}
+    for mode in ('train', 'val', 'test'):
+        mode_dir = os.path.join(tb_root, mode)
+        os.makedirs(mode_dir, exist_ok=True)
+        writers[mode] = SummaryWriter(log_dir=mode_dir)
+        writers[mode].add_text("config/yaml", config_yaml, 0)
+    logger.info(f"TensorBoard root dir: {tb_root}")
+    return writers
+
+
+def flush_tensorboard_writers(writers: Dict[str, 'SummaryWriter']) -> None:
+    for writer in writers.values():
+        writer.flush()
+
+
+def close_tensorboard_writers(writers: Dict[str, 'SummaryWriter']) -> None:
+    for writer in writers.values():
+        writer.close()
+
+
+def sanitize_filename_component(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_")
+    return sanitized or "unknown"
+
+
+def build_ablation_tag(config: Dict[str, Any]) -> str:
+    """根据配置生成消融实验标签。"""
+    ablation_config = config.get('ablation', {})
+    explicit_tag = ablation_config.get('tag')
+    if explicit_tag:
+        return sanitize_filename_component(explicit_tag)
+
+    tags: List[str] = []
+    if ablation_config.get('use_sequence_graph', False):
+        tags.append('sequence_graph')
+    elif ablation_config.get('use_hybrid_graph', False):
+        tags.append('hybrid_graph')
+
+    if ablation_config.get('disable_global_node', False):
+        tags.append('no_global_node')
+    if ablation_config.get('gcn_only', False):
+        tags.append('gcn_only')
+    elif ablation_config.get('gat_only', False):
+        tags.append('gat_only')
+
+    if ablation_config.get('no_message_passing', False):
+        tags.append('no_message_passing')
+    if ablation_config.get('no_edge_attr', False):
+        tags.append('no_edge_attr')
+    if ablation_config.get('no_state_env', False):
+        tags.append('no_state_env')
+
+    # Feature-group progressive addition：从裸模型（无 state 无 env）出发，每次只保留一组特征。
+    # 与 no_state_env（整组消融）互补：no_state_env 关掉整组，这里是"只留一组"。
+    if ablation_config.get('baseline_no_state_env', False):
+        tags.append('baseline_no_state_env')
+    if ablation_config.get('state_charge_only', False):
+        tags.append('state_charge_only')
+    if ablation_config.get('state_mass_intensity_only', False):
+        tags.append('state_mass_intensity_only')
+    if ablation_config.get('env_nce_only', False):
+        tags.append('env_nce_only')
+    if ablation_config.get('env_scan_num_only', False):
+        tags.append('env_scan_num_only')
+    # 细粒度拆分：mass / intensity 各自单独（与 state_mass_intensity_only 并存，供论文对比）
+    if ablation_config.get('state_mass_only', False):
+        tags.append('state_mass_only')
+    if ablation_config.get('state_intensity_only', False):
+        tags.append('state_intensity_only')
+    # env 第二维用 rt（需同时切 env_feature_name=rt + 量级对齐的 env_feature_scale=0.01）
+    if ablation_config.get('env_rt_only', False):
+        tags.append('env_rt_only')
+    # R-01 DBond-GT-pre（合成前评分版）：屏蔽实测协变量 intensity 与 scan_num/rt
+    if ablation_config.get('pre_synthesis', False):
+        tags.append('gt_pre')
+    # R-03 leave-one-feature-out（LOFO）：从 full 出发每次只去一个特征（5 缺 1），
+    # 与 single-only（Table 9 充分性）互为镜像（必要性），所有 setting 以 full 为参照。
+    if ablation_config.get('lofo_no_charge', False):
+        tags.append('lofo_no_charge')
+    if ablation_config.get('lofo_no_mass', False):
+        tags.append('lofo_no_mass')
+    if ablation_config.get('lofo_no_intensity', False):
+        tags.append('lofo_no_intensity')
+    if ablation_config.get('lofo_no_nce', False):
+        tags.append('lofo_no_nce')
+    if ablation_config.get('lofo_no_scan', False):
+        tags.append('lofo_no_scan')
+
+    return "_".join(tags) if tags else "baseline"
+
+
+def apply_ablation_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """将统一的 ablation 开关映射到实际模型/数据配置，并整理输出目录。"""
+    ablation_config = config.setdefault('ablation', {})
+    model_config = config.setdefault('model', {})
+    data_config = config.setdefault('data', {})
+    training_config = config.setdefault('training', {})
+    evaluation_config = config.setdefault('evaluation', {})
+    logging_config = config.setdefault('logging', {})
+    experiment_config = config.setdefault('experiment', {})
+
+    # 互斥校验：一次只允许开一个消融开关，保护单变量原则
+    exclusive_flags = [
+        'use_sequence_graph', 'use_hybrid_graph', 'disable_global_node',
+        'gcn_only', 'gat_only', 'no_message_passing', 'no_edge_attr', 'no_state_env',
+        # Feature-group progressive addition（与上面 8 个开关互斥）
+        'baseline_no_state_env', 'state_charge_only', 'state_mass_intensity_only',
+        'env_nce_only', 'env_scan_num_only',
+        # 细粒度拆分（mass / intensity 各自单独）+ rt 替代 scan_num
+        'state_mass_only', 'state_intensity_only', 'env_rt_only',
+        # R-01 合成前评分版（DBond-GT-pre）
+        'pre_synthesis',
+        # R-03 leave-one-feature-out（每次从 full 只去一个特征，互斥）
+        'lofo_no_charge', 'lofo_no_mass', 'lofo_no_intensity', 'lofo_no_nce', 'lofo_no_scan',
+    ]
+    active_flags = [f for f in exclusive_flags if ablation_config.get(f, False)]
+    if len(active_flags) > 1:
+        raise ValueError(
+            "单变量原则：一次只能开启一个消融开关，当前同时开启了: "
+            f"{active_flags}"
+        )
+
+    if ablation_config.get('use_sequence_graph', False):
+        data_config['graph_strategy'] = 'sequence'
+    elif ablation_config.get('use_hybrid_graph', False):
+        data_config['graph_strategy'] = 'hybrid'
+
+    if ablation_config.get('disable_global_node', False):
+        model_config['use_global_node'] = False
+
+    # 骨干对比：5×GAT 基线 → 等深度 5×GCN（只换骨干类型，不换深度，保证单变量）
+    if ablation_config.get('gcn_only', False):
+        total_depth = int(model_config.get('num_gcn_layers', 0)) + int(model_config.get('num_gat_layers', 0))
+        model_config['num_gcn_layers'] = max(total_depth, 1)
+        model_config['num_gat_layers'] = 0
+    # 与 gcn_only 对称：保持总深度不变（如 3GCN+2GAT → 5GAT），避免层数学不对等的假对比；
+    # 若配置本身已是全 GAT（num_gcn=0）则退化为原样，兼容历史 5×GAT 基线语义。
+    elif ablation_config.get('gat_only', False):
+        total_depth = int(model_config.get('num_gcn_layers', 0)) + int(model_config.get('num_gat_layers', 0))
+        model_config['num_gat_layers'] = max(total_depth, 1)
+        model_config['num_gcn_layers'] = 0
+
+    # (1) w/o Message Passing：双零层，bond head 直接吃 NodeEncoder 输出
+    if ablation_config.get('no_message_passing', False):
+        model_config['num_gcn_layers'] = 0
+        model_config['num_gat_layers'] = 0
+
+    # (2) w/o Edge Features：彻底切断所有边信息途径
+    #   - use_edge_features: 关闭 GCN 层的边特征门控（防止未来开启 GCN 时重新引入边信息）
+    #   - use_raw_edge_attr: 关闭 8 维原始物理属性融合
+    #   - gat_use_edge_bias/gate: 关闭 GAT 注意力的边偏置与门控
+    #   - bond_use_edge_repr: 切断 bond head 的 e_ij（此前的主要泄漏点）
+    #   - use_edge_type_embedding/use_distance_embedding: 让 EdgeEncoder 输出退化为无信息常量
+    #   注：仅关前三项时，bond head 仍能经 e_ij 拿到 type+distance 嵌入，导致消融后指标不降反升（隐式正则化）。
+    if ablation_config.get('no_edge_attr', False):
+        model_config['use_edge_features'] = False
+        model_config['use_raw_edge_attr'] = False
+        model_config['gat_use_edge_bias'] = False
+        model_config['gat_use_edge_gate'] = False
+        model_config['bond_use_edge_repr'] = False
+        model_config['use_edge_type_embedding'] = False
+        model_config['use_distance_embedding'] = False
+
+    # (3) w/o State/Env：经 ModelConfig 传播到 GraphBuilder，使 state/env 在
+    # 节点编码器 / 全局节点 / edge_attr 三处使用点同时失效
+    if ablation_config.get('no_state_env', False):
+        model_config['use_state_features'] = False
+        model_config['use_env_features'] = False
+
+    # (4) Feature-group progressive addition：从裸模型出发，每次只保留一组特征。
+    # 通过 state_feature_mask / env_feature_mask 控制子组级保留（True=保留，False=屏蔽）。
+    # mask 顺序固定：state=[charge, pep_mass, intensity]，env=[nce, scan_num]。
+    # use_state_features/use_env_features 必须保持 True，否则整组会被 new_zeros 覆盖，mask 失效。
+    if ablation_config.get('baseline_no_state_env', False):
+        # 裸模型起点：state/env 全屏蔽（等价于 no_state_env，但走 mask 路径以便与其他 +X 组严格同机制）
+        model_config['state_feature_mask'] = [False, False, False]
+        model_config['env_feature_mask'] = [False, False]
+    elif ablation_config.get('state_charge_only', False):
+        model_config['state_feature_mask'] = [True, False, False]
+        model_config['env_feature_mask'] = [False, False]
+    elif ablation_config.get('state_mass_intensity_only', False):
+        model_config['state_feature_mask'] = [False, True, True]
+        model_config['env_feature_mask'] = [False, False]
+    elif ablation_config.get('env_nce_only', False):
+        model_config['state_feature_mask'] = [False, False, False]
+        model_config['env_feature_mask'] = [True, False]
+    elif ablation_config.get('env_scan_num_only', False):
+        model_config['state_feature_mask'] = [False, False, False]
+        model_config['env_feature_mask'] = [False, True]
+    # 细粒度拆分：mass / intensity 各自单独（state 顺序 [charge, pep_mass, intensity]）
+    elif ablation_config.get('state_mass_only', False):
+        model_config['state_feature_mask'] = [False, True, False]
+        model_config['env_feature_mask'] = [False, False]
+    elif ablation_config.get('state_intensity_only', False):
+        model_config['state_feature_mask'] = [False, False, True]
+        model_config['env_feature_mask'] = [False, False]
+    # env 第二维用 rt（替代 scan_num）：同时切 env_feature_name + 量级对齐的 scale
+    # rt∈[0.7,60.6]×0.01→[0.007,0.6] 均值0.30，与 scan_num(log1p/20 均值0.26) 量级对齐，保证对比公平。
+    elif ablation_config.get('env_rt_only', False):
+        model_config['state_feature_mask'] = [False, False, False]
+        model_config['env_feature_mask'] = [False, True]
+        data_config['env_feature_name'] = 'rt'
+        data_config['env_feature_scale'] = 0.01
+    # R-01 DBond-GT-pre（合成前评分版）：只保留序列可计算特征 + 可预设条件。
+    #   state 保留 charge/pep_mass（序列+charge 可理论计算 m/z），屏蔽 intensity（前体强度，实测）；
+    #   env 保留 nce（采集参数，可预设），屏蔽 scan_num/rt（实测）。
+    # 三处注入点（NodeEncoder / global_node_proj / graph_builder edge_attr）同步生效，
+    # 屏蔽位置在归一化后精确置 0。rebuild_cache 必须 true：edge_attr 数值随 mask 变化。
+    elif ablation_config.get('pre_synthesis', False):
+        model_config['state_feature_mask'] = [True, True, False]
+        model_config['env_feature_mask'] = [True, False]
+    # R-03 leave-one-feature-out（LOFO）：从 full 出发每次只屏蔽一个特征（5 缺 1）。
+    # 注意与已有实验的边界：lofo_no_intensity ≠ gt_pre（后者同时屏蔽 scan）；
+    # single-only 系列是充分性（只给一个），LOFO 是必要性（只去一个），二者互补。
+    # mask 顺序固定 state=[charge,pep_mass,intensity]，env=[nce,scan_num]。
+    elif ablation_config.get('lofo_no_charge', False):
+        model_config['state_feature_mask'] = [False, True, True]
+        model_config['env_feature_mask'] = [True, True]
+    elif ablation_config.get('lofo_no_mass', False):
+        model_config['state_feature_mask'] = [True, False, True]
+        model_config['env_feature_mask'] = [True, True]
+    elif ablation_config.get('lofo_no_intensity', False):
+        model_config['state_feature_mask'] = [True, True, False]
+        model_config['env_feature_mask'] = [True, True]
+    elif ablation_config.get('lofo_no_nce', False):
+        model_config['state_feature_mask'] = [True, True, True]
+        model_config['env_feature_mask'] = [False, True]
+    elif ablation_config.get('lofo_no_scan', False):
+        model_config['state_feature_mask'] = [True, True, True]
+        model_config['env_feature_mask'] = [True, False]
+
+    if ablation_config.get('rebuild_cache', False):
+        data_config['rebuild_cache'] = True
+
+    ablation_tag = build_ablation_tag(config)
+    ablation_config['resolved_tag'] = ablation_tag
+
+    base_experiment_name = ablation_config.get('base_experiment_name') or experiment_config.get('name', 'graph_transform_binary_bond')
+    experiment_config['base_name'] = base_experiment_name
+    experiment_config['name'] = f"{base_experiment_name}_{ablation_tag}"
+
+    for section_config, key in (
+        (training_config, 'checkpoint_dir'),
+        (evaluation_config, 'output_metric_dir'),
+        (evaluation_config, 'output_pred_dir'),
+        (logging_config, 'log_dir'),
+    ):
+        base_dir = section_config.get(key)
+        if base_dir:
+            section_config[key] = os.path.join(base_dir, ablation_tag)
+
+    return config
+
+
+def build_evaluation_id(checkpoint_reference: str, phase: str) -> str:
+    checkpoint_stem = sanitize_filename_component(os.path.splitext(os.path.basename(checkpoint_reference))[0])
+    checkpoint_parent = sanitize_filename_component(os.path.basename(os.path.dirname(checkpoint_reference)))
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    return f"{timestamp}_{checkpoint_parent}_{checkpoint_stem}_{phase}"
+
+
+def append_eval_id_to_path(filepath: str, evaluation_id: str) -> str:
+    directory, filename = os.path.split(filepath)
+    stem, ext = os.path.splitext(filename)
+    return os.path.join(directory, f"{stem}__{evaluation_id}{ext}")
+
+
+def save_evaluation_outputs(
+    *,
+    metrics: Dict[str, Any],
+    output_df: pd.DataFrame,
+    metric_csv_path: str,
+    pred_csv_path: str,
+    evaluation_id: str,
+    logger: logging.Logger,
+) -> None:
+    metric_dir = os.path.dirname(metric_csv_path)
+    pred_dir = os.path.dirname(pred_csv_path)
+    if metric_dir:
+        os.makedirs(metric_dir, exist_ok=True)
+    if pred_dir:
+        os.makedirs(pred_dir, exist_ok=True)
+
+    metric_df = pd.DataFrame(metric_rows(metrics))
+    metric_df.to_csv(metric_csv_path, index=False)
+    output_df.to_csv(pred_csv_path, index=False)
+
+    archive_metric_path = append_eval_id_to_path(metric_csv_path, evaluation_id)
+    archive_pred_path = append_eval_id_to_path(pred_csv_path, evaluation_id)
+    metric_df.to_csv(archive_metric_path, index=False)
+    output_df.to_csv(archive_pred_path, index=False)
+
+    logger.info(f"Saved latest metrics to {metric_csv_path}")
+    logger.info(f"Saved latest predictions to {pred_csv_path}")
+    logger.info(f"Archived metrics to {archive_metric_path}")
+    logger.info(f"Archived predictions to {archive_pred_path}")
+
+
+def _save_line_plot(
+    epochs: list,
+    series: Dict[str, list],
+    title: str,
+    ylabel: str,
+    save_path: str,
+) -> None:
+    """保存折线图，自动跳过None值。"""
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(10, 6))
+    has_data = False
+    for label, values in series.items():
+        valid_pairs = [(e, v) for e, v in zip(epochs, values) if v is not None]
+        if not valid_pairs:
+            continue
+        has_data = True
+        plt.plot(
+            [e for e, _ in valid_pairs],
+            [v for _, v in valid_pairs],
+            label=label,
+            linewidth=2,
+        )
+
+    if not has_data:
+        plt.close()
+        return
+
+    plt.xlabel('Epoch')
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=180)
+    plt.close()
+
+
+def save_training_curves(
+    history: Dict[str, list],
+    config: Dict[str, Any],
+    logger: logging.Logger,
+    checkpoint_dir: str,
+) -> None:
+    """保存训练曲线与历史表。"""
+    log_config = config.get('logging', {})
+    if not log_config.get('save_training_curves', log_config.get('save_loss_curves', True)):
+        return
+
+    plot_dir = resolve_plot_dir(checkpoint_dir, log_config)
+
+    history_df = pd.DataFrame(history)
+    history_csv = os.path.join(plot_dir, 'training_history.csv')
+    history_df.to_csv(history_csv, index=False)
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        logger.warning(f"Could not save training curves because matplotlib is unavailable: {exc}")
+        return
+
+    epochs = history.get('epoch', [])
+    if not epochs:
+        return
+
+    _save_line_plot(
+        epochs,
+        {
+            'Train Loss': history.get('train_loss', []),
+            'Val Loss': history.get('val_loss', []),
+        },
+        'GraphTransformer Loss Curve',
+        'Loss',
+        os.path.join(plot_dir, 'loss_curve.png'),
+    )
+    _save_line_plot(
+        epochs,
+        {
+            'Train F1': history.get('train_f1', []),
+            'Val F1': history.get('val_f1', []),
+        },
+        'GraphTransformer F1 Curve',
+        'F1',
+        os.path.join(plot_dir, 'f1_curve.png'),
+    )
+    _save_line_plot(
+        epochs,
+        {
+            'Learning Rate': history.get('learning_rate', []),
+        },
+        'Learning Rate Schedule',
+        'Learning Rate',
+        os.path.join(plot_dir, 'learning_rate_curve.png'),
+    )
+    _save_line_plot(
+        epochs,
+        {
+            'Avg Grad Norm': history.get('train_avg_grad_norm', []),
+            'Max Grad Norm': history.get('train_max_grad_norm', []),
+        },
+        'Gradient Norm Curve',
+        'Grad Norm',
+        os.path.join(plot_dir, 'grad_norm_curve.png'),
+    )
+    _save_line_plot(
+        epochs,
+        {
+            'Train Precision': history.get('train_precision', []),
+            'Train Recall': history.get('train_recall', []),
+            'Val Precision': history.get('val_precision', []),
+            'Val Recall': history.get('val_recall', []),
+        },
+        'Precision Recall Curve',
+        'Score',
+        os.path.join(plot_dir, 'precision_recall_curve.png'),
+    )
+    _save_line_plot(
+        epochs,
+        {
+            'Train AUC': history.get('train_auc', []),
+            'Val AUC': history.get('val_auc', []),
+        },
+        'AUC Curve',
+        'AUC',
+        os.path.join(plot_dir, 'auc_curve.png'),
+    )
+    _save_line_plot(
+        epochs,
+        {
+            'Avg Batch Time': history.get('train_avg_batch_time', []),
+            'Avg Forward Time': history.get('train_avg_forward_time', []),
+            'Avg Backward Time': history.get('train_avg_backward_time', []),
+            'Avg Fetch Wait Time': history.get('train_avg_fetch_wait_time', []),
+        },
+        'Timing Curve',
+        'Seconds',
+        os.path.join(plot_dir, 'timing_curve.png'),
+    )
+
+    logger.info(f"Saved training curves to {plot_dir}")
+
+
+def log_metrics_to_tensorboard(
+    writers: Dict[str, 'SummaryWriter'],
+    mode: str,
+    metrics: Dict[str, Any],
+    step: int,
+) -> None:
+    """写入 TensorBoard 标量；按 split 分 writer，贴近 dbond_m 视图。"""
+    writer = writers.get(mode)
+    if writer is None:
+        return
+
+    for key, value in metrics.items():
+        if value is None or isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            writer.add_scalar(metric_display_name(key), float(value), step)
+
+
+def setup_device(config: Dict[str, Any]) -> torch.device:
+    """设置计算设备"""
+    device_config = config.get('device', {})
+    
+    if device_config.get('auto_detect', True):
+        if torch.cuda.is_available():
+            device = torch.device('cuda')
+            gpu_id = device_config.get('gpu_id', 0)
+            torch.cuda.set_device(gpu_id)
+            logger.info(f"Using CUDA device: {gpu_id}")
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            device = torch.device('mps')
+            logger.info("Using MPS device")
+        else:
+            device = torch.device('cpu')
+            logger.info("Using CPU device")
+    else:
+        device_type = device_config.get('device_type', 'cpu')
+        device = torch.device(device_type)
+        if device_type == 'cuda':
+            gpu_id = device_config.get('gpu_id', 0)
+            torch.cuda.set_device(gpu_id)
+    
+    return device
+
+
+def load_config(config_path: str, args: argparse.Namespace) -> Dict[str, Any]:
+    """加载配置文件"""
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    
+    # 命令行参数覆盖配置（显式 is not None 判断：--seed 0 / --epochs 0 等 falsy 值不再被忽略）
+    if args.epochs is not None:
+        config['training']['epochs'] = args.epochs
+    if args.batch_size is not None:
+        config['training']['batch_size'] = args.batch_size
+    if args.learning_rate is not None:
+        config['training']['learning_rate'] = args.learning_rate
+    if args.device:
+        config['device']['device_type'] = args.device
+        # 显式指定 device 时必须关闭 auto_detect，否则有 CUDA 的机器会忽略 cpu/mps
+        config['device']['auto_detect'] = False
+
+    return apply_ablation_config(config)
+
+
+def create_model(config: Dict[str, Any], device: torch.device) -> nn.Module:
+    """创建模型"""
+    model_config = build_model_config(config)
+    
+    model = GraphTransformer(model_config)
+    model = model.to(device)
+    
+    total_params = sum(
+        p.numel() for p in model.parameters()
+        if not isinstance(p, UninitializedParameter)
+    )
+    logger.info(f"Created model with {total_params} parameters")
+    
+    return model
+
+
+def _resolve_preprocessed_path(data_config: Dict[str, Any], split: str) -> str:
+    """解析某个 split 对应的预处理 .pt 文件路径。
+
+    约定（可被 data.preprocessed_paths 覆盖）：
+        {preprocessed_dir}/{split}.pt
+    其中 preprocessed_dir 默认 'cache/preprocessed'。
+    """
+    explicit = data_config.get('preprocessed_paths') or {}
+    if split in explicit:
+        return explicit[split]
+    preprocessed_dir = data_config.get('preprocessed_dir', 'cache/preprocessed')
+    return os.path.join(preprocessed_dir, f'{split}.pt')
+
+
+def _validation_split_seed(config):
+    training = config.get('training', {})
+    if 'validation_split_base_seed' in training:
+        raise ValueError('Unresolved validation_split_base_seed: use the five-fold runner')
+    value = training.get('validation_split_seed', config.get('experiment', {}).get('seed', 42))
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError('training.validation_split_seed must be an integer')
+    return value
+
+
+def create_datasets(config: Dict[str, Any]) -> tuple:
+    """创建数据集"""
+    data_config = config['data']
+    training_config = config.get('training', {})
+    validated_split_seed = _validation_split_seed(config)
+    model_config = build_model_config(config)
+
+    dataset_cls = CachedGraphDataset if data_config.get('cache_graphs', False) else GraphDataset
+    four_state_store = None
+    state_manifest = data_config.get('four_state_targets_manifest')
+    state_enabled = model_config.bond_head_type == 'four_state_mlp'
+    if bool(state_manifest) != state_enabled:
+        raise ValueError('four_state_mlp requires exactly one manifest-bound training target source')
+    if state_enabled:
+        if data_config.get('preprocessed', False) or data_config.get('augmentation', False) or not data_config.get('use_soft_labels', False):
+            raise ValueError('four-state targets require unaugmented, folded soft-label graph training')
+        from data.four_state_dataset import FourStateStore, FourStateDataset
+        four_state_store = FourStateStore(state_manifest, data_config['train_csv_path'])
+    validation_source = data_config.get('validation_source_csv_path')
+    if validation_source and (data_config.get('val_csv_path') or data_config.get('preprocessed', False)):
+        raise ValueError('Full-row internal validation requires an internal sequence split and graph datasets')
+    ion12_store = None
+    ion12_manifest = data_config.get('ion12_targets_manifest')
+    if ion12_manifest is not None:
+        if data_config.get('preprocessed', False) or data_config.get('augmentation', False):
+            raise ValueError('ion12 targets do not support preprocessed datasets or augmentation')
+        if not data_config.get('use_soft_labels', False):
+            raise ValueError('ion12 targets require condition-folded soft labels')
+        from data.ion12_dataset import Ion12TargetStore, Ion12GraphDataset, resolve_ion12_manifest
+        manifest_path, target_fold = resolve_ion12_manifest(ion12_manifest, data_config['train_csv_path'])
+        ion12_store = Ion12TargetStore(manifest_path, target_fold, data_config['train_csv_path'])
+
+    def _build(csv_path, split, augmentation):
+        """构造单个 split 的数据集；当 data.preprocessed=True 时走离线预处理路径。"""
+        if data_config.get('preprocessed', False):
+            if PreprocessedGraphDataset is None:
+                raise ImportError("data.preprocessed=True 但无法导入 PreprocessedGraphDataset；"
+                                  "请先用 scripts/preprocess_graph_data.py 生成 .pt 文件。")
+            pt_path = _resolve_preprocessed_path(data_config, split)
+            return PreprocessedGraphDataset(
+                data_path=pt_path,
+                config=model_config,
+                augmentation=augmentation,
+                split=split,
+            )
+        kwargs = {
+            'csv_path': csv_path,
+            # 必须传完整 config dict（而非 model_config）：GraphDataset 经 _get_config_value
+            # 按 根→data→model 搜索键，data 段键（如 use_soft_labels/strict_label_mode）
+            # 在 ModelConfig 对象上不存在，会被静默回退默认值
+            'config': config,
+            'max_seq_len': data_config['max_seq_len'],
+            'graph_strategy': data_config['graph_strategy'],
+            'augmentation': augmentation,
+            'split': split,
+        }
+        if dataset_cls is CachedGraphDataset:
+            kwargs.update({
+                'cache_dir': data_config.get('cache_dir', 'cache/graph_data'),
+                'rebuild_cache': data_config.get('rebuild_cache', False),
+                'cache_full_graphs': data_config.get('cache_full_graphs', False),
+            })
+        dataset = dataset_cls(**kwargs)
+        if four_state_store is not None and split == 'train':
+            return FourStateDataset(dataset, four_state_store,
+                require_all=os.path.abspath(csv_path) == os.path.abspath(data_config['train_csv_path']))
+        if ion12_store is not None and split in ('train', 'val'):
+            return Ion12GraphDataset(dataset, ion12_store)
+        return dataset
+
+    # 训练数据集
+    train_dataset = _build(data_config['train_csv_path'], 'train', data_config.get('augmentation', False))
+
+    # 验证数据集
+    if data_config.get('val_csv_path'):
+        val_dataset = _build(data_config['val_csv_path'], 'val', False)
+    else:
+        # P0-1 序列分组 train/val 切分：同一 seq 的不同 charge/NCE/scan 观测必须
+        # 落在同一侧，否则验证集被训练集"见过"，val F1 偏乐观并污染模型选择。
+        # 旧实现（train_dataset 上做行级 random_split）已废弃。
+        val_split = training_config.get(
+            'validation_split',
+            data_config.get('validation_split', 0.2),
+        )
+        if val_split and val_split > 0:
+            full_frame = train_dataset.data
+            split_seed = validated_split_seed
+            unique_seqs = pd.Series(full_frame['seq'].astype(str).unique())
+            rng = np.random.default_rng(split_seed)
+            perm = rng.permutation(len(unique_seqs))
+            n_val_seqs = max(1, int(round(val_split * len(unique_seqs))))
+            val_seqs = set(unique_seqs.iloc[perm[:n_val_seqs]])
+
+            is_val = full_frame['seq'].astype(str).isin(val_seqs)
+            train_frame = full_frame[~is_val].reset_index(drop=True)
+            val_frame = full_frame[is_val].reset_index(drop=True)
+            validation_provenance = None
+            if validation_source:
+                from data.row_validation import restore_row_validation, file_sha
+                val_frame, validation_provenance = restore_row_validation(full_frame, val_seqs, validation_source)
+                validation_provenance['folded_source_sha256'] = file_sha(data_config['train_csv_path'])
+                validation_provenance['split_seed'] = split_seed
+
+            overlap = len(set(train_frame['seq'].astype(str)) & set(val_frame['seq'].astype(str)))
+            if overlap != 0:
+                raise RuntimeError(
+                    f"Group split failed: {overlap} sequences appear in both train and val"
+                )
+
+            # 落盘 split CSV，保证可复现、可审计（覆盖写，成本 ~1s）
+            csv_stem = os.path.splitext(os.path.basename(str(data_config['train_csv_path'])))[0]
+            split_dir = os.path.join(
+                data_config.get('cache_dir', 'cache/graph_data'), 'splits',
+                f"{csv_stem}_seed{split_seed}_val{val_split}",
+            )
+            os.makedirs(split_dir, exist_ok=True)
+            train_split_csv = os.path.join(split_dir, 'train.csv')
+            val_split_csv = os.path.join(split_dir, 'val.csv')
+            train_frame.to_csv(train_split_csv, index=False)
+            val_frame.to_csv(val_split_csv, index=False)
+
+            logger.info(
+                "Group split (by seq): train %d rows / %d seqs, val %d rows / %d seqs, "
+                "seq overlap=0 (seed=%d, val_frac=%s, split_dir=%s)",
+                len(train_frame), train_frame['seq'].nunique(),
+                len(val_frame), val_frame['seq'].nunique(),
+                split_seed, val_split, split_dir,
+            )
+
+            train_dataset = _build(train_split_csv, 'train', data_config.get('augmentation', False))
+            val_dataset = _build(val_split_csv, 'val', False)
+            if validation_provenance is not None:
+                validation_provenance['split_val_csv'] = os.path.abspath(val_split_csv)
+                validation_provenance['split_train_csv'] = os.path.abspath(train_split_csv)
+                val_dataset.row_validation_provenance = validation_provenance
+        else:
+            if validation_source:
+                raise ValueError('Full-row validation requires a positive validation_split')
+            val_dataset = None
+
+    if ion12_store is not None and val_dataset is not None:
+        overlap = set(train_dataset.data['seq'].astype(str)) & set(val_dataset.data['seq'].astype(str))
+        if overlap:
+            raise ValueError('ion12 train/validation sequences overlap')
+    
+    # 测试数据集
+    test_dataset = None
+    if data_config.get('test_csv_path'):
+        test_dataset = _build(data_config['test_csv_path'], 'test', False)
+    
+    # 打印数据集统计信息
+    logger.info("Dataset Statistics:")
+    logger.info(f"Training samples: {len(train_dataset)}")
+    if val_dataset:
+        logger.info(f"Validation samples: {len(val_dataset)}")
+    if test_dataset:
+        logger.info(f"Test samples: {len(test_dataset)}")
+    
+    # 获取训练数据集的详细统计信息
+    if hasattr(train_dataset, 'get_statistics'):
+        stats = train_dataset.get_statistics()
+        logger.info(f"Average sequence length: {stats.get('avg_seq_length', 'N/A'):.2f}")
+        logger.info(f"Max sequence length: {stats.get('max_seq_length', 'N/A')}")
+        if 'length_counts' in stats:
+            logger.info(f"Length counts: {stats['length_counts']}")
+        if 'positive_ratio' in stats:
+            logger.info(f"Positive label ratio: {stats['positive_ratio']:.4f}")
+    
+    return train_dataset, val_dataset, test_dataset
+
+
+def create_data_loaders(train_dataset, val_dataset, test_dataset,
+                        config: Dict[str, Any]) -> tuple:
+    """创建数据加载器"""
+    data_config = config['data']
+    training_config = config['training']
+    performance_config = config.get('performance', {})
+    persistent_workers = performance_config.get('persistent_workers', False)
+    prefetch_factor = performance_config.get('prefetch_factor')
+
+    # 预处理路径走 OptimizedGraphDataLoader；否则保持原 GraphDataLoader。
+    use_optimized = data_config.get('preprocessed', False) and OptimizedGraphDataLoader is not None
+    loader_cls = OptimizedGraphDataLoader if use_optimized else GraphDataLoader
+
+    common_kwargs = dict(
+        batch_size=training_config['batch_size'],
+        num_workers=data_config.get('num_workers', 4),
+        pin_memory=data_config.get('pin_memory', True),
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
+    )
+    eval_kwargs = dict(common_kwargs)
+    eval_kwargs['batch_size'] = config.get('evaluation', {}).get('batch_size', training_config['batch_size'])
+
+    # 训练数据加载器
+    train_loader = loader_cls(
+        dataset=train_dataset,
+        shuffle=True,
+        drop_last=data_config.get('drop_last', False),
+        **common_kwargs,
+    )
+
+    # 验证数据加载器
+    val_loader = None
+    if val_dataset is not None:
+        val_loader = loader_cls(
+            dataset=val_dataset,
+            shuffle=False,
+            drop_last=False,
+            **eval_kwargs,
+        )
+
+    # 测试数据加载器
+    test_loader = None
+    if test_dataset is not None:
+        test_loader = loader_cls(
+            dataset=test_dataset,
+            shuffle=False,
+            drop_last=False,
+            **eval_kwargs,
+        )
+    
+    logger.info(
+        "DataLoader config - batch_size: %s, num_workers: %s, pin_memory: %s, drop_last: %s, persistent_workers: %s, prefetch_factor: %s",
+        training_config['batch_size'],
+        data_config.get('num_workers', 4),
+        data_config.get('pin_memory', True),
+        data_config.get('drop_last', False),
+        persistent_workers if data_config.get('num_workers', 4) > 0 else False,
+        prefetch_factor if data_config.get('num_workers', 4) > 0 else None,
+    )
+
+    return train_loader, val_loader, test_loader
+
+
+def create_optimizer(model: nn.Module, config: Dict[str, Any], transfer_provenance=None) -> optim.Optimizer:
+    """创建优化器"""
+    optimizer_config = config['optimizer']
+    training_config = config['training']
+    if validate_transfer_optimizer_request(training_config) < 1:
+        return create_transfer_optimizer(model, config, transfer_provenance)
+    
+    optimizer_type = optimizer_config.get('type', 'adamw').lower()
+    learning_rate = training_config['learning_rate']
+    weight_decay = training_config.get('weight_decay', 0.0)
+    eps = optimizer_config.get('eps', 1e-8)
+    if isinstance(eps, str):
+        eps = float(eps)
+    
+    if optimizer_type == 'adam':
+        optimizer = optim.Adam(
+            model.parameters(),
+            lr=learning_rate,
+            weight_decay=weight_decay,
+            betas=optimizer_config.get('betas', [0.9, 0.999]),
+            eps=eps
+        )
+    elif optimizer_type == 'adamw':
+        optimizer = optim.AdamW(
+            model.parameters(),
+            lr=learning_rate,
+            weight_decay=weight_decay,
+            betas=optimizer_config.get('betas', [0.9, 0.999]),
+            eps=eps
+        )
+    elif optimizer_type == 'sgd':
+        optimizer = optim.SGD(
+            model.parameters(),
+            lr=learning_rate,
+            weight_decay=weight_decay,
+            momentum=optimizer_config.get('momentum', 0.9),
+            nesterov=optimizer_config.get('nesterov', True)
+        )
+    elif optimizer_type == 'rmsprop':
+        optimizer = optim.RMSprop(
+            model.parameters(),
+            lr=learning_rate,
+            weight_decay=weight_decay,
+            momentum=optimizer_config.get('momentum', 0.9)
+        )
+    else:
+        raise ValueError(f"Unknown optimizer type: {optimizer_type}")
+    
+    return optimizer
+
+
+def create_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any]) -> optim.lr_scheduler._LRScheduler:
+    """创建学习率调度器"""
+    training_config = config['training']
+    optimizer_config = config['optimizer']
+    if validate_transfer_optimizer_request(training_config) < 1:
+        return create_transfer_scheduler(optimizer, config)
+    
+    scheduler_type = training_config.get('scheduler', 'cosine').lower()
+    
+    if scheduler_type == 'cosine':
+        scheduler = LearningRateScheduler.cosine_annealing_with_warmup(
+            optimizer=optimizer,
+            warmup_epochs=training_config.get('warmup_epochs', 10),
+            max_epochs=training_config['epochs'],
+            min_lr=training_config.get('min_lr', 0.0)
+        )
+    elif scheduler_type == 'step':
+        scheduler = LearningRateScheduler.step_with_warmup(
+            optimizer=optimizer,
+            warmup_epochs=training_config.get('warmup_epochs', 10),
+            step_size=optimizer_config.get('step_size', 30),
+            gamma=optimizer_config.get('gamma', 0.1)
+        )
+    elif scheduler_type == 'exponential':
+        scheduler = optim.lr_scheduler.ExponentialLR(
+            optimizer=optimizer,
+            gamma=optimizer_config.get('gamma', 0.95)
+        )
+    elif scheduler_type == 'plateau':
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer=optimizer,
+            mode='min',
+            factor=optimizer_config.get('gamma', 0.5),
+            patience=training_config.get('patience', 10),
+            min_lr=training_config.get('min_lr', 1e-8)
+        )
+    else:
+        scheduler = None
+    
+    return scheduler
+
+
+def save_checkpoint_with_selection(model, optimizer, epoch, loss, metrics,
+                                   filepath, selection, is_best=False, extra_state=None):
+    """Keep the existing checkpoint schema and persist F1-selection progress.
+
+    Disabled controls retain the previous checkpoint fields. A transfer run also
+    records its initialization provenance, including on its q checkpoint.
+    """
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': loss,
+        'metrics': metrics,
+        'config': model.config.to_dict() if hasattr(model, 'config') else None,
+    }
+    if selection is not None:
+        checkpoint[CheckpointSelection.STATE_KEY] = selection.state_dict()
+    if extra_state is not None:
+        checkpoint['extra_state'] = extra_state
+    torch.save(checkpoint, filepath)
+    if is_best:
+        torch.save(checkpoint, filepath.replace('.pt', '_best.pt'))
+
+
+def restore_checkpoint_selection(selection, checkpoint, resume_path, has_validation,
+                                 logger):
+    """Restore selection state without mistaking training F1 for validation F1."""
+    start_epoch = int(checkpoint['epoch']) + 1
+    state = checkpoint.get(CheckpointSelection.STATE_KEY)
+    best_path = os.path.join(os.path.dirname(resume_path), 'best_model.pt')
+    if state is not None:
+        selection.load_state_dict(state)
+        if selection.last_validation_epoch > start_epoch:
+            raise ValueError("Resume checkpoint selection state is newer than its model epoch")
+        if has_validation and selection.best_epoch:
+            # A periodic checkpoint's state refers to the selected weights in
+            # best_model.pt. Do not silently mix it with a missing/newer run.
+            best_checkpoint = (checkpoint if os.path.abspath(resume_path) == os.path.abspath(best_path)
+                               else torch.load(best_path, map_location='cpu', weights_only=False))
+            saved_best_f1 = (best_checkpoint.get('metrics') or {}).get('f1')
+            if (int(best_checkpoint['epoch']) + 1 != selection.best_epoch
+                    or saved_best_f1 != selection.best_f1):
+                raise ValueError("Resume requires the matching best_model.pt for its saved selection state")
+        logger.info(
+            "Restored checkpoint selection: mode=%s best_f1=%.6f best_epoch=%d "
+            "early_stop_anchor=%.6f bad_validations=%d",
+            selection.mode, selection.best_f1, selection.best_epoch,
+            selection.early_stop_anchor, selection.bad_validations,
+        )
+        return
+    if not has_validation:
+        logger.warning("Old checkpoint has no F1-selection state; no validation selection to restore")
+        return
+
+    # Periodic checkpoints store train_metrics, so use the known main validation
+    # checkpoint instead. Old best_model.pt remains directly resumable.
+    best_checkpoint = (checkpoint if os.path.abspath(resume_path) == os.path.abspath(best_path)
+                       else torch.load(best_path, map_location='cpu', weights_only=False))
+    if int(best_checkpoint['epoch']) + 1 > start_epoch:
+        raise ValueError("Cannot seed selection from best_model.pt newer than the resumed model")
+    best_state = best_checkpoint.get(CheckpointSelection.STATE_KEY)
+    if best_state is not None:
+        selection.load_state_dict(best_state)
+        selection.bad_validations = 0
+    else:
+        selection.initialize_from_legacy_validation(best_checkpoint)
+    logger.warning(
+        "Resume checkpoint has no selection state: seeded from validation best_model.pt "
+        "at epoch %d; early-stopping count resets. Historical unsaved F1 maxima "
+        "cannot be recovered; max_f1 applies to this saved baseline and subsequent validations.",
+        selection.best_epoch,
+    )
+
+
+def _reject_ion12_resume(config, resume):
+    enabled = (config.get('model', {}).get('use_ion12_aux_head', False)
+               or config.get('data', {}).get('ion12_targets_manifest') is not None)
+    if enabled and resume:
+        raise ValueError('ion12 resume is unsupported: target source and auxiliary weight must remain fixed')
+
+
+def _validate_four_state_union_brier_protocol(config, resume):
+    """Defer outer-test access for this explicitly marked validation-only trial."""
+    if config.get('experiment', {}).get('loss_protocol') != 'four_state_union_brier_v1':
+        return False
+    if config.get('data', {}).get('test_csv_path') is not None:
+        raise ValueError('four_state_union_brier_v1 requires data.test_csv_path=None until validation selection is frozen')
+    if resume is not None:
+        raise ValueError('four_state_union_brier_v1 does not support --resume')
+    model_config = config.get('model', {})
+    if model_config.get('bond_head_type', 'concat_mlp') != 'four_state_mlp':
+        raise ValueError('four_state_union_brier_v1 requires the four_state_mlp head')
+    if model_config.get('use_charge_partition_features', False) is not False:
+        raise ValueError('four_state_union_brier_v1 requires use_charge_partition_features=False')
+    alpha = config.get('loss', {}).get('four_state_conditional_weight', 1.0)
+    if isinstance(alpha, bool) or not isinstance(alpha, (int, float)) or alpha != 1.0:
+        raise ValueError('four_state_union_brier_v1 requires four_state_conditional_weight=1')
+    return True
+
+
+def _write_ion12_targets_provenance(train_dataset, config, checkpoint_dir):
+    if not config.get('model', {}).get('use_ion12_aux_head', False):
+        return None
+    source = getattr(train_dataset, 'ion12_provenance', None)
+    if not isinstance(source, dict):
+        raise ValueError('ion12 head requires a manifest-bound training dataset')
+    provenance = dict(source)
+    weight = float(config.get('loss', {}).get('ion12_aux_weight', 0.0))
+    if not math.isfinite(weight) or weight < 0:
+        raise ValueError('ion12 auxiliary weight must be finite and nonnegative')
+    provenance['ion12_aux_weight'] = weight
+    path = os.path.join(checkpoint_dir, 'ion12_targets_provenance.json')
+    temporary = path + '.tmp'
+    with open(temporary, 'w', encoding='utf-8') as stream:
+        json.dump(provenance, stream, ensure_ascii=False, indent=2, allow_nan=False)
+        stream.write('\n')
+    os.replace(temporary, path)
+    return provenance
+
+
+def main():
+    """主函数"""
+    parser = argparse.ArgumentParser(description='训练图神经网络键级别二分类模型')
+    
+    # 必需参数
+    parser.add_argument('--config', type=str, required=True,
+                       help='配置文件路径')
+    
+    # 可选参数
+    parser.add_argument('--epochs', type=int, help='训练轮数')
+    parser.add_argument('--batch_size', type=int, help='批大小')
+    parser.add_argument('--learning_rate', type=float, help='学习率')
+    parser.add_argument('--device', type=str, choices=['cpu', 'cuda', 'mps'],
+                       help='计算设备')
+    parser.add_argument('--resume', type=str, help='恢复训练的检查点路径')
+    parser.add_argument('--seed', type=int, help='随机种子')
+    
+    args = parser.parse_args()
+
+    # 容器 /dev/shm 通常极小（64MB），多 worker DataLoader 的默认 shm 共享策略会
+    # "No space left on device" 崩溃；改用文件系统共享绕过 shm 限制。
+    torch.multiprocessing.set_sharing_strategy('file_system')
+
+    # 加载配置
+    config = load_config(args.config, args)
+    union_brier_protocol = _validate_four_state_union_brier_protocol(config, args.resume)
+    if union_brier_protocol:
+        import hashlib
+        with open(args.config, 'rb') as stream:
+            source_config_sha256 = hashlib.sha256(stream.read()).hexdigest()
+    _reject_ion12_resume(config, args.resume)
+    training_config = config['training']
+    transfer_encoder_lr_scale = validate_transfer_optimizer_request(training_config, args.resume)
+    transfer_enabled = False
+    if (training_config.get('pretrained_transfer_scope', 'none') != 'none'
+            or training_config.get('pretrained_backbone_path')
+            or training_config.get('pretrained_backbone_sha256')):
+        from pretraining.transfer import validate_transfer_request
+        transfer_enabled = validate_transfer_request(training_config, args.resume)
+    selection = CheckpointSelection(
+        training_config.get('checkpoint_selection', 'legacy'),
+        training_config.get('min_delta', 0.0),
+    )
+    
+    # 设置随机种子（--seed 0 是合法值，不能被 falsy 回退吞掉）
+    seed = args.seed if args.seed is not None else config['experiment'].get('seed', 42)
+    config.setdefault('experiment', {})['seed'] = seed
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    
+    global logger
+    logger = setup_logging(config)
+    logger.info("Starting training...")
+    logger.info(f"Config: {config}")
+    
+    # 设置设备
+    device = setup_device(config)
+    logger.info(f"Using device: {device}")
+    
+    # 创建模型
+    model_start = time.perf_counter()
+    model = create_model(config, device)
+    logger.info(f"Model creation took {time.perf_counter() - model_start:.2f}s")
+    if union_brier_protocol:
+        state_hasher = hashlib.sha256()
+        for name, value in sorted(model.state_dict().items()):
+            header = json.dumps(
+                {'name': name, 'shape': list(value.shape), 'dtype': str(value.dtype)},
+                sort_keys=True, separators=(',', ':')).encode('utf-8')
+            state_hasher.update(header + b'\0')
+            state_hasher.update(value.detach().cpu().contiguous().reshape(-1)
+                                .view(torch.uint8).numpy().tobytes())
+            state_hasher.update(b'\0')
+        model_initialization = {
+            'model_state_sha256': state_hasher.hexdigest(),
+            'torch_cpu_rng_sha256': hashlib.sha256(torch.get_rng_state().numpy().tobytes()).hexdigest(),
+            'torch_cuda_rng_sha256': [
+                hashlib.sha256(state.numpy().tobytes()).hexdigest()
+                for state in (torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [])
+            ],
+        }
+    transfer_provenance = None
+    if transfer_enabled:
+        from pretraining.transfer import load_pretrained_backbone
+        transfer_provenance = load_pretrained_backbone(
+            model, training_config,
+            {split: config['data'].get(split + '_csv_path') for split in ('train', 'val', 'test')},
+            resume=args.resume,
+        )
+        logger.info("Initialized pretrained %s from SHA256 %s",
+                    transfer_provenance['scope'], transfer_provenance['checkpoint_sha256'])
+    
+    # 创建数据集和数据加载器
+    dataset_start = time.perf_counter()
+    train_dataset, val_dataset, test_dataset = create_datasets(config)
+    logger.info(f"Dataset creation took {time.perf_counter() - dataset_start:.2f}s")
+
+    dataloader_start = time.perf_counter()
+    train_loader, val_loader, test_loader = create_data_loaders(
+        train_dataset, val_dataset, test_dataset, config
+    )
+    logger.info(f"DataLoader creation took {time.perf_counter() - dataloader_start:.2f}s")
+    
+    logger.info(f"Training samples: {len(train_dataset)}")
+    if val_dataset:
+        logger.info(f"Validation samples: {len(val_dataset)}")
+    if test_dataset:
+        logger.info(f"Test samples: {len(test_dataset)}")
+    
+    # 创建优化器和调度器
+    optimizer = create_optimizer(model, config, transfer_provenance)
+    scheduler = create_scheduler(optimizer, config)
+    
+    # 创建损失函数
+    loss_config = config.get('loss', {})
+    criterion = BinaryBondLoss(loss_config)
+    
+    # 创建训练器
+    trainer = Trainer(
+        model=model,
+        optimizer=optimizer,
+        criterion=criterion,
+        scheduler=scheduler,
+        device=device,
+        config=config,
+        logger=logger
+    )
+    
+    # 创建评估器
+    evaluator = Evaluator(
+        model=model,
+        device=device,
+        config=config,
+        logger=logger
+    )
+    
+    # 恢复训练（如果指定）
+    start_epoch = 0
+    if args.resume:
+        checkpoint = CheckpointManager.load_checkpoint(
+            filepath=args.resume,
+            model=model,
+            optimizer=optimizer
+        )
+        # A resume without new initialization keeps any original provenance.
+        transfer_provenance = (checkpoint.get('extra_state') or {}).get('pretrained_transfer_provenance')
+        start_epoch = checkpoint['epoch'] + 1
+        restore_checkpoint_selection(
+            selection, checkpoint, args.resume, val_loader is not None, logger,
+        )
+        logger.info(f"Resumed training from epoch {start_epoch}")
+        logger.warning(
+            "Resume restores model/optimizer and available selection state; the existing "
+            "checkpoint format does not restore scheduler, AMP scaler or RNG state. "
+            "This is not an exact uninterrupted-training continuation."
+        )
+    
+    optimizer_provenance = get_optimizer_provenance(
+        model, optimizer, config, transfer_provenance, checkpoint if args.resume else None,
+    )
+
+    # 训练循环
+    logger.info("Starting training loop...")
+    early_stopping_enabled = training_config.get('early_stopping', False)
+    patience = training_config.get('patience', 10)
+    best_q_metric = float('-inf')  # q 口径第二 checkpoint（best_model_q.pt）的选择分
+    logger.info(
+        "F1 checkpoint selection=%s; early stopping uses min_delta=%g, patience=%s validation checks",
+        selection.mode, selection.min_delta, patience,
+    )
+    if args.resume:
+        training_config['checkpoint_dir'] = os.path.dirname(args.resume)
+    else:
+        base_checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints/graph_transform')
+        run_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+        training_config['checkpoint_dir'] = os.path.join(base_checkpoint_dir, run_id)
+    os.makedirs(training_config['checkpoint_dir'], exist_ok=True)
+    transfer_extra_state = None
+    if optimizer_provenance is not None:
+        write_optimizer_provenance(optimizer_provenance, training_config['checkpoint_dir'])
+        transfer_extra_state = {'optimizer_provenance': optimizer_provenance}
+    if transfer_provenance is not None:
+        from pretraining.transfer import write_transfer_provenance
+        write_transfer_provenance(transfer_provenance, training_config['checkpoint_dir'])
+        transfer_extra_state = dict(transfer_extra_state or {}, pretrained_transfer_provenance=transfer_provenance)
+    ion12_provenance = _write_ion12_targets_provenance(train_dataset, config, training_config['checkpoint_dir'])
+    if ion12_provenance is not None:
+        transfer_extra_state = dict(transfer_extra_state or {}, ion12_targets_provenance=ion12_provenance)
+    for name, dataset in (('four_state_provenance', train_dataset), ('row_validation_provenance', val_dataset)):
+        provenance = getattr(dataset, name, None)
+        if provenance is not None:
+            path = os.path.join(training_config['checkpoint_dir'], name + '.json')
+            with open(path, 'w', encoding='utf-8') as stream:
+                json.dump(provenance, stream, ensure_ascii=False, indent=2, allow_nan=False)
+            transfer_extra_state = dict(transfer_extra_state or {}, **{name: provenance})
+    if 'validation_split_seed' in training_config:
+        # New explicit-split trials bind the actual run RNG to each checkpoint.
+        # Existing runs keep their checkpoint schema and random stream unchanged.
+        transfer_extra_state = dict(transfer_extra_state or {}, training_rng_protocol={
+            'training_seed': config['experiment']['seed'],
+            'validation_split_seed': _validation_split_seed(config),
+            'hidden_dim': model.config.hidden_dim,
+            'bond_head_type': model.config.bond_head_type,
+            'theory_fusion_stage': model.config.theory_fusion_stage,
+            'four_state_conditional_weight': trainer.four_state_conditional_weight,
+            'four_state_union_brier_weight': trainer.four_state_union_brier_weight,
+        })
+    if union_brier_protocol:
+        # Snapshot once after seed, dataset paths and checkpoint directory resolve.
+        resolved_config_path = os.path.abspath(os.path.join(
+            training_config['checkpoint_dir'], 'resolved_training_config.yaml'))
+        resolved_config_bytes = yaml.safe_dump(
+            config, allow_unicode=True, sort_keys=False).encode('utf-8')
+        with open(resolved_config_path, 'wb') as stream:
+            stream.write(resolved_config_bytes)
+        transfer_extra_state = dict(transfer_extra_state or {}, loss_protocol={
+            'name': 'four_state_union_brier_v1',
+            'four_state_conditional_weight': trainer.four_state_conditional_weight,
+            'four_state_union_brier_weight': trainer.four_state_union_brier_weight,
+            'outer_test_deferred': test_dataset is None,
+            'checkpoint_selection': selection.mode,
+            'source_config_sha256': source_config_sha256,
+            'resolved_config_sha256': hashlib.sha256(resolved_config_bytes).hexdigest(),
+            'resolved_config_path': resolved_config_path,
+            'initialization': model_initialization,
+        })
+    logger.info(f"Checkpoint dir: {training_config['checkpoint_dir']}")
+    log_config = config.get('logging', {})
+    tb_writers: Dict[str, SummaryWriter] = {}
+    if log_config.get('use_tensorboard', False):
+        tb_writers = create_tensorboard_writers(training_config['checkpoint_dir'], log_config, config, logger)
+    epochs = training_config['epochs']
+    training_start = time.perf_counter()
+    history = {
+        'epoch': [],
+        'train_loss': [],
+        'train_f1': [],
+        'train_precision': [],
+        'train_recall': [],
+        'train_auc': [],
+        'train_avg_grad_norm': [],
+        'train_max_grad_norm': [],
+        'train_avg_batch_time': [],
+        'train_avg_forward_time': [],
+        'train_avg_backward_time': [],
+        'train_avg_fetch_wait_time': [],
+        'learning_rate': [],
+        'val_loss': [],
+        'val_f1': [],
+        'val_precision': [],
+        'val_recall': [],
+        'val_auc': [],
+    }
+    if transfer_encoder_lr_scale < 1:
+        history['learning_rate_pretrained_encoder'] = []
+    if config.get('model', {}).get('use_ion12_aux_head', False):
+        history['train_main_loss'] = []
+        history['train_ion12_aux_loss'] = []
+        history['ion12_aux_weight'] = []
+    
+    for epoch in range(start_epoch, epochs):
+        logger.info(f"Epoch {epoch + 1}/{epochs}")
+        epoch_start = time.perf_counter()
+        epoch_lr = optimizer.param_groups[0]['lr']
+        epoch_encoder_lr = optimizer.param_groups[1]['lr'] if transfer_encoder_lr_scale < 1 else None
+        
+        # 训练阶段
+        train_metrics = trainer.train_epoch(train_loader, epoch + 1)
+        logger.info(f"Train - Loss: {train_metrics['loss']:.4f}, "
+                   f"F1: {train_metrics['f1']:.4f}")
+        log_metrics_to_tensorboard(tb_writers, 'train', train_metrics, epoch + 1)
+        train_writer = tb_writers.get('train')
+        if train_writer is not None:
+            train_writer.add_scalar('learning_rate', epoch_lr, epoch + 1)
+        history['epoch'].append(epoch + 1)
+        history['train_loss'].append(train_metrics.get('loss'))
+        if config.get('model', {}).get('use_ion12_aux_head', False):
+            history['train_main_loss'].append(train_metrics['main_loss'])
+            history['train_ion12_aux_loss'].append(train_metrics['ion12_aux_loss'])
+            history['ion12_aux_weight'].append(float(config.get('loss', {}).get('ion12_aux_weight', 0.0)))
+        history['train_f1'].append(train_metrics.get('f1'))
+        history['train_precision'].append(train_metrics.get('precision_micro', train_metrics.get('precision')))
+        history['train_recall'].append(train_metrics.get('recall_micro', train_metrics.get('recall')))
+        history['train_auc'].append(train_metrics.get('auc_micro', train_metrics.get('auc')))
+        history['train_avg_grad_norm'].append(train_metrics.get('avg_grad_norm'))
+        history['train_max_grad_norm'].append(train_metrics.get('max_grad_norm'))
+        history['train_avg_batch_time'].append(train_metrics.get('avg_batch_time'))
+        history['train_avg_forward_time'].append(train_metrics.get('avg_forward_time'))
+        history['train_avg_backward_time'].append(train_metrics.get('avg_backward_time'))
+        history['train_avg_fetch_wait_time'].append(train_metrics.get('avg_fetch_wait_time'))
+        history['learning_rate'].append(epoch_lr)
+        if transfer_encoder_lr_scale < 1:
+            history['learning_rate_pretrained_encoder'].append(epoch_encoder_lr)
+        current_val_loss: Optional[float] = None
+        current_val_f1: Optional[float] = None
+        current_val_precision: Optional[float] = None
+        current_val_recall: Optional[float] = None
+        current_val_auc: Optional[float] = None
+        
+        # 验证阶段
+        if val_loader is not None and epoch % training_config.get('validation_interval', 1) == 0:
+            val_metrics = evaluator.evaluate(val_loader)
+            logger.info(f"Val - Loss: {val_metrics['loss']:.4f}, "
+                       f"F1: {val_metrics['f1']:.4f}")
+            current_val_loss = val_metrics.get('loss')
+            current_val_f1 = val_metrics.get('f1')
+            current_val_precision = val_metrics.get('precision_micro', val_metrics.get('precision'))
+            current_val_recall = val_metrics.get('recall_micro', val_metrics.get('recall'))
+            current_val_auc = val_metrics.get('auc_micro', val_metrics.get('auc'))
+            log_metrics_to_tensorboard(tb_writers, 'val', val_metrics, epoch + 1)
+            
+            # max_f1 saves every strict maximum; patience uses its own min_delta
+            # anchor. legacy keeps the historical min_delta-gated save behavior.
+            current_f1 = val_metrics['f1']
+            selection_decision = selection.update(current_f1, epoch + 1)
+            if selection_decision.save_best:
+                checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints/graph_transform')
+                os.makedirs(checkpoint_dir, exist_ok=True)
+                
+                checkpoint_path = os.path.join(checkpoint_dir, 'best_model.pt')
+                save_checkpoint_with_selection(
+                    model=model,
+                    optimizer=optimizer,
+                    epoch=epoch,
+                    loss=val_metrics['loss'],
+                    metrics=val_metrics,
+                    filepath=checkpoint_path,
+                    selection=selection,
+                    is_best=True,
+                    extra_state=transfer_extra_state,
+                )
+                logger.info(f"Saved best model with F1: {selection.best_f1:.6f}")
+            if not selection_decision.early_stopping_improved:
+                logger.info(
+                    "No min_delta improvement for %d validation check(s) (anchor=%.6f)",
+                    selection.bad_validations, selection.early_stop_anchor,
+                )
+
+            # q 口径第二 checkpoint：val 的条件级 q 排序指标另存 best_model_q.pt。
+            # 最终测试仍用主 F1 策略选出的 best_model.pt；q 选择规则不随
+            # checkpoint_selection 改变，由 evaluate_graph_model.py --checkpoint 单独评测，
+            # 避免改动 5fold 汇总管线。选择只依赖 val，不触碰 test。
+            q_metric_name = training_config.get('q_checkpoint_metric', 'q_spearman_pep_cond')
+            current_q = val_metrics.get(q_metric_name)
+            if current_q is not None:
+                if current_q > best_q_metric:
+                    best_q_metric = current_q
+                    q_checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints/graph_transform')
+                    os.makedirs(q_checkpoint_dir, exist_ok=True)
+                    q_save = (CheckpointManager.save_checkpoint if transfer_extra_state is None
+                              else save_checkpoint_with_selection)
+                    q_extra = ({} if transfer_extra_state is None else
+                               {'selection': None, 'extra_state': transfer_extra_state})
+                    q_save(
+                        model=model,
+                        optimizer=optimizer,
+                        epoch=epoch,
+                        loss=val_metrics['loss'],
+                        metrics=val_metrics,
+                        filepath=os.path.join(q_checkpoint_dir, 'best_model_q.pt'),
+                        is_best=False,
+                        **q_extra,
+                    )
+                    logger.info(f"Saved best-q model ({q_metric_name}): {best_q_metric:.4f}")
+
+            if early_stopping_enabled and selection.bad_validations >= patience:
+                logger.info(
+                    f"Early stopping triggered at epoch {epoch + 1}. "
+                    f"Best saved F1 {selection.best_f1:.6f} at epoch {selection.best_epoch}."
+                )
+                history['val_loss'].append(current_val_loss)
+                history['val_f1'].append(current_val_f1)
+                history['val_precision'].append(current_val_precision)
+                history['val_recall'].append(current_val_recall)
+                history['val_auc'].append(current_val_auc)
+                save_training_curves(history, config, logger, training_config['checkpoint_dir'])
+                logger.info(f"Epoch {epoch + 1} wall time: {time.perf_counter() - epoch_start:.2f}s")
+                break
+        
+        history['val_loss'].append(current_val_loss)
+        history['val_f1'].append(current_val_f1)
+        history['val_precision'].append(current_val_precision)
+        history['val_recall'].append(current_val_recall)
+        history['val_auc'].append(current_val_auc)
+        save_training_curves(history, config, logger, training_config['checkpoint_dir'])
+        if tb_writers:
+            flush_tensorboard_writers(tb_writers)
+        
+        # 定期保存检查点
+        if (epoch + 1) % training_config.get('save_interval', 10) == 0:
+            checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints/graph_transform')
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            
+            checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch + 1}.pt')
+            save_checkpoint_with_selection(
+                model=model,
+                optimizer=optimizer,
+                epoch=epoch,
+                loss=train_metrics['loss'],
+                metrics=train_metrics,
+                filepath=checkpoint_path,
+                selection=selection,
+                is_best=False,
+                extra_state=transfer_extra_state,
+            )
+            logger.info(f"Saved checkpoint at epoch {epoch + 1}")
+
+        logger.info(f"Epoch {epoch + 1} wall time: {time.perf_counter() - epoch_start:.2f}s")
+    
+    # 测试阶段
+    if test_loader is not None:
+        checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints/graph_transform')
+        best_checkpoint_path = os.path.join(checkpoint_dir, 'best_model.pt')
+        if val_loader is not None:
+            if os.path.exists(best_checkpoint_path):
+                logger.info(f"Reloading best checkpoint before final test evaluation: {best_checkpoint_path}")
+                CheckpointManager.load_checkpoint(
+                    filepath=best_checkpoint_path,
+                    model=model,
+                    device=device,
+                )
+            else:
+                logger.warning(
+                    "Validation was enabled but best checkpoint was not found at %s; "
+                    "final test evaluation will use the current in-memory model.",
+                    best_checkpoint_path,
+                )
+        else:
+            logger.info("No validation loader configured; final test evaluation will use the current in-memory model.")
+
+        logger.info("Starting final evaluation on test set...")
+        test_start = time.perf_counter()
+        # test 评估禁止使用 target-aware 阈值策略，避免用被评估集标签挑选阈值造成的数据泄露。
+        test_metrics = evaluator.evaluate(test_loader, allow_target_aware=False)
+        logger.info(f"Test - Loss: {test_metrics['loss']:.4f}, "
+                   f"F1: {test_metrics['f1']:.4f}")
+        test_step = history['epoch'][-1] if history['epoch'] else 0
+        log_metrics_to_tensorboard(tb_writers, 'test', test_metrics, test_step)
+        if config.get('evaluation', {}).get('save_outputs', True):
+            if config.get('evaluation', {}).get('export_from_evaluate_cache', False):
+                prediction_outputs = evaluator.collect_cached_prediction_outputs(
+                    expected_rows=len(test_dataset.data),
+                )
+            else:
+                prediction_outputs = evaluator.collect_prediction_outputs(
+                    test_loader, allow_target_aware=False,
+                )
+            checkpoint_reference = best_checkpoint_path if (val_loader is not None and os.path.exists(best_checkpoint_path)) else os.path.join(checkpoint_dir, 'current_in_memory_model')
+            evaluation_id = build_evaluation_id(checkpoint_reference, 'test')
+            evaluation_config = config.get('evaluation', {})
+            metric_csv_path = os.path.join(
+                evaluation_config.get('output_metric_dir', 'result/metric/graph_transform'),
+                'latest_test_metric.csv',
+            )
+            pred_csv_path = os.path.join(
+                evaluation_config.get('output_pred_dir', 'result/pred/graph_transform'),
+                'latest_test.pred.csv',
+            )
+            output_df = test_dataset.data.copy()
+            output_df['evaluation_id'] = evaluation_id
+            output_df['checkpoint_path'] = os.path.abspath(checkpoint_reference)
+            output_df['threshold'] = prediction_outputs['threshold']
+            output_df['true'] = prediction_outputs['true_strings']
+            output_df['pred'] = prediction_outputs['pred_strings']
+            output_df['pred_prob'] = prediction_outputs['prob_strings']
+            if 'source' in prediction_outputs:
+                output_df['prediction_export_source'] = prediction_outputs['source']
+                output_df['prediction_probability_precision'] = prediction_outputs['probability_precision']
+            save_evaluation_outputs(
+                metrics=test_metrics,
+                output_df=output_df,
+                metric_csv_path=metric_csv_path,
+                pred_csv_path=pred_csv_path,
+                evaluation_id=evaluation_id,
+                logger=logger,
+            )
+        logger.info(f"Final test evaluation took {time.perf_counter() - test_start:.2f}s")
+    
+    logger.info(f"Training completed in {time.perf_counter() - training_start:.2f}s")
+    if tb_writers:
+        close_tensorboard_writers(tb_writers)
+
+
+if __name__ == '__main__':
+    main()

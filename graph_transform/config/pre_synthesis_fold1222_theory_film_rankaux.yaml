@@ -1,0 +1,241 @@
+# 肽级辅助头 ranking 试点（fold 1222 单折）。
+# 底座 = folded film 臂（五折 79.80/q_seq 62.52，当前最强）；本臂单变量：
+# 开启 use_peptide_aux_head 且其目标从 MSE 比例回归换成 RankNet 成对排序
+# （loss.peptide_aux_loss_type: ranking）。
+# 与已证伪路线的区别（详见 trainer._peptide_ranking_loss 注释）：
+#   - 主损失侧序列级 hinge margin（loss.ranking_loss_weight）已证伪 → 本损失只挂辅助头；
+#   - film + 辅助头(MSE) 叠加（film_aux）已证伪 → 本臂仅肽级头、deep supervision 关闭，
+#     且目标换成排序（变量不同，需 fold1222 单折试点后再进五折）。
+# 排序口径：折叠数据一行=一个 (seq,charge,nce) 条件组，行间成对（batch 128 → ≤8128 对），
+# target=_peptide_cleavage_ratio（优先 q 软标签的期望断裂比）。
+# 训练开销与 film 臂相同（损失侧 +一次 128 行 pairwise，可忽略）。
+ablation:
+  base_experiment_name: null
+  baseline_no_state_env: false
+  disable_global_node: false
+  env_nce_only: false
+  env_rt_only: false
+  env_scan_num_only: false
+  gat_only: false
+  gcn_only: false
+  no_edge_attr: false
+  no_message_passing: false
+  no_state_env: false
+  pre_synthesis: true
+  rebuild_cache: true
+  state_charge_only: false
+  state_intensity_only: false
+  state_mass_intensity_only: false
+  state_mass_only: false
+  tag: gt_pre
+  use_hybrid_graph: false
+  use_sequence_graph: false
+advanced:
+  backend: nccl
+  distillation: false
+  distillation_alpha: 0.5
+  distillation_temperature: 4.0
+  distributed: false
+  ensemble_methods:
+  - voting
+  - averaging
+  - stacking
+  hyperparameter_search: false
+  quantization: false
+  quantization_method: dynamic
+  search_method: grid
+  teacher_model_path: null
+  use_ensemble: false
+data:
+  augmentation: false
+  augmentation_prob: 0.3
+  cache_dir: cache/graph_data_folded
+  cache_full_graphs: false
+  cache_graphs: true
+  drop_last: true
+  env_feature_name: scan_num
+  env_feature_scale: 1.0
+  focal_loss_alpha: 0.25
+  focal_loss_gamma: 2.0
+  graph_strategy: distance
+  max_augmentation_trials: 3
+  max_seq_len: 32
+  num_workers: 8
+  pin_memory: true
+  prefetch_factor: 2
+  test_csv_path: dataset/5fold_folded/1222.test.fbr.multi.csv
+  train_csv_path: dataset/5fold_folded/1222.train.fbr.shuffle.multi.csv
+  use_class_weights: true
+  val_csv_path: null
+  use_soft_labels: true
+  weighting_scheme: group_uniform
+debug:
+  check_gradients: false
+  check_nan_inf: true
+  debug_mode: false
+  diagnostic_dir: logs/graph_transform/diagnostics
+  empty_cache_on_epoch_end: false
+  force_gc_on_epoch_end: false
+  force_gc_on_eval_end: false
+  log_grad_norm: true
+  profile_memory: false
+  profile_time: false
+  save_attention_weights: false
+  save_graph_structures: false
+  save_nonfinite_batch: true
+  visualize_predictions: false
+device:
+  amp_backend: native
+  auto_detect: true
+  device_type: cuda
+  gpu_id: 0
+  use_amp: true
+evaluation:
+  ensemble_predictions: false
+  eval_interval: 1
+  metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1
+  - auc
+  - hamming_loss
+  num_ensemble_models: 5
+  output_metric_dir: result/metric/graph_transform/pre_synthesis_theory_film_rankaux
+  output_pred_dir: result/pred/graph_transform/pre_synthesis_theory_film_rankaux
+  save_outputs: true
+  test_time_augmentation: false
+  threshold: 0.5
+  threshold_strategy: fixed
+experiment:
+  benchmark: true
+  description: 'folded film base + peptide aux head with RankNet ranking objective
+    (single variable vs film arm); promote to 5fold only if fold-1222 pilot shows
+    q_seq gain without F1 drop'
+  deterministic: false
+  name: gt_pre_fold1222_theory_film_rankaux
+  seed: 42
+  version: v1.0
+logging:
+  level: INFO
+  log_dir: logs/graph_transform/pre_synthesis_theory_film_rankaux
+  log_file: training.log
+  log_interval: 10
+  plot_dir: null
+  save_graph_interval: 50
+  save_loss_curves: true
+  save_training_curves: true
+  tensorboard_log_dir: tensorboard/graph_transform/pre_synthesis_theory_film_rankaux
+  use_tensorboard: true
+loss:
+  auxiliary_loss_weights:
+    dice: 0.3
+    focal: 0.5
+    l2_regularization: 0.1
+  handle_imbalance: false
+  imbalance_strategy: weighted
+  main_loss: binary_cross_entropy
+  peptide_aux_loss_type: ranking
+  peptide_aux_ranking_delta: 0.05
+  peptide_aux_weight: 0.2
+  pos_weight: null
+  ranking_loss_weight: 0.0
+  use_auxiliary_losses: false
+model:
+  aa_embedding_dim: 64
+  alphabet: '#ABCDEFGHIKLMNOPQRSTVWXYZ'
+  bond_use_diff_feature: true
+  bond_use_edge_repr: true
+  bond_use_product_feature: true
+  concat_heads: true
+  distance_embedding_dim: 16
+  dropout: 0.1
+  edge_dim: 32
+  edge_embedding_dim: 16
+  edge_types:
+  - sequence
+  - distance
+  - functional
+  - long_range
+  - global
+  env_feature_mask:
+  - true
+  - true
+  gat_use_edge_bias: true
+  gat_use_edge_gate: true
+  hidden_dim: 256
+  leaky_relu_slope: 0.2
+  long_range_hops: 1
+  long_range_stride: 10
+  max_distance: 6
+  max_seq_len: 32
+  num_attention_heads: 4
+  num_classes: 1
+  num_env_features: 2
+  num_gat_layers: 2
+  num_gcn_layers: 3
+  num_physicochemical_features: 4
+  num_state_features: 3
+  pad_char: '#'
+  physicochemical_dim: 32
+  position_embedding_dim: 32
+  state_feature_mask:
+  - true
+  - true
+  - true
+  use_condition_film: true
+  use_deep_supervision: false
+  use_distance_embedding: true
+  use_edge_features: true
+  use_edge_type_embedding: true
+  use_env_features: true
+  use_global_node: true
+  use_long_range_edges: false
+  use_peptide_aux_head: true
+  use_physicochemical_features: true
+  use_position_embedding: true
+  use_raw_edge_attr: true
+  use_state_features: true
+  use_theory_features: true
+optimizer:
+  betas:
+  - 0.9
+  - 0.999
+  eps: 1e-8
+  eta_min: 0.0
+  gamma: 0.1
+  momentum: 0.9
+  nesterov: true
+  step_size: 30
+  t_max: 300
+  type: adamw
+performance:
+  compile_model: false
+  gradient_checkpointing: false
+  max_memory_usage: 8GB
+  persistent_workers: false
+  prefetch_factor: 2
+  use_efficient_attention: false
+  use_torch_compile: false
+training:
+  batch_size: 128
+  checkpoint_dir: checkpoints/graph_transform/pre_synthesis_theory_film_rankaux
+  early_stopping: true
+  epochs: 300
+  gradient_clip_norm: 1.0
+  learning_rate: 0.0001
+  min_delta: 0.001
+  min_lr: 1.0e-05
+  patience: 25
+  # q checkpoint 判据 = best_model_q.pt 的选择分（只看 val，不碰 test）。
+  # best_model.pt 恒为 realized F1 选择 + 早停也按 F1 —— 与历史 run 严格可比，
+  # 不受本键影响；换回历史行为：把本键改成 q_spearman_pep_cond（或删除本键
+  # 即为该默认值）。备选 q_ndcg_seq 不推荐（近饱和 ~0.992，区分度弱）。
+  q_checkpoint_metric: q_spearman_pep_seq
+  save_best_only: false
+  save_interval: 50
+  scheduler: cosine
+  validation_interval: 1
+  validation_split: 0.2
+  warmup_epochs: 40
+  weight_decay: 0.0001

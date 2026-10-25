@@ -1,0 +1,225 @@
+# 全GAT骨干 + 辅助头（deep supervision + 肽级断裂比例回归头）
+# 单变量阶梯第 2 级：gat(基线) -> gat_aux(本配置) -> gat_aux_asl
+# 主损失仍为 BCE；辅助头仅在训练期参与损失，eval/推理零开销。
+ablation:
+  base_experiment_name: null
+  baseline_no_state_env: false
+  disable_global_node: false
+  env_nce_only: false
+  env_rt_only: false
+  env_scan_num_only: false
+  gat_only: false
+  gcn_only: false
+  no_edge_attr: false
+  no_message_passing: false
+  no_state_env: false
+  pre_synthesis: true
+  rebuild_cache: true
+  state_charge_only: false
+  state_intensity_only: false
+  state_mass_intensity_only: false
+  state_mass_only: false
+  tag: gt_pre
+  use_hybrid_graph: false
+  use_sequence_graph: false
+advanced:
+  backend: nccl
+  distillation: false
+  distillation_alpha: 0.5
+  distillation_temperature: 4.0
+  distributed: false
+  ensemble_methods:
+  - voting
+  - averaging
+  - stacking
+  hyperparameter_search: false
+  quantization: false
+  quantization_method: dynamic
+  search_method: grid
+  teacher_model_path: null
+  use_ensemble: false
+data:
+  augmentation: false
+  augmentation_prob: 0.3
+  cache_dir: cache/graph_data
+  cache_full_graphs: false
+  cache_graphs: true
+  drop_last: true
+  env_feature_name: scan_num
+  env_feature_scale: 1.0
+  focal_loss_alpha: 0.25
+  focal_loss_gamma: 2.0
+  graph_strategy: distance
+  max_augmentation_trials: 3
+  max_seq_len: 32
+  num_workers: 8
+  pin_memory: true
+  prefetch_factor: 2
+  test_csv_path: dataset/dataset_private/1222.test.fbr.multi.csv
+  train_csv_path: dataset/dataset_private/1222.train.fbr.shuffle.multi.csv
+  use_class_weights: true
+  val_csv_path: null
+debug:
+  check_gradients: false
+  check_nan_inf: true
+  debug_mode: false
+  diagnostic_dir: logs/graph_transform/diagnostics
+  empty_cache_on_epoch_end: false
+  force_gc_on_epoch_end: false
+  force_gc_on_eval_end: false
+  log_grad_norm: true
+  profile_memory: false
+  profile_time: false
+  save_attention_weights: false
+  save_graph_structures: false
+  save_nonfinite_batch: true
+  visualize_predictions: false
+device:
+  amp_backend: native
+  auto_detect: true
+  device_type: cuda
+  gpu_id: 0
+  use_amp: true
+evaluation:
+  ensemble_predictions: false
+  eval_interval: 1
+  metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1
+  - auc
+  - hamming_loss
+  num_ensemble_models: 5
+  output_metric_dir: result/metric/graph_transform/pre_synthesis_gat_aux
+  output_pred_dir: result/pred/graph_transform/pre_synthesis_gat_aux
+  save_outputs: true
+  test_time_augmentation: false
+  threshold: 0.5
+  threshold_strategy: fixed
+experiment:
+  benchmark: true
+  description: pre md6 + theory + all-GAT + auxiliary heads (deep supervision at GAT
+    layers [1,3] + peptide cleavage-ratio head); single-variable vs pre_synthesis_5fold_md6_theory_gat.yaml
+  deterministic: false
+  name: gt_pre_5fold_md6_theory_gat_aux
+  seed: 42
+  version: v1.0
+logging:
+  level: INFO
+  log_dir: logs/graph_transform/pre_synthesis_gat_aux
+  log_file: training.log
+  log_interval: 10
+  plot_dir: null
+  save_graph_interval: 50
+  save_loss_curves: true
+  save_training_curves: true
+  tensorboard_log_dir: tensorboard/graph_transform/pre_synthesis_gat_aux
+  use_tensorboard: true
+loss:
+  auxiliary_loss_weights:
+    dice: 0.3
+    focal: 0.5
+    l2_regularization: 0.1
+  handle_imbalance: false
+  imbalance_strategy: weighted
+  main_loss: binary_cross_entropy
+  pos_weight: null
+  use_auxiliary_losses: false
+  deep_supervision_weight: 0.25
+  peptide_aux_weight: 0.2
+model:
+  aa_embedding_dim: 64
+  alphabet: '#ABCDEFGHIKLMNOPQRSTVWXYZ'
+  bond_use_diff_feature: true
+  bond_use_edge_repr: true
+  bond_use_product_feature: true
+  concat_heads: true
+  distance_embedding_dim: 16
+  dropout: 0.1
+  edge_dim: 32
+  edge_embedding_dim: 16
+  edge_types:
+  - sequence
+  - distance
+  - functional
+  - long_range
+  - global
+  env_feature_mask:
+  - true
+  - true
+  gat_use_edge_bias: true
+  gat_use_edge_gate: true
+  hidden_dim: 256
+  leaky_relu_slope: 0.2
+  long_range_hops: 1
+  long_range_stride: 10
+  max_distance: 6
+  max_seq_len: 32
+  num_attention_heads: 4
+  num_classes: 1
+  num_env_features: 2
+  num_gat_layers: 5
+  num_gcn_layers: 0
+  num_physicochemical_features: 4
+  num_state_features: 3
+  pad_char: '#'
+  physicochemical_dim: 32
+  position_embedding_dim: 32
+  state_feature_mask:
+  - true
+  - true
+  - true
+  use_distance_embedding: true
+  use_edge_features: true
+  use_edge_type_embedding: true
+  use_env_features: true
+  use_global_node: true
+  use_long_range_edges: false
+  use_physicochemical_features: true
+  use_position_embedding: true
+  use_raw_edge_attr: true
+  use_state_features: true
+  use_theory_features: true
+  use_deep_supervision: true
+  deep_supervision_layers:
+  - 1
+  - 3
+  use_peptide_aux_head: true
+optimizer:
+  betas:
+  - 0.9
+  - 0.999
+  eps: 1e-8
+  eta_min: 0.0
+  gamma: 0.1
+  momentum: 0.9
+  nesterov: true
+  step_size: 30
+  t_max: 100
+  type: adamw
+performance:
+  compile_model: false
+  gradient_checkpointing: false
+  max_memory_usage: 8GB
+  persistent_workers: false
+  prefetch_factor: 2
+  use_efficient_attention: false
+  use_torch_compile: false
+training:
+  batch_size: 1024
+  checkpoint_dir: checkpoints/graph_transform/pre_synthesis_gat_aux
+  early_stopping: true
+  epochs: 100
+  gradient_clip_norm: 1.0
+  learning_rate: 0.0001
+  min_delta: 0.001
+  min_lr: 1.0e-05
+  patience: 10
+  save_best_only: false
+  save_interval: 10
+  scheduler: cosine
+  validation_interval: 1
+  validation_split: 0.2
+  warmup_epochs: 10
+  weight_decay: 0.0001

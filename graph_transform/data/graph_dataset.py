@@ -1,0 +1,895 @@
+"""
+图数据集类
+
+本文件包含了用于图神经网络训练的数据集类和数据加载器。
+支持蛋白质序列到图结构的转换，以及批处理功能。
+"""
+
+import torch
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+from torch.nn.utils.rnn import pad_sequence
+import pandas as pd
+import numpy as np
+from typing import Dict, List, Optional, Tuple, Any
+import json
+import os
+
+from .graph_builder import SequenceGraphBuilder
+from .preprocessing import SequencePreprocessor
+
+
+def _get_config_value(config: Any, key: str, default: Any) -> Any:
+    if isinstance(config, dict):
+        if key in config:
+            return config[key]
+        data_config = config.get('data', {})
+        if isinstance(data_config, dict) and key in data_config:
+            return data_config[key]
+        model_config = config.get('model', {})
+        if isinstance(model_config, dict) and key in model_config:
+            return model_config[key]
+        return default
+    if hasattr(config, key):
+        return getattr(config, key)
+    return default
+
+
+class GraphDataset(Dataset):
+    """图数据集类"""
+    
+    def __init__(self, 
+                 csv_path: str,
+                 config: Any,
+                 max_seq_len: int = 100,
+                 graph_strategy: str = 'distance',
+                 augmentation: bool = False,
+                 split: str = 'train'):
+        """
+        初始化图数据集
+        
+        Args:
+            csv_path: CSV数据文件路径
+            config: 配置对象
+            max_seq_len: 最大序列长度
+            graph_strategy: 图构建策略 ('sequence', 'distance', 'hybrid')
+            augmentation: 是否使用数据增强
+            split: 数据分割 ('train', 'val', 'test')
+        """
+        self.csv_path = csv_path
+        self.config = config
+        self.max_seq_len = max_seq_len
+        self.graph_strategy = graph_strategy
+        self.augmentation = augmentation
+        self.split = split
+        self.env_feature_name = _get_config_value(config, 'env_feature_name', 'rt')
+
+        # q 软标签：读取 soft_multi 列（precompute_soft_labels.py 预计算的条件均值）。
+        # 增强会重排/修改序列与标签，软标签无法对齐，二者互斥。
+        self.use_soft_labels = bool(_get_config_value(config, 'use_soft_labels', False))
+        if self.use_soft_labels and self.augmentation and split == 'train':
+            raise ValueError("use_soft_labels 与数据增强互斥（增强后软标签无法对齐）")
+
+        # 加载数据
+        self.data = self._load_data()
+
+        if self.use_soft_labels:
+            if 'soft_multi' not in self.data.columns:
+                # 未预计算的 CSV（如 test 文件）自动回退 realized 标签：评估口径不变
+                print(f"[soft] {os.path.basename(str(csv_path))} 无 soft_multi 列，"
+                      f"soft_labels 回退为 realized 标签")
+                self.use_soft_labels = False
+        elif 'soft_multi' in self.data.columns:
+            # 反向保险丝：数据带 soft 列但开关没开——多半是 config 传递链断了
+            print(f"[soft] 注意：{os.path.basename(str(csv_path))} 含 soft_multi 列但 "
+                  f"use_soft_labels=False（若非有意，检查 config 传入的是否为完整配置 dict）")
+
+        # 条件组折叠权重（fold_condition_groups.py 生成的折叠 CSV 带 group_n 列）：
+        # spectrum=按组内谱图数加权（期望上复现行级 hard BCE，实现自检用）；
+        # group_uniform=每个 (seq,charge,nce) 条件等权；
+        # sequence_balanced=每序列等权（序列内条件平分，贴合候选肽筛选分布）。
+        # 仅 train split 生效：test/eval 用的行级 CSV 无 group_n，且评估路径
+        # 不消费 sample_weights（val loss / 全部指标不加权）
+        self.weighting_scheme = str(_get_config_value(config, 'weighting_scheme', 'none')).lower()
+        self.sample_weights = None
+        if self.weighting_scheme != 'none' and split == 'train':
+            if 'group_n' not in self.data.columns:
+                raise ValueError(
+                    f"weighting_scheme={self.weighting_scheme} 需要折叠 CSV（group_n 列），"
+                    f"{os.path.basename(str(csv_path))} 缺该列；请先跑 fold_condition_groups.py")
+            group_n = self.data['group_n'].to_numpy(dtype=np.float64)
+            if self.weighting_scheme == 'spectrum':
+                weights = group_n
+            elif self.weighting_scheme == 'group_uniform':
+                weights = np.ones_like(group_n)
+            elif self.weighting_scheme == 'sequence_balanced':
+                # 折叠 CSV 一行=一个条件组，序列行数即该序列的条件组数 K_s
+                seq_group_counts = (
+                    self.data.groupby('seq')['seq'].transform('size').to_numpy(dtype=np.float64))
+                weights = 1.0 / seq_group_counts
+            else:
+                raise ValueError(f"未知 weighting_scheme: {self.weighting_scheme}（可选 "
+                                 f"spectrum/group_uniform/sequence_balanced/none）")
+            self.sample_weights = weights.astype(np.float32)
+
+        # 初始化组件
+        self.graph_builder = SequenceGraphBuilder(config)
+        self.preprocessor = SequencePreprocessor(config)
+        
+        # 数据增强器
+        if self.augmentation and split == 'train':
+            from .augmentation import SequenceAugmentation
+            self.augmentor = SequenceAugmentation(config)
+        else:
+            self.augmentor = None
+    
+    def _load_data(self) -> pd.DataFrame:
+        """加载数据"""
+        if not os.path.exists(self.csv_path):
+            raise FileNotFoundError(f"Data file not found: {self.csv_path}")
+        
+        data = pd.read_csv(self.csv_path)
+        
+        # 数据验证
+        required_columns = ['seq', 'charge', 'pep_mass', 'intensity', 'nce', self.env_feature_name, 'true_multi']
+        missing_columns = [col for col in required_columns if col not in data.columns]
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {missing_columns}")
+
+        # P0-2 标签严格校验：拒绝非法 token / 长度不匹配 / 空标签，杜绝静默补 0。
+        # strict_label_mode: 'drop'（丢弃坏样本并记录，默认）或 'raise'。
+        strict_mode = _get_config_value(self.config, 'strict_label_mode', 'drop')
+        from .label_validation import validate_label_frame
+        data = validate_label_frame(
+            data,
+            on_error=strict_mode,
+            source_name=os.path.basename(str(self.csv_path)),
+        )
+        
+        # 过滤过长的序列
+        if self.max_seq_len is not None:
+            data = data[data['seq'].str.len() <= self.max_seq_len]
+        
+        return data.reset_index(drop=True)
+    
+    def __len__(self) -> int:
+        return len(self.data)
+    
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        """获取单个样本"""
+        row = self.data.iloc[idx]
+        
+        # 提取序列和标签
+        sequence = str(row['seq'])
+        labels = self._parse_labels(str(row['true_multi']))
+        
+        # 提取环境变量
+        sample_features, secondary_env_value = self._extract_sample_features(row)
+        state_vars = [sample_features['charge'], sample_features['pep_mass'], sample_features['intensity']]
+        env_vars = [sample_features['nce'], secondary_env_value]
+        
+        # 数据增强
+        if self.augmentor is not None:
+            sequence, labels, sample_features = self.augmentor.augment(sequence, labels, sample_features)
+            state_vars = [sample_features['charge'], sample_features['pep_mass'], sample_features['intensity']]
+            secondary_env_value = float(sample_features.get(self.env_feature_name, secondary_env_value))
+            env_vars = [sample_features['nce'], secondary_env_value]
+        
+        # 构建图
+        graph_data = self.graph_builder.build_graph(sequence, sample_features, self.graph_strategy)
+
+        # 准备标签
+        label_tensor = self._prepare_labels(labels, len(sequence))
+
+        # q 软标签（条件均值，precompute_soft_labels.py 预计算）
+        soft_tensor = None
+        if self.use_soft_labels and 'soft_multi' in row.index and not pd.isna(row['soft_multi']):
+            soft = self._parse_soft_labels(str(row['soft_multi']))
+            if soft:
+                soft_tensor = self._prepare_labels(soft, len(sequence))
+
+        # 序列衍生理论键离子特征（use_theory_features 开关控制，默认关闭）
+        bond_theory = None
+        if _get_config_value(self.config, 'use_theory_features', False):
+            from .theory_features import compute_bond_theory
+            bond_theory = compute_bond_theory(sequence)
+
+        # 组合数据
+        sample = {
+            'sequence': sequence,
+            'edge_index': graph_data['edge_index'],
+            'edge_attr': graph_data['edge_attr'],
+            'edge_types': graph_data['edge_types'],
+            'edge_distances': graph_data['edge_distances'],
+            'bond_edge_map': graph_data['bond_edge_map'],
+            'labels': label_tensor,
+            'charge': sample_features['charge'],
+            'pep_mass': sample_features['pep_mass'],
+            'intensity': sample_features['intensity'],
+            'nce': sample_features['nce'],
+            'rt': sample_features.get('rt', secondary_env_value if self.env_feature_name == 'rt' else 0.0),
+            'env_feature_value': secondary_env_value,
+            'state_vars': torch.tensor(state_vars, dtype=torch.float32),
+            'env_vars': torch.tensor(env_vars, dtype=torch.float32),
+            'seq_len': len(sequence),
+            'node_len': self.graph_builder.node_count(len(sequence))
+        }
+        if 'scan_num' in sample_features:
+            sample['scan_num'] = sample_features['scan_num']
+        if bond_theory is not None:
+            sample['bond_theory'] = bond_theory
+        if soft_tensor is not None:
+            sample['soft_labels'] = soft_tensor
+        if self.sample_weights is not None:
+            sample['sample_weight'] = float(self.sample_weights[idx])
+
+        return sample
+
+    def _extract_sample_features(self, row: pd.Series) -> Tuple[Dict[str, float], float]:
+        sample_features = {
+            'charge': float(row['charge']),
+            'pep_mass': float(row['pep_mass']),
+            'intensity': float(row['intensity']),
+            'nce': float(row['nce']),
+        }
+        if 'rt' in row.index and not pd.isna(row['rt']):
+            sample_features['rt'] = float(row['rt'])
+        if 'scan_num' in row.index and not pd.isna(row['scan_num']):
+            sample_features['scan_num'] = float(row['scan_num'])
+
+        secondary_env_value = float(row[self.env_feature_name])
+        sample_features[self.env_feature_name] = secondary_env_value
+        return sample_features, secondary_env_value
+    
+    def _parse_labels(self, label_str: str) -> List[int]:
+        """解析多标签字符串"""
+        if pd.isna(label_str) or label_str == '':
+            return []
+
+        # 解析分号分隔的多标签
+        labels = [int(x.strip()) for x in str(label_str).split(';') if x.strip().isdigit()]
+        return labels
+
+    def _parse_soft_labels(self, label_str: str) -> List[float]:
+        """解析 q 软标签字符串（分号分隔的 [0,1] 浮点，条件均值）。
+
+        与 _parse_labels 不同：不做 isdigit 过滤（0.13 这类浮点 token 合法）。
+        """
+        if pd.isna(label_str) or label_str == '':
+            return []
+        toks = [x.strip() for x in str(label_str).split(';') if x.strip() != '']
+        try:
+            return [float(x) for x in toks]
+        except ValueError:
+            return []
+    
+    def _prepare_labels(self, labels: List[int], seq_len: int) -> torch.Tensor:
+        """准备断裂位置标签张量（序列相邻键）"""
+        bond_len = max(seq_len - 1, 0)
+        label_values = labels
+
+        # 有些数据包含seq_len长度，取前seq_len-1作为键标签
+        if len(label_values) >= seq_len:
+            label_values = label_values[:bond_len]
+
+        # 过短则补0
+        if len(label_values) < bond_len:
+            label_values = label_values + [0] * (bond_len - len(label_values))
+
+        label_tensor = torch.tensor(label_values[:bond_len], dtype=torch.float32)
+        return label_tensor
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """获取数据集统计信息"""
+        seq_lengths = [len(seq) for seq in self.data['seq']]
+        
+        stats = {
+            'num_samples': len(self.data),
+            'avg_seq_length': np.mean(seq_lengths),
+            'max_seq_length': np.max(seq_lengths),
+            'min_seq_length': np.min(seq_lengths),
+            'sequence_length_distribution': np.histogram(seq_lengths, bins=20),
+            'length_counts': self.data['seq'].str.len().value_counts().sort_index().to_dict()
+        }
+        
+        # 标签统计
+        all_labels = []
+        for label_str in self.data['true_multi']:
+            if not pd.isna(label_str):
+                labels = self._parse_labels(str(label_str))
+                all_labels.extend(labels)
+        
+        if all_labels:
+            stats['label_distribution'] = np.bincount(all_labels)
+            stats['positive_ratio'] = np.mean(all_labels)
+        
+        return stats
+
+
+class GraphDataLoader:
+    """图数据加载器"""
+    
+    def __init__(self, 
+                 dataset: GraphDataset,
+                 batch_size: int = 32,
+                 shuffle: bool = True,
+                 num_workers: int = 4,
+                 collate_fn: Optional[callable] = None,
+                 pin_memory: bool = True,
+                 drop_last: bool = False,
+                 persistent_workers: bool = False,
+                 prefetch_factor: Optional[int] = None):
+        """
+        初始化图数据加载器
+        
+        Args:
+            dataset: 图数据集
+            batch_size: 批大小
+            shuffle: 是否打乱数据
+            num_workers: 工作进程数
+            collate_fn: 批处理函数
+            pin_memory: 是否固定内存
+            drop_last: 是否丢弃最后一个不完整批次
+            persistent_workers: 是否保持 worker 常驻
+            prefetch_factor: 每个 worker 预取的批次数
+        """
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.num_workers = num_workers
+        self.collate_fn = collate_fn or self._default_collate_fn
+        self.pin_memory = pin_memory
+        self.drop_last = drop_last
+        self.persistent_workers = persistent_workers if num_workers > 0 else False
+        self.prefetch_factor = prefetch_factor if num_workers > 0 else None
+        
+        # 创建PyTorch DataLoader
+        dataloader_kwargs = dict(
+            dataset=dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=num_workers,
+            collate_fn=self.collate_fn,
+            pin_memory=pin_memory,
+            drop_last=drop_last
+        )
+        if num_workers > 0:
+            dataloader_kwargs['persistent_workers'] = self.persistent_workers
+            if self.prefetch_factor is not None:
+                dataloader_kwargs['prefetch_factor'] = self.prefetch_factor
+        self.dataloader = DataLoader(**dataloader_kwargs)
+    
+    def _default_collate_fn(self, batch: List[Dict]) -> Dict[str, torch.Tensor]:
+        """默认批处理函数"""
+        # 收集所有数据
+        sequences = [item['sequence'] for item in batch]
+        labels_list = [item['labels'] for item in batch]
+        
+        charges = torch.tensor([item['charge'] for item in batch], dtype=torch.float32)
+        pep_masses = torch.tensor([item['pep_mass'] for item in batch], dtype=torch.float32)
+        intensities = torch.tensor([item['intensity'] for item in batch], dtype=torch.float32)
+        nces = torch.tensor([item['nce'] for item in batch], dtype=torch.float32)
+        rts = torch.tensor([item.get('rt', item['env_feature_value']) for item in batch], dtype=torch.float32)
+        secondary_envs = torch.tensor([item['env_feature_value'] for item in batch], dtype=torch.float32)
+        state_vars = torch.stack([item['state_vars'] for item in batch], dim=0)
+        env_vars = torch.stack([item['env_vars'] for item in batch], dim=0)
+        seq_lens = torch.tensor([item['seq_len'] for item in batch], dtype=torch.long)
+        node_lens = torch.tensor([item.get('node_len', item['seq_len']) for item in batch], dtype=torch.long)
+
+        batch_size = len(batch)
+        max_seq_len = int(seq_lens.max().item()) if batch_size > 0 else 0
+        # 预先算好 max_node_len / max_bonds（Python int），供 forward 直接使用，
+        # 避免 forward 里对 GPU 张量做 .max().item() 造成每步一次 CUDA→CPU 同步。
+        max_node_len = int(node_lens.max().item()) if batch_size > 0 else 0
+        max_bonds = max(max_seq_len - 1, 0)
+        
+        # 批处理边索引（需要偏移）
+        node_offsets = torch.cumsum(
+            torch.cat([node_lens.new_zeros(1), node_lens[:-1]], dim=0),
+            dim=0,
+        )
+        edge_counts = torch.tensor([item['edge_attr'].size(0) for item in batch], dtype=torch.long)
+        edge_offsets = torch.cumsum(
+            torch.cat([edge_counts.new_zeros(1), edge_counts[:-1]], dim=0),
+            dim=0,
+        )
+        batch_edge_indices = [
+            item['edge_index'] + int(offset.item())
+            for item, offset in zip(batch, node_offsets)
+        ]
+        batch_edge_attrs = [item['edge_attr'] for item in batch]
+        batch_edge_types = [item['edge_types'] for item in batch]
+        batch_edge_distances = [item['edge_distances'] for item in batch]
+        batch_bond_edge_map = torch.cat(
+            [
+                item['bond_edge_map'] + int(edge_offset.item())
+                for item, edge_offset in zip(batch, edge_offsets)
+            ],
+            dim=0,
+        ) if batch else torch.empty((0,), dtype=torch.long)
+        
+        # 拼接所有边
+        batch_edge_index = torch.cat(batch_edge_indices, dim=1)
+        batch_edge_attr = torch.cat(batch_edge_attrs, dim=0)
+        batch_edge_types = torch.cat(batch_edge_types, dim=0)
+        batch_edge_distances = torch.cat(batch_edge_distances, dim=0)
+        
+        # 填充标签（键级别，长度=seq_len-1）；max_bonds 已在前面算好
+        if max_bonds > 0:
+            batch_labels = pad_sequence(labels_list, batch_first=True, padding_value=0.0)
+            bond_positions = torch.arange(max_bonds, dtype=torch.long)
+            batch_label_masks = (bond_positions.unsqueeze(0) < (seq_lens - 1).clamp_min(0).unsqueeze(1)).to(dtype=torch.float32)
+        else:
+            batch_labels = torch.zeros((batch_size, 0), dtype=torch.float32)
+            batch_label_masks = torch.zeros((batch_size, 0), dtype=torch.float32)
+
+        # q 软标签（use_soft_labels 且样本带 soft_labels 时）：与 labels 同键位零填充。
+        # 混合批（部分有部分无）视为数据错误，直接报错。
+        soft_list = [item.get('soft_labels') for item in batch]
+        has_soft = [s is not None for s in soft_list]
+        batch_soft_labels = None
+        if any(has_soft):
+            if not all(has_soft):
+                raise ValueError("batch 内 soft_labels 缺失不一致（检查 CSV 的 soft_multi 列是否完整）")
+            if max_bonds > 0:
+                batch_soft_labels = pad_sequence(soft_list, batch_first=True, padding_value=0.0)
+
+        # 理论键离子特征（use_theory_features 时存在）：[B, max_bonds, D]，
+        # 与 labels/label_mask 的键位对齐
+        theory_list = [item['bond_theory'] for item in batch if 'bond_theory' in item]
+        batch_bond_theory = None
+        if theory_list and max_bonds > 0:
+            theory_dim = theory_list[0].size(1)
+            batch_bond_theory = torch.zeros((batch_size, max_bonds, theory_dim), dtype=torch.float32)
+            for i, t in enumerate(theory_list):
+                n = min(t.size(0), max_bonds)
+                if n > 0:
+                    batch_bond_theory[i, :n] = t[:n]
+        
+        # 创建批次数据
+        batch_data = {
+            'sequences': sequences,
+            'edge_index': batch_edge_index,
+            'edge_attr': batch_edge_attr,
+            'edge_types': batch_edge_types,
+            'edge_distances': batch_edge_distances,
+            'bond_edge_map': batch_bond_edge_map,
+            'labels': batch_labels,
+            'label_mask': batch_label_masks,
+            'charges': charges,            'pep_masses': pep_masses,
+            'intensities': intensities,
+            'nces': nces,
+            'rts': rts,
+            'secondary_envs': secondary_envs,
+            'state_vars': state_vars,
+            'env_vars': env_vars,
+            'seq_lens': seq_lens,
+            'node_lens': node_lens,
+            'max_node_len': max_node_len,
+            'max_bonds': max_bonds,
+            'batch_size': batch_size
+        }
+        if batch_bond_theory is not None:
+            batch_data['bond_theory'] = batch_bond_theory
+        if batch_soft_labels is not None:
+            batch_data['soft_labels'] = batch_soft_labels
+
+        # Operational ion-channel targets stay separate from every model input.
+        has_four_state = ['four_state_targets' in item for item in batch]
+        if any(has_four_state):
+            if not all(has_four_state):
+                raise ValueError('batch mixes samples with/without four-state targets')
+            state_targets = []
+            for item in batch:
+                target = item['four_state_targets']
+                if target.shape != (len(item['sequence']) - 1, 4):
+                    raise ValueError('four-state sample target length mismatch')
+                state_targets.append(target)
+            batch_data['four_state_targets'] = pad_sequence(state_targets, batch_first=True, padding_value=0.0)
+
+        has_ion12 = ['ion12_targets' in item for item in batch]
+        if any(has_ion12):
+            if not all(has_ion12):
+                raise ValueError('batch mixes samples with and without ion12_targets')
+            ion12 = []
+            for item in batch:
+                target = item['ion12_targets']
+                if (not isinstance(target, torch.Tensor) or not target.is_floating_point()
+                        or tuple(target.shape) != (int(item['seq_len']) - 1, 12)
+                        or not torch.isfinite(target).all()
+                        or not ((target >= 0) & (target <= 1)).all()):
+                    raise ValueError('invalid ion12_targets shape/value')
+                ion12.append(target)
+            batch_data['ion12_targets'] = pad_sequence(ion12, batch_first=True, padding_value=0.0)
+
+        # 条件组权重（weighting_scheme 激活时逐行携带）；混合批视为数据错误
+        weight_list = [item.get('sample_weight') for item in batch]
+        has_weight = [w is not None for w in weight_list]
+        if any(has_weight):
+            if not all(has_weight):
+                raise ValueError("batch 内 sample_weight 缺失不一致（检查 weighting_scheme 与 CSV group_n 列）")
+            batch_data['sample_weights'] = torch.tensor(weight_list, dtype=torch.float32)
+
+        return batch_data
+    
+    def __iter__(self):
+        """迭代器"""
+        return iter(self.dataloader)
+    
+    def __len__(self):
+        """数据加载器长度"""
+        return len(self.dataloader)
+
+
+class MultiTaskGraphDataset(GraphDataset):
+    """多任务图数据集"""
+    
+    def __init__(self, 
+                 csv_path: str,
+                 config: Any,
+                 tasks: List[str],
+                 max_seq_len: int = 100,
+                 graph_strategy: str = 'distance',
+                 augmentation: bool = False,
+                 split: str = 'train'):
+        """
+        初始化多任务图数据集
+        
+        Args:
+            csv_path: CSV数据文件路径
+            config: 配置对象
+            tasks: 任务列表
+            max_seq_len: 最大序列长度
+            graph_strategy: 图构建策略
+            augmentation: 是否使用数据增强
+            split: 数据分割
+        """
+        super().__init__(csv_path, config, max_seq_len, graph_strategy, augmentation, split)
+        
+        self.tasks = tasks
+        
+        # 验证任务列是否存在
+        missing_tasks = [task for task in tasks if task not in self.data.columns]
+        if missing_tasks:
+            raise ValueError(f"Missing task columns: {missing_tasks}")
+    
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        """获取多任务样本"""
+        sample = super().__getitem__(idx)
+        
+        # 添加多任务标签
+        row = self.data.iloc[idx]
+        task_labels = {}
+        
+        for task in self.tasks:
+            if task in row and not pd.isna(row[task]):
+                task_labels[task] = torch.tensor(float(row[task]), dtype=torch.float32)
+            else:
+                task_labels[task] = torch.tensor(0.0, dtype=torch.float32)
+        
+        sample['task_labels'] = task_labels
+        
+        return sample
+
+
+class CachedGraphDataset(GraphDataset):
+    """缓存的图数据集"""
+    
+    def __init__(self, 
+                 csv_path: str,
+                 config: Any,
+                 cache_dir: str,
+                 max_seq_len: int = 100,
+                 graph_strategy: str = 'distance',
+                 augmentation: bool = False,
+                 split: str = 'train',
+                 rebuild_cache: bool = False,
+                 cache_full_graphs: bool = False):
+        """
+        初始化缓存图数据集
+        
+        Args:
+            csv_path: CSV数据文件路径
+            config: 配置对象
+            cache_dir: 缓存目录
+            max_seq_len: 最大序列长度
+            graph_strategy: 图构建策略
+            augmentation: 是否使用数据增强
+            split: 数据分割
+            rebuild_cache: 是否重建缓存
+            cache_full_graphs: 是否缓存完整图（大数据集可能较慢）
+        """
+        super().__init__(csv_path, config, max_seq_len, graph_strategy, augmentation, split)
+        
+        self.cache_dir = self._resolve_cache_dir(cache_dir)
+        self.rebuild_cache = rebuild_cache
+        self.cache_full_graphs = cache_full_graphs
+        self.use_long_range_edges = _get_config_value(self.config, 'use_long_range_edges', False)
+        self.long_range_stride = _get_config_value(self.config, 'long_range_stride', 10)
+        self.long_range_hops = _get_config_value(self.config, 'long_range_hops', 1)
+        self.use_global_node = _get_config_value(self.config, 'use_global_node', False)
+        self.virtual_node_mode = self.graph_builder.virtual_node_mode
+        self.virtual_group_size = self.graph_builder.virtual_group_size
+        
+        # 创建缓存目录
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+        # 加载或构建边缓存（按长度）
+        edge_suffix = self._cache_suffix()
+        self.edge_cache_file = os.path.join(
+            self.cache_dir,
+            f"edges_{self.graph_strategy}_{edge_suffix}.pt"
+        )
+        self._load_or_build_edge_cache()
+        
+        # 加载或构建缓存
+        self.cache_file = os.path.join(
+            self.cache_dir,
+            f"{split}_{graph_strategy}_{edge_suffix}_cache.pt"
+        )
+        if self.cache_full_graphs:
+            self._load_or_build_cache()
+        else:
+            self.cached_data = None
+
+    def _resolve_cache_dir(self, cache_dir: str) -> str:
+        """将相对路径缓存目录解析为项目根目录下的绝对路径"""
+        if os.path.isabs(cache_dir):
+            return cache_dir
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        return os.path.join(project_root, cache_dir)
+
+    def _edge_cache_meta(self) -> Dict[str, Any]:
+        return {
+            "version": 3,
+            "graph_strategy": self.graph_strategy,
+            "max_seq_len": self.max_seq_len,
+            "max_distance": _get_config_value(self.config, "max_distance", 0),
+            "edge_types": list(_get_config_value(self.config, "edge_types", [])),
+            "use_long_range_edges": self.use_long_range_edges,
+            "long_range_stride": self.long_range_stride,
+            "long_range_hops": self.long_range_hops,
+            "use_global_node": self.use_global_node,
+            "virtual_node_mode": self.virtual_node_mode,
+            "virtual_group_size": self.virtual_group_size,
+        }
+
+    def _cache_suffix(self) -> str:
+        parts = [
+            f"maxlen{self.max_seq_len}",
+            f"maxdist{_get_config_value(self.config, 'max_distance', 0)}",
+        ]
+        if self.use_long_range_edges:
+            parts.append(f"lr{self.long_range_stride}x{self.long_range_hops}")
+        if self.use_global_node:
+            parts.append("g4" if self.virtual_node_mode in ('parallel4', 'parallel4_cross') else "g1")
+        parts.append(f"vn{self.virtual_node_mode}_g{self.virtual_group_size}")
+        return "_".join(parts)
+
+    def _populate_edge_cache(self, edge_cache: Dict[Any, Any]):
+        for seq_len, edge_data in edge_cache.items():
+            if isinstance(seq_len, str):
+                seq_len = int(seq_len)
+            if isinstance(edge_data, dict):
+                edge_index = edge_data["edge_index"]
+                edge_types = edge_data["edge_types"]
+                edge_distances = edge_data["edge_distances"]
+                bond_edge_map = edge_data.get("bond_edge_map")
+            else:
+                if len(edge_data) == 4:
+                    edge_index, edge_types, edge_distances, bond_edge_map = edge_data
+                else:
+                    edge_index, edge_types, edge_distances = edge_data
+                    bond_edge_map = None
+            if bond_edge_map is None:
+                bond_edge_map = self.graph_builder._build_bond_edge_map(edge_index, seq_len)
+            key = self.graph_builder._edge_cache_key(seq_len, self.graph_strategy)
+            self.graph_builder._edge_cache[key] = (edge_index, edge_types, edge_distances, bond_edge_map)
+
+    def _load_or_build_edge_cache(self):
+        """加载或构建按序列长度缓存的边结构"""
+        meta = self._edge_cache_meta()
+        if os.path.exists(self.edge_cache_file) and not self.rebuild_cache:
+            try:
+                payload = torch.load(self.edge_cache_file, map_location="cpu", weights_only=False)
+                cached_meta = payload.get("meta", {})
+                cached_edges = payload.get("edges", None)
+                if cached_edges is not None and cached_meta == meta:
+                    self._populate_edge_cache(cached_edges)
+                    print(f"Loaded edge cache from {self.edge_cache_file}")
+                    return
+            except Exception as e:
+                print(f"Failed to load edge cache: {e}")
+
+        # 构建边缓存（按长度）
+        print("Building edge cache (by sequence length)...")
+        edge_cache: Dict[int, Any] = {}
+        for seq_len in range(1, self.max_seq_len + 1):
+            edge_index, edge_types, edge_distances, bond_edge_map = self.graph_builder._get_or_build_edges(
+                seq_len, self.graph_strategy
+            )
+            edge_cache[seq_len] = {
+                "edge_index": edge_index,
+                "edge_types": edge_types,
+                "edge_distances": edge_distances,
+                "bond_edge_map": bond_edge_map,
+            }
+
+        self._populate_edge_cache(edge_cache)
+        torch.save({"meta": meta, "edges": edge_cache}, self.edge_cache_file)
+        print(f"Edge cache saved to {self.edge_cache_file}")
+    
+    def _csv_fingerprint(self) -> Dict[str, Any]:
+        """CSV 内容指纹：路径 + 行数 + seq/label 列的哈希（不读全文件，秒级完成）。"""
+        import hashlib
+        frame = self.data
+        # soft 列参与指纹：软标签 CSV 与原 CSV 必须生成不同缓存
+        if 'soft_multi' in frame.columns:
+            joined = "\n".join(
+                f"{seq}|{label}|{soft}" for seq, label, soft in zip(
+                    frame['seq'].astype(str), frame['true_multi'].astype(str), frame['soft_multi'].astype(str))
+            )
+        else:
+            joined = "\n".join(
+                f"{seq}|{label}" for seq, label in zip(frame['seq'].astype(str), frame['true_multi'].astype(str))
+            )
+        digest = hashlib.sha1(joined.encode("utf-8")).hexdigest()
+        return {"path": str(self.csv_path), "n_rows": int(len(frame)), "sha1": digest[:16]}
+
+    def _load_or_build_cache(self):
+        """加载或构建缓存"""
+        meta = {
+            "version": 6,
+            "csv_path": self.csv_path,
+            # P0-4: 缓存内容含 edge_attr/state/env（依赖 feature mask），元数据必须
+            # 记录 mask 与 CSV 内容指纹，否则换数据/换 mask 会静默复用旧缓存，
+            # 把被屏蔽的实测协变量重新泄漏进模型。
+            "csv_fingerprint": self._csv_fingerprint(),
+            "graph_strategy": self.graph_strategy,
+            "max_seq_len": self.max_seq_len,
+            "max_distance": _get_config_value(self.config, "max_distance", 0),
+            "edge_types": list(_get_config_value(self.config, "edge_types", [])),
+            "use_long_range_edges": self.use_long_range_edges,
+            "long_range_stride": self.long_range_stride,
+            "long_range_hops": self.long_range_hops,
+            "use_global_node": self.use_global_node,
+            "virtual_node_mode": self.virtual_node_mode,
+            "virtual_group_size": self.virtual_group_size,
+            "env_feature_name": self.env_feature_name,
+            "env_feature_scale": _get_config_value(self.config, 'env_feature_scale', 0.01),
+            "state_feature_mask": list(getattr(self.config, 'state_feature_mask', [True, True, True])),
+            "env_feature_mask": list(getattr(self.config, 'env_feature_mask', [True, True])),
+            "use_state_features": getattr(self.config, 'use_state_features', True),
+            "use_env_features": getattr(self.config, 'use_env_features', True),
+        }
+        if os.path.exists(self.cache_file) and not self.rebuild_cache:
+            try:
+                payload = torch.load(self.cache_file, map_location="cpu", weights_only=False)
+                cached_meta = payload.get("meta", {})
+                cached_data = payload.get("data", None)
+                if cached_data is not None and cached_meta == meta:
+                    self.cached_data = cached_data
+                    print(f"Loaded cache from {self.cache_file}")
+                    return
+            except Exception as e:
+                print(f"Failed to load cache: {e}")
+        
+        # 构建缓存
+        print("Building cache...")
+        self.cached_data = {}
+        
+        for idx in range(len(self.data)):
+            sample = super().__getitem__(idx)
+            self.cached_data[idx] = {
+                'edge_index': sample['edge_index'],
+                'edge_attr': sample['edge_attr'],
+                'edge_types': sample['edge_types'],
+                'edge_distances': sample['edge_distances'],
+                'bond_edge_map': sample['bond_edge_map'],
+                'labels': sample['labels'],
+                'soft_labels': sample.get('soft_labels'),
+                'state_vars': sample['state_vars'],
+                'env_vars': sample['env_vars'],
+                'seq_len': sample['seq_len'],
+                'node_len': sample['node_len'],
+            }
+            
+            if (idx + 1) % 1000 == 0:
+                print(f"Processed {idx + 1}/{len(self.data)} samples")
+        
+        # 保存缓存
+        torch.save({"meta": meta, "data": self.cached_data}, self.cache_file)
+        print(f"Cache saved to {self.cache_file}")
+    
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        """获取缓存样本"""
+        row = self.data.iloc[idx]
+
+        # 提取序列（始终需要，用于模型中氨基酸嵌入）
+        sequence = str(row['seq'])
+
+        # 序列衍生理论键离子特征（只依赖 seq，与缓存无关，两个分支统一在此计算）
+        bond_theory = None
+        if _get_config_value(self.config, 'use_theory_features', False):
+            from .theory_features import compute_bond_theory
+            bond_theory = compute_bond_theory(sequence)
+
+        if self.cached_data is not None:
+            # 完整图缓存命中：直接返回缓存数据，无需重复计算
+            cached = self.cached_data[idx]
+            sample = {
+                'sequence': sequence,
+                'edge_index': cached['edge_index'],
+                'edge_attr': cached['edge_attr'],
+                'edge_types': cached['edge_types'],
+                'edge_distances': cached['edge_distances'],
+                'bond_edge_map': cached['bond_edge_map'],
+                'labels': cached['labels'],
+                'charge': float(row['charge']),
+                'pep_mass': float(row['pep_mass']),
+                'intensity': float(row['intensity']),
+                'nce': float(row['nce']),
+                'rt': float(row['rt']) if 'rt' in row.index else 0.0,
+                'env_feature_value': float(row[self.env_feature_name]),
+                'state_vars': cached['state_vars'],
+                'env_vars': cached['env_vars'],
+                'seq_len': cached['seq_len'],
+                'node_len': cached['node_len'],
+            }
+            if 'scan_num' in row.index:
+                sample['scan_num'] = float(row['scan_num'])
+            if bond_theory is not None:
+                sample['bond_theory'] = bond_theory
+            cached_soft = cached.get('soft_labels')
+            if self.use_soft_labels and cached_soft is not None:
+                sample['soft_labels'] = cached_soft
+            if self.sample_weights is not None:
+                sample['sample_weight'] = float(self.sample_weights[idx])
+            return sample
+        
+        # 无完整图缓存：使用边缓存 + 实时计算 edge_attr
+        labels = self._parse_labels(str(row['true_multi']))
+        sample_features, secondary_env_value = self._extract_sample_features(row)
+
+        graph_data = self.graph_builder.build_graph(sequence, sample_features, self.graph_strategy)
+        label_tensor = self._prepare_labels(labels, len(sequence))
+
+        # q 软标签（与 GraphDataset 主路径同逻辑）
+        soft_tensor = None
+        if self.use_soft_labels and 'soft_multi' in row.index and not pd.isna(row['soft_multi']):
+            soft = self._parse_soft_labels(str(row['soft_multi']))
+            if soft:
+                soft_tensor = self._prepare_labels(soft, len(sequence))
+
+        sample = {
+            'sequence': sequence,
+            'edge_index': graph_data['edge_index'],
+            'edge_attr': graph_data['edge_attr'],
+            'edge_types': graph_data['edge_types'],
+            'edge_distances': graph_data['edge_distances'],
+            'bond_edge_map': graph_data['bond_edge_map'],
+            'labels': label_tensor,
+            'charge': sample_features['charge'],
+            'pep_mass': sample_features['pep_mass'],
+            'intensity': sample_features['intensity'],
+            'nce': sample_features['nce'],
+            'rt': sample_features.get('rt', secondary_env_value if self.env_feature_name == 'rt' else 0.0),
+            'env_feature_value': secondary_env_value,
+            'state_vars': torch.tensor(
+                [sample_features['charge'], sample_features['pep_mass'], sample_features['intensity']],
+                dtype=torch.float32,
+            ),
+            'env_vars': torch.tensor([sample_features['nce'], secondary_env_value], dtype=torch.float32),
+            'seq_len': len(sequence),
+            'node_len': self.graph_builder.node_count(len(sequence))
+        }
+        if 'scan_num' in sample_features:
+            sample['scan_num'] = sample_features['scan_num']
+        if bond_theory is not None:
+            sample['bond_theory'] = bond_theory
+        if soft_tensor is not None:
+            sample['soft_labels'] = soft_tensor
+        if self.sample_weights is not None:
+            sample['sample_weight'] = float(self.sample_weights[idx])
+
+        return sample

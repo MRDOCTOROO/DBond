@@ -1,0 +1,104 @@
+\subsection{图构建}
+
+给定长度为 $L$ 的镜像肽序列
+\begin{equation}
+P=(a_1,a_2,\ldots,a_L),
+\end{equation}
+其中 $a_i$ 表示第 $i$ 个 D-氨基酸残基。每个残基映射为图中的一个节点
+\begin{equation}
+\mathcal{V}=\{v_1,v_2,\ldots,v_L\},
+\end{equation}
+节点 $v_i$ 与残基 $a_i$ 一一对应。
+
+\paragraph{序列距离与折叠调整距离。}
+对于任意节点对 $(v_i,v_j)$，定义其序列距离为
+\begin{equation}
+d_{ij}^{\mathrm{seq}} = |i-j|.
+\end{equation}
+为模拟肽链在空间中的折叠邻近效应，引入折叠调整距离
+\begin{equation}
+d_{ij} = d_{ij}^{\mathrm{seq}} \cdot \Big( 1 + 0.2\,\sin\big(0.5\,d_{ij}^{\mathrm{seq}}\big) \Big),
+\label{eq:fold_dist}
+\end{equation}
+该距离同时作为边连接的判据与边类型划分的依据。
+
+\paragraph{三种图构建策略。}
+基于 $d_{ij}$ 与最大邻域半径 $d_{\max}$，本文设计三种图构建策略（见图~\ref{fig:graph_construction}）。
+
+\textbf{（a）Sequence Graph。}仅保留相邻残基间的连接，
+\begin{equation}
+\mathcal{E}_{\mathrm{seq}} = \big\{ e_{ij} \,\big|\, d_{ij}^{\mathrm{seq}} = 1 \big\},
+\end{equation}
+所有边统一标记为主链边（$\mathrm{type}=0$），
+对应肽链的线性拓扑结构，边数与序列长度成线性关系 $O(L)$。
+
+\textbf{（b）Distance Graph。}连接所有满足 $d_{ij}\le d_{\max}$ 的残基对，
+\begin{equation}
+\mathcal{E}_{\mathrm{dist}} = \big\{ e_{ij} \,\big|\, d_{ij} \le d_{\max} \big\}.
+\end{equation}
+根据 $d_{ij}$ 进一步将边划分为近距离边（$\mathrm{type}=1$，$d_{ij}\le 2$）
+和远距离边（$\mathrm{type}=2$，$2<d_{ij}\le d_{\max}$）。
+相邻残基连接包含在内，但被统一视为近距离边，
+不与主链边作类型上的区分。其边数为 $O(L\cdot d_{\max})$。
+
+\textbf{（c）Hybrid Graph。}在 Distance Graph 的基础上，
+额外引入稀疏长程边（$\mathrm{type}=3$），以固定步长 $\Delta$ 连接相距较远的残基，
+\begin{equation}
+\mathcal{E}_{\mathrm{long}} = \big\{ (v_i,v_{i+k\Delta}) \,\big|\, k=1,\ldots,K,\; i+k\Delta \le L \big\},
+\end{equation}
+其中 $\Delta$ 为步长、$K$ 为跳数。Hybrid Graph 的完整边集合为
+\begin{equation}
+\mathcal{E}_{\mathrm{hyb}} = \mathcal{E}_{\mathrm{dist}} \,\cup\, \mathcal{E}_{\mathrm{long}},
+\end{equation}
+其引入的长程边不依赖全局开关，确保与 Distance Graph 存在实质性的结构差异，
+增强远距离残基间的信息交互。
+
+\paragraph{全局虚拟节点。}
+此外，引入全局虚拟节点 $v_g$，与所有残基节点建立双向连接
+（$\mathrm{type}=4$）：
+\begin{equation}
+\mathcal{V}' = \mathcal{V} \cup \{v_g\},\qquad
+\mathcal{E}_{\mathrm{global}} = \big\{ (v_i,v_g),\,(v_g,v_i) \,\big|\, v_i\in\mathcal{V} \big\}.
+\end{equation}
+全局节点的初始表示由实验条件特征经编码后投影得到，
+并叠加一个可学习全局嵌入：
+\begin{equation}
+\boldsymbol{h}_g^{(0)} = \boldsymbol{e}_{\mathrm{learn}} \;+\;
+\mathrm{MLP}_g\!\Big( \big[\,\boldsymbol{x}^{\mathrm{state}};\,\boldsymbol{x}^{\mathrm{env}}\,\big] \Big),
+\label{eq:global_node}
+\end{equation}
+其中 $\boldsymbol{e}_{\mathrm{learn}}\in\mathbb{R}^{d}$ 为可学习全局嵌入，
+$\boldsymbol{x}^{\mathrm{state}}$ 和 $\boldsymbol{x}^{\mathrm{env}}$ 分别为前体离子
+状态特征（电荷、质荷比、强度）与实验环境特征（NCE、扫描数）经各自 MLP
+编码后的隐表示，$\mathrm{MLP}_g$ 为 $\mathrm{Linear}\!\to\!\mathrm{ReLU}\!\to\!\mathrm{Dropout}$
+的两层投影网络。全局节点在消息传递过程中能够向所有残基节点广播实验条件信息，
+同时聚合整条肽段的全局语义特征，从而增强模型对整体断裂模式的建模能力。
+
+\begin{table}[htbp]
+\centering
+\caption{不同图构建策略的边类型与邻接规则。所有策略均可叠加全局节点（$\mathrm{type}=4$）。}
+\label{tab:graph_types}
+\begin{tabular}{c|c|c|c|c}
+\hline
+图类型 & 邻接规则 & 边类型 & 边数 & 说明 \\
+\hline
+Sequence Graph & $d_{ij}^{\mathrm{seq}}=1$ & 0（主链） & $O(L)$ & 线性拓扑 \\
+Distance Graph & $d_{ij}\le d_{\max}$ & 1（近距）、2（远距） & $O(L\cdot d_{\max})$ & 含相邻边 \\
+Hybrid Graph & Distance $+$ 长程边 & 1、2、3（长程） & $O(L\cdot d_{\max}+LK)$ & 远距增强 \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/graph_construction.png}
+\caption{图构建策略示意。
+(a)~Sequence Graph 仅保留相邻残基间的线性主链边；
+(b)~Distance Graph 在折叠调整距离 $d_{ij}\le d_{\max}$ 内连接残基对，
+    并按距离划分近距离边与远距离边；
+(c)~Hybrid Graph 在 Distance Graph 基础上叠加稀疏长程边；
+(d)~全局虚拟节点 $v_g$ 与所有残基建立双向连接，
+    用于广播实验条件信息；
+(e)~边类型图例。}
+\label{fig:graph_construction}
+\end{figure}
