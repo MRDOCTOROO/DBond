@@ -473,7 +473,7 @@
     {
       "id": 12,
       "name": "single_k5_same_fold_seed_ensemble_ranking",
-      "status": "submitted",
+      "status": "failed_reviewed",
       "authorized_at_local": "2026-10-25",
       "protocol": "experiments/k5_seed_ensemble_ranking_v1.md",
       "ops": "/mnt/pvc/graphtrans/four_state_k5_seed_ensemble_ops",
@@ -493,7 +493,11 @@
       "training_base_seeds": [42, 43, 45],
       "fold_ids": [1222, 2252, 3514, 6072, 9075],
       "arms": ["seed42_single_k5", "seed43_single_k5", "seed45_single_k5", "equal_q_mean_3seed"],
-      "action": "Inference-only same-fold ensemble with fixed equal weights and 0.5 threshold. Verify source checkpoints and archived metrics, audit all five fold paired ranking and classification results, report and ack; no further experiment automatically."
+      "action": "Inference-only same-fold ensemble with fixed equal weights and 0.5 threshold. This frozen first batch failed a too-sensitive historical q_seq replay gate at seed42/fold3514; preserve it and start no continuation from its cached folds.",
+      "finished_at_utc": "2026-10-25T11:01:35.654241+00:00",
+      "event_acknowledged": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_k5_seed_ensemble_batch/20261025_105747|failed",
+      "failure": "seed42/fold3514 archived-vs-replayed q_seq absolute difference 0.0002601059649 exceeded prespecified 0.00005 tolerance; all other audited metrics nearly matched and Top10 matched. Diagnostic second replay was exact but is not substituted into this failed batch. Two historical sequence scores only 4.2822e-6 apart; their adjacent rank swap exactly explains the difference, though first-run per-sequence scores were not archived.",
+      "diagnostic_only": "/mnt/pvc/graphtrans/four_state_k5_seed_ensemble_ops/diagnostic_3514/diagnostic_summary.json"
     }
   ],
   "auto_advance": false,
