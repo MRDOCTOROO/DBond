@@ -168,6 +168,7 @@ class Trainer:
         total_ranking_zero_pair_batches = 0
         total_ranking_grad_abs = 0.0
         total_ranking_grad_probe_seconds = 0.0
+        total_ranking_compute_seconds = 0.0
         total_samples = 0
         num_batches = 0
         total_fetch_wait_time = 0.0
@@ -222,6 +223,7 @@ class Trainer:
             total_ranking_zero_pair_batches += int(loss_stats.get('ranking_zero_pair_batch', 0))
             total_ranking_grad_abs += loss_stats.get('ranking_output_gradient_abs', 0.0)
             total_ranking_grad_probe_seconds += loss_stats.get('ranking_grad_probe_seconds', 0.0)
+            total_ranking_compute_seconds += loss_stats.get('ranking_compute_seconds', 0.0)
             if self.ion12_enabled:
                 total_ion12_loss += loss_stats['ion12_aux_loss'] * sample_count
                 total_ion12_bond_loss += loss_stats['ion12_aux_loss'] * valid_bond_count
@@ -321,6 +323,8 @@ class Trainer:
             metrics['ranking_output_gradient_abs_batch_mean'] = total_ranking_grad_abs / num_batches if num_batches else 0.0
             metrics['ranking_grad_probe_seconds_total'] = total_ranking_grad_probe_seconds
             metrics['ranking_grad_probe_seconds_batch_mean'] = total_ranking_grad_probe_seconds / num_batches if num_batches else 0.0
+            metrics['ranking_compute_seconds_total'] = total_ranking_compute_seconds
+            metrics['ranking_compute_seconds_batch_mean'] = total_ranking_compute_seconds / num_batches if num_batches else 0.0
         if self.ion12_enabled:
             metrics['ion12_aux_loss'] = total_ion12_loss / total_samples if total_samples > 0 else 0.0
             metrics['main_loss'] = total_main_loss / total_valid_bonds if total_valid_bonds > 0 else 0.0
@@ -523,9 +527,11 @@ class Trainer:
         ranking_zero_pair_batch = 0
         ranking_gradient_abs = 0.0
         ranking_grad_probe_seconds = 0.0
+        ranking_compute_seconds = 0.0
         if self.ranking_loss_mode == 'pairwise_logistic' and self.model.training:
             from .pairwise_sequence_ranking import pairwise_sequence_logistic_loss
 
+            ranking_started = time.perf_counter()
             ranking_loss, rank_stats = pairwise_sequence_logistic_loss(
                 predictions_full, batch_data,
                 temperature=self.ranking_temperature,
@@ -541,6 +547,7 @@ class Trainer:
                 ranking_gradient_abs = float(rank_gradient[valid].abs().mean().detach().item())
                 ranking_grad_probe_seconds = time.perf_counter() - probe_started
             loss = loss + rank_weight * ranking_loss
+            ranking_compute_seconds = time.perf_counter() - ranking_started
         elif self.ranking_loss_mode == 'legacy_hinge' and rank_weight > 0.0:
             ranking_loss = self._sequence_ranking_loss(predictions_full, batch_data)
             loss = loss + rank_weight * ranking_loss
@@ -574,6 +581,7 @@ class Trainer:
             'ranking_zero_pair_batch': ranking_zero_pair_batch,
             'ranking_output_gradient_abs': ranking_gradient_abs,
             'ranking_grad_probe_seconds': ranking_grad_probe_seconds,
+            'ranking_compute_seconds': ranking_compute_seconds,
         }
 
     def _soft_targets(self, batch_data: Dict[str, Any], targets: torch.Tensor) -> torch.Tensor:

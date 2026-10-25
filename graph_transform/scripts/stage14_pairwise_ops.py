@@ -279,7 +279,8 @@ def smoke(gpu: int) -> None:
                 losses[arm] = float(loss.detach().item())
                 checks[arm] = {k: stats[k] for k in ('ranking_pairs', 'ranking_zero_pair_batch',
                                                    'ranking_loss', 'ranking_output_gradient_abs',
-                                                   'ranking_grad_probe_seconds')}
+                                                   'ranking_grad_probe_seconds',
+                                                   'ranking_compute_seconds')}
                 if arm == 'lambda0':
                     base_loss = loss.detach().clone()
                     manual_ce = four_state_cross_entropy(
