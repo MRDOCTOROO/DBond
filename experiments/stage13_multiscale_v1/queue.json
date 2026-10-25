@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "namespace": "stage13_multiscale_v1",
+  "stage": "S13",
+  "stage_status": "planned",
+  "depends_on": "S12 audited",
+  "stage12_audit_receipt": "/mnt/pvc/graphtrans/dbond_s12_gated_fusion_20261026_ops/independent_audit/audit_receipt.json",
+  "stage12_root": null,
+  "stage12_root_binding": "read and verify the audited receipt at launch",
+  "ops_root": "/mnt/pvc/graphtrans/dbond_s13_multiscale_conv_20261026_ops",
+  "run_root_parent": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform",
+  "folds": ["1222", "2252", "3514", "6072", "9075"],
+  "train_base_seed": 42,
+  "validation_split_base_seed": 42,
+  "arms": [
+    {"arm": "S13-A", "status": "planned", "independent_training": true},
+    {"arm": "S13-B", "status": "planned", "independent_training": true},
+    {"arm": "S13-C", "status": "planned", "independent_training": true},
+    {"arm": "S13-D", "status": "alias_of_S13-A", "independent_training": false}
+  ],
+  "allowed_transitions": [
+    "planned", "implementing", "smoke_passed", "submitted", "running",
+    "completed", "audited", "failed", "blocked", "audit_failed"
+  ],
+  "do_not_use": [
+    "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops",
+    "experiments/structural_queue_v1.json"
+  ]
+}

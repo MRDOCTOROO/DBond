@@ -8,7 +8,8 @@ import torch
 from torch import nn
 
 
-_MODE_CODES = {'single_k5': 1, 'multiscale_357': 2}
+_MODE_CODES = {'single_k5': 1, 'multiscale_357': 2,
+               'multiscale_357_c32': 3}
 _CODE_TO_MODE = {code: mode for mode, code in _MODE_CODES.items()}
 _MARKERS = ('node_conv_mode_code', 'node_conv_schema_code',
             'node_conv_kernel_sizes', 'node_conv_branch_channels')
@@ -16,7 +17,7 @@ _BRANCH_PREFIX = 'node_context_conv.'
 
 
 def validate_node_conv_mode(value):
-    if value not in ('none', 'single_k5', 'multiscale_357'):
+    if value != 'none' and value not in _MODE_CODES:
         raise ValueError(f'Unknown node_conv_mode: {value!r}')
     return value
 
@@ -27,6 +28,8 @@ def node_conv_spec(mode):
         return (5,), (192,)
     if mode == 'multiscale_357':
         return (3, 5, 7), (64, 64, 64)
+    if mode == 'multiscale_357_c32':
+        return (3, 5, 7), (32, 32, 32)
     return (), ()
 
 

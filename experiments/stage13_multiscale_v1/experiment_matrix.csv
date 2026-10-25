@@ -1,0 +1,5 @@
+arm,model_mode,kernels,channels_per_branch,training_required,reference,role,status,notes
+S13-A,single_k5,5,192,true,,original_single_global_k5_control,planned,Original four-state concat MLP and validated k5 branch; new contemporaneous seed42 run required
+S13-B,multiscale_357_c32,3|5|7,32,true,S13-A,multiscale_narrow_candidate,planned,Parallel same-padded branches concatenate then project to H256 with residual
+S13-C,multiscale_357,3|5|7,64,true,S13-A,multiscale_equal_parameter_candidate,planned,Existing c64 architecture retrained in the same Stage13 round
+S13-D,single_k5,5,192,false,S13-A,parameter_matched_k5_identity_control,alias_of_S13-A,Original k5 already matches S13-C parameters exactly; reuse A outputs with explicit alias and no independent training claim
