@@ -4,6 +4,8 @@
 
 stage10 的四槽交叉注意力＋单尺度 k=5 在训练基础种子45下，相对同轮单全局节点对照提高了肽键 F1，但 q-Brier 变差，未通过全部预注册工程门槛。用户现授权 stage11：在原五组外部序列划分上，把训练基础种子固定为42、内部验证划分基础种子仍为42，从头同轮训练 `single` 与 `parallel4_cross` 各五组。两臂都保留 H256、四状态头 α=1、单尺度 k=5 及原训练/评价配方；不得复用先前权重或跨轮绝对值充当同轮差值。
 
+2026-10-25 05:21:00 UTC：stage11 pod 预检全部通过并唯一提交。root `/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_parallel_global_replication_batch/20261025_052100`，冻结源码 `111c23313da9ae11a7ee33f8357be0a1876086ec`，永久 tag `dbond-four-state-parallel-global-seed42-v1-20261025`；ops `/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops`。索引已登记两臂配置 SHA、预检 SHA、实际逐组训练/划分种子及 GPU0/1/2/4；训练期间不 pod pull 或修改冻结源文件，不重跑预检/提交。
+
 本轮使用独立 ops、配置、批次根目录和完成事件，预检通过后只提交一次。只读完成/失败事件，不查看训练进度；终态在 pod 独立核验来源、十份权重和去 padding 指标，报告新旧种子各自的逐组配对差及排序能力、q-Brier 代价。五组外测集合在多轮架构探索中被反复查看，本次复验只检验训练随机性的稳定性，不能充作未使用的确认性测试集。具体设计、门槛、论文用途边界见 `parallel_global_seed_replication_v1.md`。完成报告并 ACK 后停止自动接续；学习图和物理先验仍暂缓。
 
 ## 2026-10-22追加末端融合与节点Conv1D（最新用户授权）
