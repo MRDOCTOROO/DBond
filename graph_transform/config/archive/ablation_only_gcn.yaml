@@ -1,0 +1,124 @@
+model:
+  hidden_dim: 256
+  num_attention_heads: 4
+  dropout: 0.1
+  leaky_relu_slope: 0.2
+  use_edge_features: true
+  edge_dim: 32
+  concat_heads: true
+  num_gcn_layers: 3
+  num_gat_layers: 0
+  max_seq_len: 32
+  alphabet: "#ABCDEFGHIKLMNOPQRSTVWXYZ"
+  pad_char: "#"
+  aa_embedding_dim: 64
+  position_embedding_dim: 32
+  physicochemical_dim: 32
+  num_physicochemical_features: 4
+  num_state_features: 3
+  num_env_features: 2
+  use_position_embedding: true
+  use_physicochemical_features: true
+  use_state_features: true
+  use_env_features: true
+  edge_types: ["sequence", "distance", "functional", "long_range", "global"]
+  edge_embedding_dim: 16
+  distance_embedding_dim: 16
+  max_distance: 100
+  use_edge_type_embedding: true
+  use_distance_embedding: true
+  use_raw_edge_attr: true
+  gat_use_edge_bias: true
+  gat_use_edge_gate: true
+  bond_use_edge_repr: true
+  bond_use_diff_feature: true
+  bond_use_product_feature: true
+  use_long_range_edges: true
+  long_range_stride: 10
+  long_range_hops: 1
+  use_global_node: true
+  num_classes: 1
+
+training:
+  epochs: 60
+  batch_size: 1024
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  gradient_clip_norm: 1.0
+  scheduler: "cosine"
+  warmup_epochs: 10
+  min_lr: 0.00001
+  early_stopping: true
+  patience: 10
+  min_delta: 0.001
+  validation_interval: 1
+  save_interval: 10
+  checkpoint_dir: "checkpoints/graph_transform/ablation_only_gcn"
+
+data:
+  train_csv_path: "dataset/dataset_private/1222.train.fbr.shuffle.multi.csv"
+  test_csv_path: "dataset/dataset_private/1222.test.fbr.multi.csv"
+  val_csv_path: null
+  max_seq_len: 32
+  graph_strategy: "distance"
+  env_feature_name: "scan_num"
+  env_feature_scale: 1.0
+  augmentation: false
+  cache_graphs: true
+  cache_full_graphs: false
+  cache_dir: "cache/graph_data"
+  num_workers: 32
+  pin_memory: true
+  drop_last: true
+
+loss:
+  main_loss: "binary_cross_entropy"
+
+optimizer:
+  type: "adamw"
+  betas: [0.9, 0.999]
+  eps: 1e-8
+  momentum: 0.9
+  nesterov: true
+  step_size: 30
+  gamma: 0.1
+
+evaluation:
+  threshold: 0.5
+  save_outputs: true
+  output_pred_dir: "result/pred/graph_transform/ablation_only_gcn"
+  output_metric_dir: "result/metric/graph_transform/ablation_only_gcn"
+
+device:
+  auto_detect: true
+  device_type: "cuda"
+  gpu_id: 0
+  use_amp: false
+
+logging:
+  level: "INFO"
+  log_dir: "logs/graph_transform/ablation_only_gcn"
+  log_file: "training.log"
+  use_tensorboard: true
+  tensorboard_log_dir: "tensorboard/graph_transform/ablation_only_gcn"
+  save_training_curves: true
+  save_loss_curves: true
+  log_interval: 10
+
+experiment:
+  name: "graph_transform_ablation_only_gcn"
+  version: "v1.0"
+  description: "Ablation: GCN backbone only."
+  seed: 42
+  deterministic: false
+  benchmark: true
+
+performance:
+  prefetch_factor: 4
+  persistent_workers: true
+
+debug:
+  debug_mode: false
+  check_nan_inf: true
+  log_grad_norm: true
+  save_nonfinite_batch: true

@@ -1,0 +1,1437 @@
+"""
+主要的图神经网络模型实现
+
+本文件包含了GraphTransformer模型的完整实现，用于蛋白质序列的键级别二分类。
+模型将蛋白质序列转换为图结构，然后使用图神经网络进行特征学习和预测。
+"""
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.nn.parameter import UninitializedParameter
+from torch.nn.utils.rnn import pad_sequence
+from typing import Dict, List, Optional
+import numpy as np
+import time
+
+from .gcn_layers import ResidualGCNLayer
+from .attention_layers import GraphAttentionLayer
+
+
+def _maybe_sync(device: torch.device, enabled: bool) -> None:
+    """仅在 profiling 时同步 CUDA，避免常规训练开销。"""
+    if enabled and device.type == 'cuda' and torch.cuda.is_available():
+        torch.cuda.synchronize(device)
+
+
+def _pool_virtual_groups(residue_features: torch.Tensor,
+                         seq_lens: torch.Tensor,
+                         group_size: int):
+    """Mean-pool contiguous, nonoverlapping true residues into virtual nodes.
+
+    The input is the complete NodeEncoder (+ optional k=5 Conv1D) output,
+    before global packing or FiLM. Padding is cleared with masked_fill so a
+    poisoned padded value cannot leak into a real group's mean.
+    """
+    batch_size, max_seq_len, hidden_dim = residue_features.shape
+    group_counts = torch.div(seq_lens + group_size - 1, group_size, rounding_mode='floor')
+    max_groups = (max_seq_len + group_size - 1) // group_size
+    if max_groups == 0:
+        return residue_features.new_zeros((batch_size, 0, hidden_dim)), group_counts
+
+    positions = torch.arange(max_seq_len, device=residue_features.device)
+    clean = residue_features.masked_fill(
+        (positions[None, :] >= seq_lens[:, None]).unsqueeze(-1), 0.)
+    padded_length = max_groups * group_size
+    if padded_length > max_seq_len:
+        clean = F.pad(clean, (0, 0, 0, padded_length - max_seq_len))
+    accumulation_dtype = (torch.float32 if clean.dtype in (torch.float16, torch.bfloat16)
+                          else clean.dtype)
+    sums = clean.reshape(batch_size, max_groups, group_size, hidden_dim).sum(
+        dim=2, dtype=accumulation_dtype)
+    starts = torch.arange(max_groups, device=residue_features.device) * group_size
+    valid_counts = (seq_lens[:, None] - starts[None, :]).clamp(min=0, max=group_size)
+    means = sums / valid_counts.clamp_min(1).unsqueeze(-1)
+    return means.to(dtype=residue_features.dtype), group_counts
+
+
+class NodeEncoder(nn.Module):
+    """节点编码器：将氨基酸残基编码为特征向量"""
+    
+    def __init__(self, config):
+        super(NodeEncoder, self).__init__()
+        
+        # 氨基酸字母表
+        self.alphabet = config.alphabet
+        self.vocab_size = len(self.alphabet) + 1  # +1 for padding
+        self.pad_char = config.pad_char
+        self.char_to_idx = {char: idx + 1 for idx, char in enumerate(self.alphabet)}
+        self.char_to_idx[self.pad_char] = 0
+        
+        # 基础特征维度
+        self.aa_embedding_dim = config.aa_embedding_dim
+        self.position_embedding_dim = config.position_embedding_dim
+        self.physicochemical_dim = config.physicochemical_dim
+        self.use_position_embedding = getattr(config, 'use_position_embedding', True)
+        from .position_encoding import validate_position_mode
+        self.position_embedding_mode = validate_position_mode(
+            getattr(config, 'position_embedding_mode', 'input_concat'))
+        self.use_physicochemical_features = getattr(config, 'use_physicochemical_features', True)
+        self.use_state_features = getattr(config, 'use_state_features', True)
+        self.use_env_features = getattr(config, 'use_env_features', True)
+        # Feature-group progressive addition 的 per-feature mask。
+        # state 顺序固定 [charge, pep_mass, intensity]，env 顺序固定 [nce, scan_num]。
+        # mask 与 use_state_features/use_env_features 是两套独立机制：
+        #   - use_*_features：整组开关（NodeEncoder.forward 里走 new_zeros 全清零路径）
+        #   - state/env_feature_mask：子组级开关（在 _encode_state/_encode_environmental 归一化后按位置乘）
+        # 当 use_*_features=False 时整组路径已被 new_zeros 覆盖，mask 不再生效（符合预期）。
+        state_mask = getattr(config, 'state_feature_mask', [True, True, True])
+        env_mask = getattr(config, 'env_feature_mask', [True, True])
+        # 长度对齐 num_state_features / num_env_features，缺失按 True 补齐（保保守：默认全开）。
+        state_mask = list(state_mask) + [True] * (config.num_state_features - len(state_mask))
+        env_mask = list(env_mask) + [True] * (config.num_env_features - len(env_mask))
+        self.register_buffer(
+            'state_feature_mask',
+            torch.tensor(state_mask[:config.num_state_features], dtype=torch.float32),
+            persistent=False,
+        )
+        self.register_buffer(
+            'env_feature_mask',
+            torch.tensor(env_mask[:config.num_env_features], dtype=torch.float32),
+            persistent=False,
+        )
+
+        # 嵌入层
+        self.aa_embedding = nn.Embedding(
+            self.vocab_size, 
+            self.aa_embedding_dim,
+            padding_idx=0
+        )
+        
+        # 位置编码
+        self.position_embedding = nn.Embedding(
+            config.max_seq_len,
+            self.position_embedding_dim
+        )
+        
+        # 物理化学性质编码
+        self.physicochemical_encoder = nn.Linear(
+            config.num_physicochemical_features,
+            self.physicochemical_dim
+        )
+        self.env_feature_name = getattr(config, 'env_feature_name', 'rt')
+        self.env_feature_scale = float(getattr(config, 'env_feature_scale', 0.01))
+        
+        # 状态变量编码
+        self.state_encoder = nn.Sequential(
+            nn.Linear(config.num_state_features, 64),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(64, 32)
+        )
+
+        # 环境变量编码
+        self.env_encoder = nn.Sequential(
+            nn.Linear(config.num_env_features, 64),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(64, 32)
+        )
+        
+        # 输出维度
+        self.output_dim = (
+            self.aa_embedding_dim + 
+            (self.position_embedding_dim if self.position_embedding_mode == 'input_concat' else 0) +
+            self.physicochemical_dim + 32
+            + 32
+        )
+        
+        # 最终编码层
+        self.node_encoder = nn.Sequential(
+            nn.Linear(self.output_dim, config.hidden_dim),
+            nn.LayerNorm(config.hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(config.dropout)
+        )
+
+        self.register_buffer(
+            'ascii_lookup',
+            self._build_ascii_lookup_table(),
+            persistent=False
+        )
+        self.register_buffer(
+            'physicochemical_lookup',
+            self._build_physicochemical_lookup_table(config.num_physicochemical_features),
+            persistent=False
+        )
+        
+        self._init_weights()
+    
+    def _init_weights(self):
+        """初始化权重"""
+        nn.init.xavier_uniform_(self.aa_embedding.weight)
+        nn.init.xavier_uniform_(self.position_embedding.weight)
+    
+    def forward(self, batch_data: Dict, residue_chemistry: Optional[nn.Module] = None,
+                sequence_adapter: Optional[nn.Module] = None) -> torch.Tensor:
+        """
+        前向传播
+        
+        Args:
+            batch_data: 包含序列和特征的批次数据
+            
+        Returns:
+            torch.Tensor: 节点特征张量 [batch_size, seq_len, hidden_dim]
+        """
+        device = self._get_batch_device(batch_data)
+        # 氨基酸序列编码
+        seq_tokens = self._encode_sequences(batch_data['sequences'], device)
+        aa_features = self.aa_embedding(seq_tokens)
+        
+        # 位置编码
+        positions = torch.arange(
+            seq_tokens.size(1), 
+            device=seq_tokens.device
+        ).unsqueeze(0).expand(seq_tokens.size(0), -1)
+        if self.position_embedding_mode != 'input_concat':
+            pos_features = None  # No positional input reaches the node encoder / GCN.
+        elif self.use_position_embedding:
+            pos_features = self.position_embedding(positions)
+        else:
+            pos_features = aa_features.new_zeros(
+                seq_tokens.size(0),
+                seq_tokens.size(1),
+                self.position_embedding_dim,
+            )
+        
+        # 物理化学性质编码
+        if self.use_physicochemical_features:
+            physico_features = self._encode_physicochemical(seq_tokens)
+            physico_features = self.physicochemical_encoder(physico_features)
+        else:
+            physico_features = aa_features.new_zeros(
+                seq_tokens.size(0),
+                seq_tokens.size(1),
+                self.physicochemical_dim,
+            )
+        
+        # 状态变量与环境变量编码
+        state_features = self._encode_state(batch_data, device)
+        state_features = self.state_encoder(state_features)
+        if not self.use_state_features:
+            state_features = state_features.new_zeros(state_features.shape)
+
+        env_features = self._encode_environmental(batch_data, device)
+        env_features = self.env_encoder(env_features)
+        if not self.use_env_features:
+            env_features = env_features.new_zeros(env_features.shape)
+        
+        # 扩展样本级特征到每个位置
+        state_features = state_features.unsqueeze(1).expand(-1, seq_tokens.size(1), -1)
+        env_features = env_features.unsqueeze(1).expand(-1, seq_tokens.size(1), -1)
+        
+        # 拼接所有特征
+        feature_groups = [aa_features, physico_features, state_features, env_features]
+        if self.position_embedding_mode == 'input_concat':
+            feature_groups.insert(1, pos_features)
+        combined_features = torch.cat(feature_groups, dim=-1)
+        
+        # 最终编码
+        node_features = self.node_encoder(combined_features)
+        if residue_chemistry is not None:
+            node_features = node_features + residue_chemistry(seq_tokens)
+        if sequence_adapter is not None:
+            node_features = node_features + sequence_adapter(
+                aa_features, [len(sequence) for sequence in batch_data['sequences']])
+        
+        return node_features
+    
+    def _encode_sequences(self, sequences: List[str], device: torch.device) -> torch.Tensor:
+        """将氨基酸序列编码为token序列（批量向量化，P0-4 速度优化）。
+
+        原实现逐序列建 torch tensor + pad_sequence（Python 循环 + 多次内核启动），
+        在 batch=1024 时是 forward 的最大热点；改为单次 byte 缓冲 + 单次查表。
+        """
+        n = len(sequences)
+        if n == 0:
+            return torch.empty(0, 0, dtype=torch.long, device=device)
+        max_len = max((len(s) for s in sequences), default=0)
+        if max_len == 0:
+            return torch.empty(n, 0, dtype=torch.long, device=device)
+
+        # 单次构建 [B, max_len] byte 缓冲：padding 位置填 pad_char（查表=0，与
+        # pad_sequence 的 padding_value 一致），避免 \0 被误判为非法字符。
+        # Python 层仅做内存拷贝，无 torch 对象创建。
+        buf = np.full((n, max_len), ord(self.pad_char), dtype=np.uint8)
+        for i, seq in enumerate(sequences):
+            try:
+                b = seq.encode('ascii')
+            except UnicodeEncodeError as exc:
+                raise ValueError(f"Sequence contains non-ASCII amino acid symbols: {seq}") from exc
+            buf[i, :len(b)] = np.frombuffer(b, dtype=np.uint8)
+
+        byte_tensor = torch.as_tensor(buf, device=device, dtype=torch.long)
+        lookup = self.ascii_lookup.to(device=device)
+        encoded = lookup[byte_tensor]
+        invalid_mask = encoded < 0
+        if invalid_mask.any():
+            bad_row, bad_col = [int(x) for x in invalid_mask.nonzero(as_tuple=False)[0]]
+            raise ValueError(f"Unknown amino acid: {sequences[bad_row][bad_col]}")
+        return encoded
+    
+    def _encode_physicochemical(self, seq_tokens: torch.Tensor) -> torch.Tensor:
+        """编码物理化学性质"""
+        return F.embedding(seq_tokens, self.physicochemical_lookup)
+    
+    def _encode_state(self, batch_data: Dict, device: torch.device) -> torch.Tensor:
+        """编码状态变量"""
+        if 'state_vars' in batch_data:
+            state_vars = batch_data['state_vars'].to(device=device, dtype=torch.float32)
+        else:
+            state_vars = torch.stack(
+                [
+                    batch_data['charges'],
+                    batch_data['pep_masses'],
+                    batch_data['intensities'],
+                ],
+                dim=1,
+            ).to(device=device, dtype=torch.float32)
+
+        # 与 edge_attr 使用同尺度归一化，避免 intensity 等大数值在 AMP 下放大为 NaN。
+        charge = state_vars[:, 0] * 0.1
+        pep_mass = state_vars[:, 1] / 2000.0
+        intensity = torch.log1p(torch.clamp_min(state_vars[:, 2], 0.0)) / 20.0
+        normalized = torch.stack([charge, pep_mass, intensity], dim=1)
+        # Feature-group progressive addition：按 state_feature_mask 屏蔽不需要的子组。
+        # 维度 [3] 广播到 [batch,3]，被屏蔽的位置归一化后置 0（等价于该特征不输入模型）。
+        normalized = normalized * self.state_feature_mask.to(normalized.device)
+        return torch.nan_to_num(normalized, nan=0.0, posinf=10.0, neginf=-10.0)
+
+    def _encode_environmental(self, batch_data: Dict, device: torch.device) -> torch.Tensor:
+        """编码环境变量"""
+        if 'env_vars' in batch_data:
+            env_vars = batch_data['env_vars'].to(device=device, dtype=torch.float32)
+        else:
+            secondary_envs = batch_data.get('secondary_envs', batch_data['rts'])
+            env_vars = torch.stack([batch_data['nces'], secondary_envs], dim=1).to(device=device, dtype=torch.float32)
+
+        nce = env_vars[:, 0] * 0.01
+        if self.env_feature_name == 'scan_num':
+            secondary_env = torch.log1p(torch.clamp_min(env_vars[:, 1], 0.0)) / 20.0
+        else:
+            secondary_env = env_vars[:, 1] * self.env_feature_scale
+        normalized = torch.stack([nce, secondary_env], dim=1)
+        # Feature-group progressive addition：按 env_feature_mask 屏蔽不需要的子组。
+        normalized = normalized * self.env_feature_mask.to(normalized.device)
+        return torch.nan_to_num(normalized, nan=0.0, posinf=10.0, neginf=-10.0)
+
+    def _get_batch_device(self, batch_data: Dict) -> torch.device:
+        """从批次数据中推断设备"""
+        for value in batch_data.values():
+            if torch.is_tensor(value):
+                return value.device
+        return self.aa_embedding.weight.device
+
+    def _build_ascii_lookup_table(self) -> torch.Tensor:
+        """构建 ASCII 到词表索引的查找表。"""
+        lookup = torch.full((256,), -1, dtype=torch.long)
+        for char, idx in self.char_to_idx.items():
+            encoded = char.encode('ascii')
+            if len(encoded) != 1:
+                raise ValueError(f"Only single-byte ASCII amino acid symbols are supported: {char}")
+            lookup[encoded[0]] = idx
+        return lookup
+
+    def _build_physicochemical_lookup_table(self, num_features: int) -> torch.Tensor:
+        """构建 token 到物化属性的查找表（逐列 min-max 归一化）。"""
+        props_dict = self._get_aa_properties()
+        table = torch.zeros(self.vocab_size, num_features, dtype=torch.float32)
+        for aa, props in props_dict.items():
+            idx = self.char_to_idx.get(aa)
+            if idx is not None:
+                table[idx] = torch.tensor(props, dtype=torch.float32)
+        aa_indices = [self.char_to_idx[aa] for aa in props_dict if aa in self.char_to_idx]
+        if aa_indices:
+            aa_data = table[aa_indices]
+            col_min = aa_data.min(dim=0).values
+            col_max = aa_data.max(dim=0).values
+            col_range = col_max - col_min
+            col_range[col_range == 0] = 1.0
+            table[aa_indices] = (aa_data - col_min) / col_range
+        return table
+    
+    def _get_aa_properties(self) -> Dict[str, List[float]]:
+        """获取氨基酸物理化学性质 [疏水性(KD), 电荷(pH7), 极性, 分子量]
+
+        B/O/X/Z 为特殊 D-氨基酸（论文确认：B=D-Dap, O=D-Orn,
+        X=3-(3-Pyridyl)-D-Ala, Z=D-Cha），标准 KD 表不含这些非标准残基，
+        取相似标准残基锚点估算（见 P0-1 说明）；分子量取 PBCLA 表确定值。
+        """
+        return {
+            'A': [1.8, 0.0, 0.0, 89.1],  # 疏水性, 电荷, 极性, 分子量
+            'C': [2.5, 0.0, 0.0, 121.2],
+            'D': [-3.5, -1.0, 1.0, 133.1],
+            'E': [-3.5, -1.0, 1.0, 147.1],
+            'F': [2.8, 0.0, 0.0, 165.2],
+            'G': [-0.4, 0.0, 0.0, 75.1],
+            'H': [-3.2, 0.1, 1.0, 155.2],
+            'I': [4.5, 0.0, 0.0, 131.2],
+            'K': [-3.9, 1.0, 1.0, 146.2],
+            'L': [3.8, 0.0, 0.0, 131.2],
+            'M': [1.9, 0.0, 0.0, 149.2],
+            'N': [-3.5, 0.0, 1.0, 132.1],
+            'P': [-1.6, 0.0, 0.0, 115.1],
+            'Q': [-3.5, 0.0, 1.0, 146.1],
+            'R': [-4.5, 1.0, 1.0, 174.2],
+            'S': [-0.8, 0.0, 1.0, 105.1],
+            'T': [-0.7, 0.0, 1.0, 119.1],
+            'V': [4.2, 0.0, 0.0, 117.1],
+            'W': [-0.9, 0.0, 0.0, 204.2],
+            'Y': [-1.3, 0.0, 1.0, 181.2],
+            # P0-1：特殊残基（论文确认身份）。KD 锚点：B/O 参考 Lys/Arg（亲水），
+            # X 参考 Phe（吡啶环芳香，因 N 降低疏水），Z 参考 Ile（环己基更强疏水）。
+            # 分子量取 PBCLA/utils.py 确定值：B=86.04801, O=114.07931, X=148.06366, Z=153.11536。
+            # 电荷(pH7)：B/O 侧链氨基质子化 +1；X 吡啶 pKa≈5.2 不质子化；Z 无电荷。
+            # 极性：B/O 强极性；X 吡啶氮中等极性；Z 非极性。
+            'B': [-4.0, 1.0, 1.0, 86.04801],   # D-Dap（双氨基，比 Lys 更亲水）
+            'O': [-3.9, 1.0, 1.0, 114.07931],  # D-Orn（侧链氨基，近似 Lys）
+            'X': [1.0, 0.0, 0.5, 148.06366],   # 3-(3-Pyridyl)-D-Ala（吡啶环芳香/弱极性）
+            'Z': [4.8, 0.0, 0.0, 153.11536],   # D-Cha（环己基强疏水）
+        }
+
+
+class EdgeEncoder(nn.Module):
+    """边编码器：编码图中边的特征"""
+    
+    def __init__(self, config):
+        super(EdgeEncoder, self).__init__()
+        
+        self.edge_types = config.edge_types
+        self.edge_embedding_dim = config.edge_embedding_dim
+        self.distance_embedding_dim = config.distance_embedding_dim
+        self.use_edge_type_embedding = getattr(config, 'use_edge_type_embedding', True)
+        self.use_distance_embedding = getattr(config, 'use_distance_embedding', True)
+        self.use_raw_edge_attr = getattr(config, 'use_raw_edge_attr', True)
+        
+        # 边类型嵌入
+        self.edge_type_embedding = nn.Embedding(
+            len(self.edge_types),
+            self.edge_embedding_dim
+        )
+        
+        # 距离嵌入
+        self.distance_embedding = nn.Embedding(
+            config.max_distance + 1,
+            self.distance_embedding_dim
+        )
+        
+        # 输出维度
+        self.output_dim = self.edge_embedding_dim + self.distance_embedding_dim
+        
+        # 最终编码层
+        self.edge_encoder = nn.Sequential(
+            nn.Linear(self.output_dim, config.hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(config.dropout)
+        )
+
+        # 物理环境等原始边特征编码（延迟推断输入维度）
+        self.edge_attr_encoder = nn.Linear(8, config.hidden_dim)
+        self.edge_attr_norm = nn.LayerNorm(config.hidden_dim)
+        self.edge_attr_fuse = nn.Sequential(
+            nn.Linear(config.hidden_dim * 2, config.hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(config.dropout)
+        )
+    
+    def forward(self, edge_indices: torch.Tensor, 
+                edge_types: torch.Tensor,
+                distances: torch.Tensor,
+                edge_attr: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        前向传播
+        
+        Args:
+            edge_indices: 边索引 [2, num_edges]
+            edge_types: 边类型 [num_edges]
+            distances: 距离信息 [num_edges]
+            edge_attr: 原始边特征 [num_edges, edge_attr_dim] (可选)
+            
+        Returns:
+            torch.Tensor: 边特征 [num_edges, hidden_dim]
+        """
+        type_features = self.edge_type_embedding(edge_types)
+        if not self.use_edge_type_embedding:
+            type_features = type_features.new_zeros(type_features.shape)
+        distance_features = self.distance_embedding(distances)
+        if not self.use_distance_embedding:
+            distance_features = distance_features.new_zeros(distance_features.shape)
+        
+        combined_features = torch.cat([type_features, distance_features], dim=-1)
+        edge_features = self.edge_encoder(combined_features)
+
+        if self.use_raw_edge_attr and edge_attr is not None:
+            attr_features = self.edge_attr_encoder(edge_attr.to(dtype=edge_features.dtype))
+            attr_features = self.edge_attr_norm(attr_features)
+            edge_features = self.edge_attr_fuse(torch.cat([edge_features, attr_features], dim=-1))
+        
+        return edge_features
+
+
+class GraphTransformer(nn.Module):
+    """主要的图神经网络模型"""
+    
+    def __init__(self, config):
+        super(GraphTransformer, self).__init__()
+        
+        self.config = config
+        self.hidden_dim = config.hidden_dim
+        from .attention_v2 import validate_attention_type
+        self.gat_attention_type = validate_attention_type(getattr(config, 'gat_attention_type', 'gat'))
+        self.use_state_features = getattr(config, 'use_state_features', True)
+        self.use_env_features = getattr(config, 'use_env_features', True)
+        self.bond_use_edge_repr = getattr(config, 'bond_use_edge_repr', True)
+        self.bond_use_diff_feature = getattr(config, 'bond_use_diff_feature', True)
+        self.bond_use_product_feature = getattr(config, 'bond_use_product_feature', True)
+        from .bond_cross_attention import validate_bond_head_type
+        self.bond_head_type = validate_bond_head_type(getattr(config, 'bond_head_type', 'concat_mlp'))
+        
+        # 编码器
+        self.node_encoder = NodeEncoder(config)
+        self.position_embedding_mode = self.node_encoder.position_embedding_mode
+        if self.position_embedding_mode == 'pre_attention_add':
+            if not self.node_encoder.use_position_embedding or config.num_gat_layers < 1:
+                raise ValueError('pre_attention_add requires position embeddings and at least one GAT layer')
+        self.edge_encoder = EdgeEncoder(config)
+
+        self.use_global_node = getattr(config, 'use_global_node', False)
+        from .utils import validate_virtual_node_mode, validate_virtual_group_size
+        self.virtual_node_mode = validate_virtual_node_mode(
+            getattr(config, 'virtual_node_mode', 'single'))
+        self.virtual_group_size = validate_virtual_group_size(
+            getattr(config, 'virtual_group_size', 5))
+        if self.virtual_node_mode != 'single' and not self.use_global_node:
+            raise ValueError('Multiple virtual nodes require use_global_node=True')
+        self.use_theory_features = getattr(config, 'use_theory_features', False)
+        from .theory_fusion import validate_theory_fusion_stage, theory_fusion_mode_code
+        self.theory_fusion_stage = validate_theory_fusion_stage(
+            getattr(config, 'theory_fusion_stage', 'late'))
+        if self.theory_fusion_stage != 'late' and not self.use_theory_features:
+            raise ValueError('Early theory fusion requires use_theory_features=True')
+        theory_mode_code = theory_fusion_mode_code(self.theory_fusion_stage)
+        if theory_mode_code is not None:
+            # Shapes alone cannot distinguish these routes at inference time.
+            # Buffers add no learned parameters and consume no random numbers.
+            self.register_buffer('theory_fusion_mode_code', torch.tensor(theory_mode_code, dtype=torch.int64))
+        if self.use_theory_features:
+            from data.theory_features import BOND_THEORY_DIM
+            # 序列衍生理论键离子特征（prefix/suffix mass、b/y 理论 m/z、相对位置、
+            # 两侧残基质量、H2O/NH3-loss 标记、Pro 上下文），投影到 hidden_dim 后
+            # 默认在预测头与 bond 表示拼接；早期融合复用同一投影。
+            self.bond_theory_proj = nn.Linear(BOND_THEORY_DIM, config.hidden_dim)
+        if self.use_global_node:
+            state_out_dim = self.node_encoder.state_encoder[-1].out_features
+            env_out_dim = self.node_encoder.env_encoder[-1].out_features
+            self.global_node_embedding = nn.Parameter(torch.zeros(1, config.hidden_dim))
+            self.global_node_proj = nn.Sequential(
+                nn.Linear(state_out_dim + env_out_dim, config.hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(config.dropout)
+            )
+
+        # FiLM 条件调制：[charge, nce] -> (γ, β) ∈ R^{2H}，对打包后节点特征做
+        # h=(1+γ)h+β。注意：下方末层零初始化会被后续 _init_weights 的
+        # Xavier 初始化覆盖；此处保留历史训练行为，避免混入架构实验变量。
+        # charge/nce 均在 pre_synthesis 允许特征集内，无 observed-feature 泄漏。
+        self.use_condition_film = getattr(config, 'use_condition_film', False)
+        if self.use_condition_film:
+            film_hidden = 64
+            self.film_mlp = nn.Sequential(
+                nn.Linear(2, film_hidden),
+                nn.ReLU(),
+                nn.Linear(film_hidden, 2 * self.hidden_dim),
+            )
+            nn.init.zeros_(self.film_mlp[-1].weight)
+            nn.init.zeros_(self.film_mlp[-1].bias)
+        
+        # 图卷积层
+        self.gcn_layers = nn.ModuleList([
+            ResidualGCNLayer(config) for _ in range(config.num_gcn_layers)
+        ])
+        
+        # 图注意力层
+        attention_layer = GraphAttentionLayer
+        if self.gat_attention_type == 'gatv2':
+            from .attention_v2 import GraphAttentionV2Layer
+            attention_layer = GraphAttentionV2Layer
+            self.register_buffer('gat_attention_mode_code', torch.tensor(1, dtype=torch.int64))
+        self.gat_layers = nn.ModuleList([
+            attention_layer(config) for _ in range(config.num_gat_layers)
+        ])
+
+        # 辅助头（deep supervision / 肽级）：仅训练前向计算并暂存于 last_aux_outputs，
+        # 由 Trainer 取走加辅助损失；eval/inference 路径完全不经过这些分支。
+        self.use_deep_supervision = getattr(config, 'use_deep_supervision', False)
+        self.deep_supervision_layers = list(getattr(config, 'deep_supervision_layers', [1, 3]))
+        self.use_peptide_aux_head = getattr(config, 'use_peptide_aux_head', False)
+        self.last_aux_outputs = None
+        self.aux_layer_set = set(self.deep_supervision_layers) if self.use_deep_supervision else set()
+        if self.use_deep_supervision:
+            invalid = sorted(i for i in self.aux_layer_set if not 0 <= i < config.num_gat_layers)
+            if invalid:
+                raise ValueError(
+                    f"deep_supervision_layers {invalid} 超出 GAT 层索引范围 [0, {config.num_gat_layers})"
+                )
+            # 轻量辅助头：[h_src, h_dst, e_ij] -> 半宽隐层 -> 1 logit（不带 theory/diff/product，保持轻量）
+            self.aux_bond_heads = nn.ModuleDict({
+                str(i): nn.Sequential(
+                    nn.Linear(self.hidden_dim * 3, self.hidden_dim // 2),
+                    nn.ReLU(),
+                    nn.Dropout(config.dropout),
+                    nn.Linear(self.hidden_dim // 2, 1),
+                )
+                for i in sorted(self.aux_layer_set)
+            })
+        if self.use_peptide_aux_head:
+            if not self.use_global_node:
+                raise ValueError("use_peptide_aux_head 依赖 use_global_node=True（肽级表示来自 global node）")
+            self.peptide_head = nn.Sequential(
+                nn.Linear(self.hidden_dim, self.hidden_dim // 2),
+                nn.ReLU(),
+                nn.Dropout(config.dropout),
+                nn.Linear(self.hidden_dim // 2, 1),
+            )
+
+        bond_feature_dim = self.hidden_dim * 2
+        if self.bond_use_edge_repr:
+            bond_feature_dim += self.hidden_dim
+        if self.bond_use_diff_feature:
+            bond_feature_dim += self.hidden_dim
+        if self.bond_use_product_feature:
+            bond_feature_dim += self.hidden_dim
+        if self.use_theory_features:
+            bond_feature_dim += self.hidden_dim  # bond_theory_proj 输出拼接一路
+        
+        # 键级别断裂预测头（相邻残基对）
+        self.bond_head = nn.Sequential(
+            nn.Linear(bond_feature_dim, self.hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(config.dropout),
+            nn.Linear(self.hidden_dim, 1)
+        )
+
+        # 注：曾存在未参与前向的 self.layer_norms 字段（仅占用显存、搬移到设备）。
+        # 已移除；加载含该字段的旧 checkpoint 时 CheckpointManager 使用 strict=False 并告警。
+
+        self.enable_timing = False
+        self.last_forward_timing = {}
+
+        self._init_weights()
+
+        # Construct optional residual branches AFTER legacy initialization. This
+        # preserves shared parameter initialization for paired runs at one seed,
+        # and avoids overwriting their zero-initialized last layers.
+        self.use_residue_chemistry = getattr(config, 'use_residue_chemistry', False)
+        self.use_fragment_readout = getattr(config, 'use_fragment_readout', False)
+        # Separate RNG contexts also preserve each branch's initial weights
+        # when both flags are enabled for a later combination experiment.
+        if self.use_residue_chemistry:
+            with torch.random.fork_rng(devices=[]):
+                from .residue_chemistry import ResidueChemistryEncoder
+                self.residue_chemistry = ResidueChemistryEncoder(
+                    self.node_encoder.char_to_idx, self.node_encoder.vocab_size,
+                    self.hidden_dim, getattr(config, 'residue_chemistry_dim', 32))
+        if self.use_fragment_readout:
+            with torch.random.fork_rng(devices=[]):
+                from .fragment_readout import DualFragmentReadout
+                self.fragment_readout = DualFragmentReadout(
+                    self.hidden_dim, getattr(config, 'fragment_readout_dim', 64), config.max_seq_len)
+        self.sequence_adapter_type = getattr(config, 'sequence_adapter_type', 'none')
+        if self.sequence_adapter_type not in ('none', 'multiscale', 'bigru'):
+            raise ValueError(f'Unknown sequence_adapter_type: {self.sequence_adapter_type}')
+        if self.sequence_adapter_type != 'none':
+            with torch.random.fork_rng(devices=[]):
+                from .sequence_adapter import SequenceAdapter
+                self.sequence_adapter = SequenceAdapter(
+                    config.aa_embedding_dim, self.hidden_dim, self.sequence_adapter_type,
+                    getattr(config, 'sequence_adapter_dim', 96),
+                    getattr(config, 'sequence_conv_kernels', [3, 5, 7]))
+        self.bond_condition_mode = getattr(config, 'bond_condition_mode', 'none')
+        if self.bond_condition_mode not in ('none', 'concat', 'gated'):
+            raise ValueError(f'Unknown bond_condition_mode: {self.bond_condition_mode}')
+        if self.bond_condition_mode != 'none':
+            with torch.random.fork_rng(devices=[]):
+                from .condition_readout import BondConditionReadout
+                self.bond_condition_readout = BondConditionReadout(
+                    self.hidden_dim, self.bond_condition_mode,
+                    getattr(config, 'bond_condition_dim', 32),
+                    use_charge=self.use_state_features and bool(self.node_encoder.state_feature_mask[0]),
+                    use_nce=self.use_env_features and bool(self.node_encoder.env_feature_mask[0]))
+
+        self.use_ion12_aux_head = bool(getattr(config, 'use_ion12_aux_head', False))
+        if self.use_ion12_aux_head:
+            # Do not change shared initialization or the subsequent dropout RNG.
+            with torch.random.fork_rng(devices=[]):
+                self.ion12_head = nn.Linear(self.hidden_dim, 12)
+                nn.init.xavier_uniform_(self.ion12_head.weight)
+                nn.init.zeros_(self.ion12_head.bias)
+
+        if self.position_embedding_mode == 'pre_attention_add':
+            # Reuse the learned 32-d absolute positions, projecting to hidden_dim
+            # for addition. No extra norm, dropout or per-layer reinjection.
+            with torch.random.fork_rng(devices=[]):
+                self.pre_attention_position_proj = nn.Linear(
+                    config.position_embedding_dim, self.hidden_dim, bias=False)
+                nn.init.xavier_uniform_(self.pre_attention_position_proj.weight)
+            self.register_buffer('position_embedding_mode_code', torch.tensor(1, dtype=torch.int64))
+
+        self.last_four_state_logits = None
+        if self.bond_head_type == 'four_state_mlp':
+            if (self.bond_condition_mode != 'none' or self.use_ion12_aux_head
+                    or self.use_fragment_readout or self.use_deep_supervision or self.use_peptide_aux_head):
+                raise ValueError('four_state_mlp requires the original backbone without optional readout/auxiliary heads')
+            from .four_state import replace_binary_output
+            self.bond_head[3] = replace_binary_output(self.bond_head[3])
+            self.register_buffer('four_state_mode_code', torch.tensor(4, dtype=torch.int64))
+
+        self.use_charge_partition_features = getattr(config, 'use_charge_partition_features', False)
+        if not isinstance(self.use_charge_partition_features, bool):
+            raise ValueError('use_charge_partition_features must be boolean')
+        if self.use_charge_partition_features:
+            if self.bond_head_type != 'four_state_mlp':
+                raise ValueError('Charge-partition descriptors require the four-state head')
+            # Construct after legacy initialization and keep its RNG stream.
+            from .charge_partition import ChargePartitionReadout
+            with torch.random.fork_rng(devices=[]):
+                self.charge_partition = ChargePartitionReadout(
+                    self.node_encoder.char_to_idx, self.node_encoder.aa_embedding.num_embeddings)
+
+        if self.bond_head_type == 'cross_attention_mlp':
+            if self.bond_condition_mode != 'none' or self.use_ion12_aux_head:
+                raise ValueError('cross_attention_mlp does not support condition readout or ion12 auxiliary head')
+            roles = [i for i, enabled in enumerate((self.bond_use_edge_repr,
+                self.bond_use_diff_feature, self.bond_use_product_feature, self.use_theory_features)) if enabled]
+            # Replace the temporary legacy head only after legacy initialization.
+            # This preserves all backbone tensors and the subsequent RNG stream;
+            # the discarded concat head is absent from parameters/checkpoints.
+            with torch.random.fork_rng(devices=[]):
+                from .bond_cross_attention import BondCrossAttentionHead
+                self.bond_head = BondCrossAttentionHead(self.hidden_dim,
+                    getattr(config, 'bond_cross_attention_heads', 4), config.dropout, roles)
+            self.register_buffer('bond_head_mode_code', torch.tensor(1, dtype=torch.int64))
+
+        from .dynamic_edges import validate_edge_state_mode, edge_state_mode_code
+        self.edge_state_mode = validate_edge_state_mode(getattr(config, 'edge_state_mode', 'static'))
+        if self.edge_state_mode != 'static':
+            # Preserve legacy initialization AND the following dropout RNG.
+            # Creating after _init_weights retains the updater's zero last layer.
+            with torch.random.fork_rng(devices=[]):
+                from .dynamic_edges import SharedEdgeStateUpdater
+                self.edge_state_updater = SharedEdgeStateUpdater(self.hidden_dim)
+            self.register_buffer('edge_state_mode_code', torch.tensor(
+                edge_state_mode_code(self.edge_state_mode), dtype=torch.int64))
+        # Opt in only for preflight / small internal-validation diagnostic batches.
+        self.enable_edge_state_diagnostics = False
+        self.last_edge_state_diagnostics = []
+
+        from .bond_fusion_heads import validate_bond_fusion_mode, bond_fusion_mode_code
+        self.bond_fusion_mode = validate_bond_fusion_mode(getattr(config, 'bond_fusion_mode', 'concat'))
+        if self.bond_fusion_mode != 'concat':
+            if self.bond_head_type != 'four_state_mlp' or not all((
+                    self.bond_use_edge_repr, self.bond_use_diff_feature,
+                    self.bond_use_product_feature, self.use_theory_features)):
+                raise ValueError('Experimental bond fusion requires a four-state head and all six source slots')
+            with torch.random.fork_rng(devices=[]):
+                if self.bond_fusion_mode == 'cross_attention':
+                    from .bond_fusion_heads import FourStateBondCrossAttentionHead
+                    self.bond_head = FourStateBondCrossAttentionHead(
+                        self.hidden_dim, getattr(config, 'bond_cross_attention_heads', 4), config.dropout)
+                elif self.bond_fusion_mode == 'gated':
+                    self.bond_fusion_gate = nn.Linear(6 * self.hidden_dim, 6)
+                    nn.init.zeros_(self.bond_fusion_gate.weight)
+                    nn.init.zeros_(self.bond_fusion_gate.bias)
+                else:
+                    from .bond_fusion_heads import BondFusionResidual
+                    self.bond_fusion_residual = BondFusionResidual(self.hidden_dim)
+            self.register_buffer('bond_fusion_mode_code', torch.tensor(
+                bond_fusion_mode_code(self.bond_fusion_mode), dtype=torch.int64))
+            self.register_buffer('bond_fusion_schema_code', torch.tensor(1, dtype=torch.int64))
+            self.register_buffer('bond_fusion_source_roles', torch.arange(6, dtype=torch.int64))
+            self.register_buffer('bond_fusion_heads_code', torch.tensor(
+                self.bond_head.cross_attention.num_heads if self.bond_fusion_mode == 'cross_attention' else 0,
+                dtype=torch.int64))
+        self.enable_bond_fusion_diagnostics = False
+        self.last_bond_fusion_diagnostics = {}
+
+        # Full-width residue sequence context is separate from the historical
+        # AA-embedding adapter. Build only after every legacy initialization.
+        from .node_context_conv import validate_node_conv_mode, node_conv_mode_code, node_conv_spec
+        self.node_conv_mode = validate_node_conv_mode(getattr(config, 'node_conv_mode', 'none'))
+        if self.node_conv_mode != 'none':
+            if self.sequence_adapter_type != 'none':
+                raise ValueError('node_conv_mode requires the legacy sequence_adapter_type=none')
+            from .node_context_conv import NodeContextConv
+            with torch.random.fork_rng(devices=[]):
+                self.node_context_conv = NodeContextConv(self.hidden_dim, self.node_conv_mode)
+            kernels, channels = node_conv_spec(self.node_conv_mode)
+            self.register_buffer('node_conv_mode_code', torch.tensor(
+                node_conv_mode_code(self.node_conv_mode), dtype=torch.int64))
+            self.register_buffer('node_conv_schema_code', torch.tensor(1, dtype=torch.int64))
+            self.register_buffer('node_conv_kernel_sizes', torch.tensor(kernels, dtype=torch.int64))
+            self.register_buffer('node_conv_branch_channels', torch.tensor(channels, dtype=torch.int64))
+        self.enable_node_conv_diagnostics = False
+        self.last_node_conv_diagnostics = {}
+
+        # Preserve the historical first global token and give the other three
+        # parallel tokens distinct trainable offsets. Without these offsets,
+        # identical star edges and identical initial states would keep all
+        # four tokens permutation-symmetric throughout message passing.
+        self.parallel_global_mode = self.virtual_node_mode in ('parallel4', 'parallel4_cross')
+        if self.parallel_global_mode:
+            with torch.random.fork_rng(devices=[]):
+                self.parallel_global_offsets = nn.Parameter(
+                    torch.empty(3, self.hidden_dim))
+                nn.init.normal_(self.parallel_global_offsets,
+                                mean=0.0, std=self.hidden_dim ** -0.5)
+        if self.virtual_node_mode == 'parallel4_cross':
+            if self.bond_head_type != 'four_state_mlp' or self.bond_fusion_mode != 'concat':
+                raise ValueError('parallel4_cross requires the original four-state concat MLP')
+            if not all((self.bond_use_edge_repr, self.bond_use_diff_feature,
+                        self.bond_use_product_feature, self.use_theory_features)):
+                raise ValueError('parallel4_cross requires all six original bond feature slots')
+            with torch.random.fork_rng(devices=[]):
+                self.parallel_bond_query_proj = nn.Linear(2 * self.hidden_dim, self.hidden_dim)
+                self.parallel_bond_cross_attention = nn.MultiheadAttention(
+                    self.hidden_dim, num_heads=4, dropout=0.0, batch_first=True)
+                self.parallel_bond_context_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+                nn.init.zeros_(self.parallel_bond_context_proj.weight)
+                nn.init.zeros_(self.parallel_bond_context_proj.bias)
+        self.enable_parallel_global_diagnostics = False
+        self.last_parallel_global_diagnostics = {}
+
+        if self.virtual_node_mode != 'single':
+            # The old single-global route gains no state-dict keys. Grouped
+            # routes have no new learned weights, but require semantic markers
+            # because their topology cannot be inferred from tensor shapes.
+            from .utils import virtual_node_mode_code
+            self.register_buffer('virtual_node_mode_code', torch.tensor(
+                virtual_node_mode_code(self.virtual_node_mode), dtype=torch.int64))
+            self.register_buffer('virtual_node_schema_code', torch.tensor(1, dtype=torch.int64))
+            self.register_buffer('virtual_node_group_size_code', torch.tensor(
+                self.virtual_group_size, dtype=torch.int64))
+    
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        # Validate before PyTorch starts copying any shared tensors. This also
+        # protects direct loads and repeated attempts after a rejected load.
+        from .attention_v2 import validate_attention_checkpoint
+        from .position_encoding import validate_position_checkpoint
+        from .bond_cross_attention import validate_bond_head_checkpoint
+        from .charge_partition import validate_charge_partition_checkpoint
+        from .theory_fusion import validate_theory_fusion_checkpoint
+        from .dynamic_edges import validate_edge_state_checkpoint
+        from .bond_fusion_heads import validate_bond_fusion_checkpoint
+        from .node_context_conv import validate_node_conv_checkpoint
+        from .utils import validate_virtual_node_checkpoint
+        try:
+            validate_attention_checkpoint(self, state_dict)
+            validate_position_checkpoint(self, state_dict)
+            validate_bond_head_checkpoint(self, state_dict)
+            validate_charge_partition_checkpoint(self, state_dict)
+            validate_theory_fusion_checkpoint(self, state_dict)
+            validate_edge_state_checkpoint(self, state_dict)
+            validate_bond_fusion_checkpoint(self, state_dict)
+            validate_node_conv_checkpoint(self, state_dict)
+            validate_virtual_node_checkpoint(self, state_dict)
+        except ValueError as error:
+            raise RuntimeError(str(error)) from error
+        saved_ion = {k for k in state_dict if k.startswith('ion12_head.')}
+        expected_ion = {k for k in self.state_dict() if k.startswith('ion12_head.')}
+        if saved_ion != expected_ion:
+            raise RuntimeError('Checkpoint ion12 auxiliary-head configuration mismatch')
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
+
+    def _init_weights(self):
+        """初始化模型权重"""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                if isinstance(module.weight, UninitializedParameter):
+                    continue
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None and not isinstance(module.bias, UninitializedParameter):
+                    nn.init.constant_(module.bias, 0)
+    
+    def forward(self, batch_data: Dict) -> torch.Tensor:
+        """
+        前向传播
+        
+        Args:
+            batch_data: 包含序列、图结构和特征的批次数据
+            
+        Returns:
+            torch.Tensor: 键级别断裂预测结果 [batch_size, max_bonds]
+        """
+        timing_enabled = bool(getattr(self, 'enable_timing', False))
+        device = self._infer_batch_device(batch_data)
+        if timing_enabled:
+            _maybe_sync(device, True)
+            total_start = time.perf_counter()
+
+        # 节点特征编码
+        node_features = self.node_encoder(
+            batch_data, self.residue_chemistry if self.use_residue_chemistry else None,
+            self.sequence_adapter if self.sequence_adapter_type != 'none' else None)
+        self.last_node_conv_diagnostics = {}
+        if self.node_conv_mode != 'none':
+            self.node_context_conv.enable_node_conv_diagnostics = bool(self.enable_node_conv_diagnostics)
+            node_features = self.node_context_conv(node_features, batch_data['seq_lens'])
+            if self.enable_node_conv_diagnostics:
+                self.last_node_conv_diagnostics = self.node_context_conv.last_node_conv_diagnostics
+        elif self.enable_node_conv_diagnostics:
+            from .node_context_conv import node_conv_diagnostics
+            diagnostic_lengths = batch_data['seq_lens'].to(device=node_features.device, dtype=torch.long)
+            diagnostic_valid = (torch.arange(node_features.size(1), device=node_features.device)[None, :]
+                                < diagnostic_lengths[:, None])
+            self.last_node_conv_diagnostics = node_conv_diagnostics(
+                'none', node_features, node_features, diagnostic_valid)
+        if timing_enabled:
+            _maybe_sync(node_features.device, True)
+            node_encode_end = time.perf_counter()
+        global_nodes = None
+        if self.use_global_node:
+            state_raw = self.node_encoder._encode_state(batch_data, node_features.device)
+            state_embed = self.node_encoder.state_encoder(state_raw)
+            if not self.use_state_features:
+                state_embed = state_embed.new_zeros(state_embed.shape)
+            env_raw = self.node_encoder._encode_environmental(batch_data, node_features.device)
+            env_embed = self.node_encoder.env_encoder(env_raw)
+            if not self.use_env_features:
+                env_embed = env_embed.new_zeros(env_embed.shape)
+            global_context = torch.cat([state_embed, env_embed], dim=-1)
+            global_nodes = self.global_node_embedding + self.global_node_proj(global_context)
+        if timing_enabled:
+            _maybe_sync(node_features.device, True)
+            global_node_end = time.perf_counter()
+        
+        # 边特征编码
+        edge_features = self.edge_encoder(
+            batch_data['edge_index'],
+            batch_data['edge_types'],
+            batch_data['edge_distances'],
+            batch_data.get('edge_attr')
+        )
+        if timing_enabled:
+            _maybe_sync(node_features.device, True)
+            edge_encode_end = time.perf_counter()
+        
+        # 根据真实序列长度裁剪节点特征
+        seq_lens_tensor = batch_data['seq_lens'].to(device=node_features.device, dtype=torch.long)
+        group_counts = None
+        if self.parallel_global_mode:
+            expected_node_lens = seq_lens_tensor + 4
+        elif self.virtual_node_mode != 'single':
+            group_counts = torch.div(
+                seq_lens_tensor + self.virtual_group_size - 1,
+                self.virtual_group_size, rounding_mode='floor')
+            expected_node_lens = seq_lens_tensor + group_counts + 1
+        node_lens_tensor = batch_data.get('node_lens')
+        if node_lens_tensor is not None:
+            node_lens_tensor = node_lens_tensor.to(device=node_features.device, dtype=torch.long)
+            if self.virtual_node_mode != 'single' and not torch.equal(
+                    node_lens_tensor, expected_node_lens):
+                raise ValueError('Virtual-node lengths disagree with graph construction')
+        else:
+            node_lens_tensor = (expected_node_lens if self.virtual_node_mode != 'single'
+                                else seq_lens_tensor + (1 if self.use_global_node else 0))
+        batch_size = int(seq_lens_tensor.numel())
+        hidden_dim = node_features.size(-1)
+        max_seq_len = node_features.size(1)
+        seq_positions = torch.arange(max_seq_len, device=node_features.device)
+        valid_seq_mask = seq_positions.unsqueeze(0) < seq_lens_tensor.unsqueeze(1)
+
+        if self.use_global_node:
+            # 优先用 collate 阶段算好的 Python int，避免在 GPU 张量上 .max().item() 同步；
+            # 兼容旧调用路径（未注入该键时回退到逐次同步计算）。
+            precomputed_max_node_len = batch_data.get('max_node_len')
+            if precomputed_max_node_len is not None:
+                max_node_len = int(precomputed_max_node_len)
+            else:
+                max_node_len = int(node_lens_tensor.max().item()) if batch_size > 0 else 0
+            packed_nodes = node_features.new_zeros((batch_size, max_node_len, hidden_dim))
+            if max_seq_len > 0:
+                packed_nodes[:, :max_seq_len] = node_features[:, :max_seq_len]
+            if self.parallel_global_mode:
+                global_indices = seq_lens_tensor[:, None] + torch.arange(
+                    4, device=node_features.device)[None, :]
+                slot_offsets = torch.cat((self.global_node_embedding.new_zeros((1, hidden_dim)),
+                                          self.parallel_global_offsets), dim=0)
+                global_values = global_nodes[:, None, :] + slot_offsets[None, :, :]
+                global_positions = global_indices.unsqueeze(-1).expand(-1, -1, hidden_dim)
+                packed_nodes.scatter_(1, global_positions,
+                                      global_values.to(packed_nodes.dtype))
+            elif self.virtual_node_mode != 'single':
+                group_nodes, pooled_group_counts = _pool_virtual_groups(
+                    node_features, seq_lens_tensor, self.virtual_group_size)
+                max_groups = group_nodes.size(1)
+                if max_node_len < max_seq_len + max_groups + 1:
+                    raise ValueError('Grouped virtual-node packing exceeds max_node_len')
+                if max_groups:
+                    group_ids = torch.arange(max_groups, device=node_features.device)
+                    valid_groups = group_ids[None, :] < pooled_group_counts[:, None]
+                    group_positions = seq_lens_tensor[:, None] + group_ids[None, :]
+                    batch_indices = torch.arange(batch_size, device=node_features.device)[:, None]
+                    batch_indices = batch_indices.expand(-1, max_groups)
+                    packed_nodes[batch_indices[valid_groups], group_positions[valid_groups]] = (
+                        group_nodes[valid_groups].to(dtype=packed_nodes.dtype))
+                # The top/global node is last in every peptide, keeping the
+                # auxiliary peptide head's node_lens-1 convention intact.
+                global_indices = seq_lens_tensor + pooled_group_counts
+            else:
+                global_indices = seq_lens_tensor
+            if not self.parallel_global_mode:
+                global_positions = global_indices.view(-1, 1, 1).expand(-1, 1, hidden_dim)
+                # Under autocast the residual global embedding can promote the
+                # global node to FP32 while encoded residues stay FP16/BF16.
+                packed_nodes.scatter_(1, global_positions, global_nodes.to(packed_nodes.dtype).unsqueeze(1))
+            node_positions = torch.arange(max_node_len, device=node_features.device)
+            valid_node_mask = node_positions.unsqueeze(0) < node_lens_tensor.unsqueeze(1)
+            node_features = packed_nodes[valid_node_mask]
+        else:
+            node_features = node_features[valid_seq_mask]
+        if timing_enabled:
+            _maybe_sync(node_features.device, True)
+            trim_end = time.perf_counter()
+
+        # 键位簿记提前计算：deep supervision 需要在中间层取 bond 特征，主预测头复用
+        # 同一份（bond_src/bond_dst/valid_bond_mask/e_ij 与后文预测块完全一致）。
+        bond_counts = torch.clamp(seq_lens_tensor - 1, min=0)
+        # 优先用 collate 阶段算好的 Python int，避免在 GPU 张量上 .max().item() 同步；
+        # 兼容旧调用路径（未注入该键时回退到逐次同步计算）。
+        precomputed_max_bonds = batch_data.get('max_bonds')
+        if precomputed_max_bonds is not None:
+            max_bonds = int(precomputed_max_bonds)
+        else:
+            max_bonds = int(bond_counts.max().item()) if batch_size > 0 else 0
+        node_offsets = torch.cumsum(
+            torch.cat([node_lens_tensor.new_zeros(1), node_lens_tensor[:-1]], dim=0),
+            dim=0,
+        )
+        bond_src = bond_dst = valid_bond_mask = e_ij = None
+        if self.use_condition_film:
+            # FiLM 调制放在节点打包后、消息传递前：charge/nce 的乘性交互影响
+            # 全部后续层。输入缩放与 NodeEncoder 同口径（charge×0.1, nce×0.01）。
+            charges = batch_data['charges'].to(device=node_features.device, dtype=torch.float32)
+            nces = batch_data['nces'].to(device=node_features.device, dtype=torch.float32)
+            film_in = torch.stack([charges * 0.1, nces * 0.01], dim=1)
+            film_param = self.film_mlp(film_in)
+            gamma, beta = film_param.chunk(2, dim=-1)
+            sample_idx = torch.repeat_interleave(
+                torch.arange(batch_size, device=node_features.device), node_lens_tensor)
+            node_features = node_features * (1.0 + gamma[sample_idx]) + beta[sample_idx]
+        if max_bonds > 0:
+            bond_positions = torch.arange(max_bonds, device=node_features.device)
+            valid_bond_mask = bond_positions.unsqueeze(0) < bond_counts.unsqueeze(1)
+            bond_src = (node_offsets.unsqueeze(1) + bond_positions.unsqueeze(0))[valid_bond_mask]
+            bond_dst = bond_src + 1
+            if self.bond_use_edge_repr or self.use_deep_supervision:
+                bond_edge_map = batch_data.get('bond_edge_map')
+                if bond_edge_map is not None:
+                    e_ij = edge_features[bond_edge_map.to(device=edge_features.device, dtype=torch.long)]
+                else:
+                    e_ij = self._lookup_edge_features(
+                        batch_data['edge_index'],
+                        edge_features,
+                        bond_src,
+                        bond_dst,
+                        num_nodes=node_features.size(0),
+                    )
+
+        early_theory = None
+        if max_bonds > 0 and self.theory_fusion_stage != 'late':
+            from .theory_fusion import add_packed_bond_theory
+            # The 15 descriptors are still sequence-derived. Only their entry
+            # point changes: AFTER the unchanged FiLM and BEFORE the first GCN.
+            # Project valid bonds once, then reuse the same tensor at readout.
+            theory_flat = batch_data['bond_theory'][valid_bond_mask]
+            early_theory = self.bond_theory_proj(theory_flat.to(node_features.dtype))
+            node_features = add_packed_bond_theory(node_features, early_theory, bond_src, bond_dst)
+
+        # Keep e0 in the readout cached above. Only message propagation receives
+        # recurrent edge states; connectivity, edge order and bond maps stay put.
+        initial_edge_features = edge_features
+        fixed_edge_context = node_features if self.edge_state_mode == 'fixed_context' else None
+        update_edge_states = self.edge_state_mode != 'static'
+        edge_diagnostics = bool(self.enable_edge_state_diagnostics)
+        self.last_edge_state_diagnostics = []
+        if update_edge_states:
+            edge_src, edge_dst = batch_data['edge_index']
+
+        # 辅助头仅在训练前向激活；eval 路径零开销、last_aux_outputs 保持 None
+        aux_active = (self.use_deep_supervision or self.use_peptide_aux_head) and self.training
+        aux_bond_logits = {}
+        self.last_aux_outputs = None
+
+        # 图卷积层
+        gcn_timings = {}
+        for i, gcn_layer in enumerate(self.gcn_layers):
+            layer_start = time.perf_counter() if timing_enabled else None
+            previous_edge_features = edge_features if edge_diagnostics else None
+            if update_edge_states:
+                context = fixed_edge_context if fixed_edge_context is not None else node_features
+                edge_features = self.edge_state_updater(
+                    edge_features, context[edge_src], context[edge_dst])
+            if edge_diagnostics:
+                from .dynamic_edges import edge_state_diagnostic
+                self.last_edge_state_diagnostics.append(edge_state_diagnostic(
+                    'gcn', i, initial_edge_features, previous_edge_features, edge_features, gcn_layer))
+            node_features = gcn_layer(node_features, batch_data['edge_index'], edge_features)
+            if timing_enabled:
+                _maybe_sync(node_features.device, True)
+                gcn_timings[f'gcn_layer_{i}'] = time.perf_counter() - layer_start
+        if timing_enabled:
+            gcn_end = time.perf_counter()
+
+        if self.position_embedding_mode == 'pre_attention_add':
+            from .position_encoding import add_packed_residue_positions
+            positions = self.node_encoder.position_embedding(seq_positions)
+            positions = self.pre_attention_position_proj(positions)
+            node_features = add_packed_residue_positions(
+                node_features, positions, seq_lens_tensor, node_lens_tensor)
+        
+        # 图注意力层
+        gat_timings = {}
+        for i, gat_layer in enumerate(self.gat_layers):
+            if hasattr(gat_layer, 'enable_timing'):
+                gat_layer.enable_timing = timing_enabled
+            layer_start = time.perf_counter() if timing_enabled else None
+            previous_edge_features = edge_features if edge_diagnostics else None
+            if update_edge_states:
+                context = fixed_edge_context if fixed_edge_context is not None else node_features
+                edge_features = self.edge_state_updater(
+                    edge_features, context[edge_src], context[edge_dst])
+            if edge_diagnostics:
+                from .dynamic_edges import edge_state_diagnostic
+                self.last_edge_state_diagnostics.append(edge_state_diagnostic(
+                    'gat', i, initial_edge_features, previous_edge_features, edge_features, gat_layer))
+            node_features = gat_layer(
+                node_features,
+                batch_data['edge_index'],
+                edge_features,
+            )
+            if aux_active and i in self.aux_layer_set and bond_src is not None and bond_src.numel() > 0:
+                # deep supervision：该中间层的 bond 特征过轻量辅助头；[N_valid, 1] 的
+                # 行主序展开与 label_mask 展开后的 targets 逐行对齐（两 mask 语义一致）
+                aux_bond_logits[str(i)] = self.aux_bond_heads[str(i)](
+                    torch.cat([node_features[bond_src], node_features[bond_dst], e_ij], dim=-1)
+                )
+            if timing_enabled:
+                _maybe_sync(node_features.device, True)
+                gat_timings[f'gat_layer_{i}_total'] = time.perf_counter() - layer_start
+                layer_timing = getattr(gat_layer, 'last_forward_timing', {})
+                for key, value in layer_timing.items():
+                    if key in {'num_nodes', 'num_edges'}:
+                        continue
+                    gat_timings[f'gat_layer_{i}_{key}'] = float(value)
+        if timing_enabled:
+            gat_end = time.perf_counter()
+
+        # Read the four independently updated global tokens from the actual
+        # packed GNN output. Their order is fixed by GraphBuilder: L..L+3.
+        parallel_global_tokens = None
+        self.last_parallel_global_diagnostics = {}
+        if self.parallel_global_mode:
+            slot_positions = (node_offsets[:, None] + seq_lens_tensor[:, None]
+                              + torch.arange(4, device=node_features.device)[None, :])
+            parallel_global_tokens = node_features[slot_positions]
+            if self.enable_parallel_global_diagnostics:
+                slot_norms = (torch.linalg.vector_norm(
+                    parallel_global_tokens.detach().float(), dim=-1).mean(dim=0).tolist()
+                    if batch_size else [0.0] * 4)
+                if batch_size:
+                    normalized_slots = F.normalize(parallel_global_tokens.detach().float(), dim=-1)
+                    slot_cosines = normalized_slots @ normalized_slots.transpose(1, 2)
+                    pair_i, pair_j = torch.triu_indices(4, 4, offset=1, device=node_features.device)
+                    off_diagonal = slot_cosines[:, pair_i, pair_j]
+                    slot_pair_cosine_mean = float(off_diagonal.mean().item())
+                else:
+                    slot_pair_cosine_mean = 0.0
+                self.last_parallel_global_diagnostics = {
+                    'mode': self.virtual_node_mode,
+                    'num_valid_bonds': 0,
+                    'slot_l2_mean': slot_norms,
+                    'slot_pair_cosine_mean': slot_pair_cosine_mean,
+                }
+
+        # 肽级辅助头：global node 是每个样本 packed 序列的最后一个有效节点，
+        # 经全部消息传递层后其表示聚合了整肽信息，回归该肽可观测断裂比例
+        peptide_logits = None
+        if aux_active and self.use_peptide_aux_head and batch_size > 0:
+            global_indices = node_offsets + node_lens_tensor - 1
+            peptide_logits = self.peptide_head(node_features[global_indices]).squeeze(-1)
+        if aux_active:
+            aux_out = {}
+            if aux_bond_logits:
+                aux_out['bond_logits'] = aux_bond_logits
+            if peptide_logits is not None:
+                aux_out['peptide_logits'] = peptide_logits
+            self.last_aux_outputs = aux_out
+
+        # 构建相邻键的特征并预测断裂（簿记已在层前计算，直接复用）
+        # predictions 容器固定 float32；AMP 下 bond_logits 在赋值处用 .to() 对齐。
+        predictions = torch.zeros(batch_size, max_bonds, device=node_features.device)
+        self.last_four_state_logits = None
+        fusion_diagnostics = bool(self.enable_bond_fusion_diagnostics)
+        self.last_bond_fusion_diagnostics = {}
+        if fusion_diagnostics:
+            from .bond_fusion_heads import BOND_FUSION_SOURCES
+            diagnostic_sources = list(BOND_FUSION_SOURCES[:2]) + [name for name, enabled in zip(
+                BOND_FUSION_SOURCES[2:], (self.bond_use_edge_repr, self.bond_use_diff_feature,
+                                          self.bond_use_product_feature, self.use_theory_features)) if enabled]
+            self.last_bond_fusion_diagnostics = {
+                'mode': self.bond_fusion_mode, 'num_valid_bonds': 0,
+                'sources': diagnostic_sources, 'source_l2_mean': [0.] * len(diagnostic_sources)}
+
+        if max_bonds > 0:
+            h_src = node_features[bond_src]
+            h_dst = node_features[bond_dst]
+            bond_feature_parts = [h_src, h_dst]
+            if self.bond_use_edge_repr:
+                bond_feature_parts.append(e_ij)
+            if self.bond_use_diff_feature:
+                bond_feature_parts.append(h_src - h_dst)
+            if self.bond_use_product_feature:
+                bond_feature_parts.append(h_src * h_dst)
+            if self.use_theory_features:
+                if self.theory_fusion_stage == 'late':
+                    # Keep the original operation order and RNG for the legacy
+                    # route; all 3 GCN and 2 GAT layers finish before this input.
+                    theory_flat = batch_data['bond_theory'][valid_bond_mask]
+                    bond_feature_parts.append(self.bond_theory_proj(theory_flat.to(h_src.dtype)))
+                elif self.theory_fusion_stage == 'early_only':
+                    # Retain the exact 6D head width and learned parameter count.
+                    # Theory reaches the prediction solely through graph nodes.
+                    bond_feature_parts.append(torch.zeros_like(h_src))
+                else:
+                    bond_feature_parts.append(early_theory.to(h_src.dtype))
+            bond_features = (bond_feature_parts if (self.bond_head_type == 'cross_attention_mlp'
+                                                   or self.bond_fusion_mode == 'cross_attention')
+                             else torch.cat(bond_feature_parts, dim=-1))
+            if fusion_diagnostics:
+                from .bond_fusion_heads import source_norm_diagnostics
+                self.last_bond_fusion_diagnostics.update(
+                    num_valid_bonds=int(h_src.size(0)), source_l2_mean=source_norm_diagnostics(bond_feature_parts))
+            ion12_active = self.use_ion12_aux_head and self.training
+            if self.bond_head_type == 'four_state_mlp':
+                from .four_state import union_logit
+                if self.virtual_node_mode == 'parallel4_cross':
+                    # Every valid bond reads the four post-GNN global slots
+                    # using its two endpoint representations as the query.
+                    bond_sample_indices = torch.arange(
+                        batch_size, device=node_features.device)[:, None].expand_as(
+                            valid_bond_mask)[valid_bond_mask]
+                    global_keys_values = parallel_global_tokens[bond_sample_indices]
+                    query = self.parallel_bond_query_proj(
+                        torch.cat((h_src, h_dst), dim=-1)).unsqueeze(1)
+                    global_keys_values = global_keys_values.to(dtype=query.dtype)
+                    need_attention = bool(self.enable_parallel_global_diagnostics)
+                    context, attention = self.parallel_bond_cross_attention(
+                        query, global_keys_values, global_keys_values,
+                        need_weights=need_attention, average_attn_weights=False)
+                    context_residual = self.parallel_bond_context_proj(context.squeeze(1))
+                    hidden = self.bond_head[1](self.bond_head[0](bond_features))
+                    state_logits = self.bond_head[3](
+                        self.bond_head[2](hidden + context_residual)).float()
+                    if need_attention:
+                        detached_attention = attention.detach().float().squeeze(2)
+                        self.last_parallel_global_diagnostics.update({
+                            'num_valid_bonds': int(h_src.size(0)),
+                            'attention_mean_per_head_slot': detached_attention.mean(dim=0).tolist(),
+                            'attention_entropy_mean': float((
+                                -detached_attention * detached_attention.clamp_min(1e-12).log()
+                            ).sum(dim=-1).mean().item()),
+                            'context_residual_l2_mean': float(torch.linalg.vector_norm(
+                                context_residual.detach().float(), dim=-1).mean().item()),
+                        })
+                elif self.bond_fusion_mode == 'cross_attention':
+                    self.bond_head.enable_diagnostics = fusion_diagnostics
+                    state_logits = self.bond_head(bond_feature_parts).float()
+                    if fusion_diagnostics:
+                        self.last_bond_fusion_diagnostics.update(self.bond_head.last_diagnostics)
+                elif self.bond_fusion_mode == 'gated':
+                    source_weights = torch.softmax(self.bond_fusion_gate(bond_features), dim=-1)
+                    # Six normalized source weights give unit gates initially;
+                    # each ordered 256-d slot is retained rather than summed.
+                    gated_features = (bond_features.reshape(-1, 6, self.hidden_dim)
+                        * (6 * source_weights).unsqueeze(-1)).reshape(-1, 6 * self.hidden_dim)
+                    state_logits = self.bond_head(gated_features).float()
+                    if fusion_diagnostics:
+                        from .bond_fusion_heads import gate_diagnostics
+                        self.last_bond_fusion_diagnostics.update(gate_diagnostics(source_weights))
+                elif self.bond_fusion_mode == 'residual_mlp':
+                    hidden = self.bond_head[1](self.bond_head[0](bond_features))
+                    corrected = self.bond_fusion_residual(hidden)
+                    state_logits = self.bond_head[3](self.bond_head[2](corrected)).float()
+                    if fusion_diagnostics:
+                        from .bond_fusion_heads import residual_diagnostics
+                        self.last_bond_fusion_diagnostics.update(residual_diagnostics(hidden, corrected))
+                else:
+                    state_logits = self.bond_head(bond_features).float()
+                if self.virtual_node_mode == 'parallel4' and self.enable_parallel_global_diagnostics:
+                    self.last_parallel_global_diagnostics['num_valid_bonds'] = int(h_src.size(0))
+                if self.use_charge_partition_features:
+                    tokens = self.node_encoder._encode_sequences(batch_data['sequences'], node_features.device)
+                    state_logits = state_logits + self.charge_partition(tokens, batch_data['charges'], valid_bond_mask)
+                bond_logits_flat = union_logit(state_logits)
+                if self.training:
+                    self.last_four_state_logits = state_logits
+            elif self.bond_condition_mode == 'none' and not ion12_active:
+                bond_logits_flat = self.bond_head(bond_features).squeeze(-1)
+            else:
+                # Reuse the original Linear/ReLU activation before its dropout.
+                # Keep parameter names and the old dropout call/RNG unchanged.
+                bond_hidden = self.bond_head[1](self.bond_head[0](bond_features))
+                bond_logits_flat = self.bond_head[3](self.bond_head[2](bond_hidden)).squeeze(-1)
+                if self.bond_condition_mode != 'none':
+                    bond_sample_indices = torch.arange(batch_size, device=node_features.device)
+                    bond_sample_indices = bond_sample_indices[:, None].expand_as(valid_bond_mask)[valid_bond_mask]
+                    bond_logits_flat = bond_logits_flat + self.bond_condition_readout(
+                        bond_hidden, batch_data['charges'], batch_data['nces'], bond_sample_indices)
+                if ion12_active:
+                    if self.last_aux_outputs is None:
+                        self.last_aux_outputs = {}
+                    # Flattened valid-bond order is identical to the main output.
+                    self.last_aux_outputs['ion12_logits'] = self.ion12_head(bond_hidden)
+            if self.use_fragment_readout:
+                bond_logits_flat = bond_logits_flat + self.fragment_readout(
+                    node_features, seq_lens_tensor, node_offsets, max_seq_len,
+                    valid_bond_mask, bond_src, bond_dst)
+            # AMP 下 bond_head 输出为 half，predictions 容器为 float32，需对齐 dtype 后赋值。
+            # （autocast 不改 NodeEncoder 的 embedding 查表输出，故 node_features.dtype 不可靠）
+            predictions[valid_bond_mask] = bond_logits_flat.to(predictions.dtype)
+        else:
+            bond_logits_flat = torch.empty(0, device=node_features.device)
+
+        if timing_enabled:
+            _maybe_sync(node_features.device, True)
+            output_end = time.perf_counter()
+            self.last_forward_timing = {
+                'node_encode': node_encode_end - total_start,
+                'global_node': global_node_end - node_encode_end,
+                'edge_encode': edge_encode_end - global_node_end,
+                'trim_nodes': trim_end - edge_encode_end,
+                'gcn_total': gcn_end - trim_end,
+                'gat_total': gat_end - gcn_end,
+                'bond_predict_restore': output_end - gat_end,
+                'forward_total': output_end - total_start,
+                'batch_size': float(batch_size),
+                'total_nodes': float(node_features.size(0)),
+                'total_edges': float(batch_data['edge_index'].size(1)),
+            }
+            self.last_forward_timing.update(gcn_timings)
+            self.last_forward_timing.update(gat_timings)
+        else:
+            self.last_forward_timing = {}
+
+        return predictions
+
+    def _infer_batch_device(self, batch_data: Dict) -> torch.device:
+        """从 batch 中推断当前设备。"""
+        for value in batch_data.values():
+            if torch.is_tensor(value):
+                return value.device
+        return self.global_node_embedding.device if self.use_global_node else next(self.parameters()).device
+
+    def _lookup_edge_features(
+        self,
+        edge_index: torch.Tensor,
+        edge_features: torch.Tensor,
+        src_nodes: torch.Tensor,
+        dst_nodes: torch.Tensor,
+        num_nodes: int,
+    ) -> torch.Tensor:
+        """按 (src, dst) 从 packed edge_index 中查找对应的边表示。"""
+        if src_nodes.numel() == 0:
+            return edge_features.new_empty((0, edge_features.size(-1)))
+        if edge_index.numel() == 0:
+            raise RuntimeError("Cannot look up bond edge features from an empty edge_index.")
+
+        key_stride = max(int(num_nodes), 1)
+        edge_src = edge_index[0].to(device=src_nodes.device, dtype=torch.long)
+        edge_dst = edge_index[1].to(device=src_nodes.device, dtype=torch.long)
+        edge_keys = edge_src * key_stride + edge_dst
+        bond_keys = src_nodes * key_stride + dst_nodes
+
+        sorted_edge_keys, sorted_edge_order = torch.sort(edge_keys)
+        lookup_pos = torch.searchsorted(sorted_edge_keys, bond_keys)
+        matched = torch.zeros_like(bond_keys, dtype=torch.bool)
+        valid_pos = lookup_pos < sorted_edge_keys.numel()
+        if valid_pos.any():
+            matched[valid_pos] = sorted_edge_keys[lookup_pos[valid_pos]] == bond_keys[valid_pos]
+        if not matched.all():
+            missing_idx = int((~matched).nonzero(as_tuple=False)[0].item())
+            missing_src = int(src_nodes[missing_idx].item())
+            missing_dst = int(dst_nodes[missing_idx].item())
+            raise RuntimeError(
+                f"Missing edge representation for bond ({missing_src}, {missing_dst})."
+            )
+
+        edge_feature_indices = sorted_edge_order[lookup_pos]
+        return edge_features[edge_feature_indices]
+    
+    def get_attention_weights(self, batch_data: Dict) -> List[torch.Tensor]:
+        """获取注意力权重用于可视化。
+
+        ⚠️ 注意：此方法是简化版，存在两个已知局限：
+            1. 未处理 global node packing（forward 路径在 GAT 前会 packing）
+            2. 历史版本曾跳过 GCN 层（已在本次修复中补回）
+        此方法以及旧 AttentionExtractor 均非完整生产 forward 的替代；
+        正式机制分析应使用实际 forward 的钩子。此方法仅供旧路径调试。
+        """
+        if self.theory_fusion_stage != 'late':
+            raise NotImplementedError(
+                'Legacy attention replay omits early theory fusion; use production forward hooks')
+        if self.edge_state_mode != 'static':
+            raise NotImplementedError(
+                'Legacy attention replay omits recurrent edge states; use production forward hooks')
+        if self.node_conv_mode != 'none':
+            raise NotImplementedError(
+                'Legacy attention replay omits full-width node convolution; use production forward hooks')
+        attention_weights = []
+
+        # 节点特征编码
+        node_features = self.node_encoder(batch_data)
+
+        # 边特征编码
+        edge_features = self.edge_encoder(
+            batch_data['edge_index'],
+            batch_data['edge_types'],
+            batch_data['edge_distances'],
+            batch_data.get('edge_attr')
+        )
+
+        # 重塑节点特征
+        batch_size, seq_len, hidden_dim = node_features.shape
+        node_features = node_features.view(-1, hidden_dim)
+
+        # BUG 修复：补回被跳过的 GCN 层（与 forward 路径一致）
+        for gcn_layer in self.gcn_layers:
+            node_features = gcn_layer(
+                node_features,
+                batch_data['edge_index'],
+                edge_features,
+            )
+
+        # 通过注意力层收集权重
+        for gat_layer in self.gat_layers:
+            weights = gat_layer.get_attention_weights(
+                node_features,
+                batch_data['edge_index'],
+                edge_features,
+            )
+            attention_weights.append(weights)
+            node_features = gat_layer(
+                node_features,
+                batch_data['edge_index'],
+                edge_features,
+            )
+
+        return attention_weights

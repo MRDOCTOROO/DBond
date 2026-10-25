@@ -1,0 +1,666 @@
+"""
+模型工具函数
+
+本文件包含了图神经网络模型的辅助函数和工具类。
+"""
+
+import torch
+import torch.nn as nn
+from typing import Dict, List, Optional, Tuple, Any
+import numpy as np
+import math
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+_VIRTUAL_NODE_MODE_CODES = {
+    'grouped_skip': 1, 'grouped_strict': 2,
+    'parallel4': 3, 'parallel4_cross': 4,
+}
+_VIRTUAL_NODE_MARKERS = (
+    'virtual_node_mode_code',
+    'virtual_node_schema_code',
+    'virtual_node_group_size_code',
+)
+
+
+def validate_virtual_node_mode(value: str) -> str:
+    """The original single-global route remains the implicit default."""
+    if value not in ('single', 'grouped_skip', 'grouped_strict',
+                     'parallel4', 'parallel4_cross'):
+        raise ValueError(f'Unknown virtual_node_mode: {value!r}')
+    return value
+
+
+def validate_virtual_group_size(value: int) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ValueError(f'virtual_group_size must be a positive integer, got {value!r}')
+    return value
+
+
+def virtual_node_mode_code(mode: str) -> Optional[int]:
+    return _VIRTUAL_NODE_MODE_CODES.get(validate_virtual_node_mode(mode))
+
+
+def validate_virtual_node_checkpoint(model, state_dict, checkpoint_config=None) -> None:
+    """Reject a different virtual-node topology before copying shared tensors.
+
+    Grouped modes add only semantic markers, not trainable parameters. A single
+    global node has no markers, keeping historical checkpoints byte-compatible.
+    """
+    requested = validate_virtual_node_mode(model.virtual_node_mode)
+    expected_keys = set(_VIRTUAL_NODE_MARKERS) if requested != 'single' else set()
+    actual_keys = {key for key in state_dict if key.startswith('virtual_node_')}
+    if actual_keys != expected_keys:
+        raise ValueError(
+            f'Checkpoint virtual-node marker keys mismatch: '
+            f'missing={sorted(expected_keys - actual_keys)}, '
+            f'unexpected={sorted(actual_keys - expected_keys)}')
+    if expected_keys:
+        expected_state = model.state_dict()
+        for key in _VIRTUAL_NODE_MARKERS:
+            actual = state_dict[key]
+            expected = expected_state[key]
+            if (not torch.is_tensor(actual) or actual.dtype != torch.int64
+                    or actual.shape != torch.Size([])
+                    or not torch.equal(actual.detach().cpu(), expected.detach().cpu())):
+                raise ValueError(f'Checkpoint virtual-node semantics mismatch: {key}')
+
+    # The old single/grouped modes have no parallel-slot/readout weights.
+    # Check exact branch keys even when a legacy loader requests strict=False.
+    def parallel_keys(keys):
+        return {key for key in keys if key == 'parallel_global_offsets'
+                or key.startswith('parallel_bond_')}
+
+    actual_branch = parallel_keys(state_dict)
+    expected_branch = parallel_keys(model.state_dict())
+    if actual_branch != expected_branch:
+        raise ValueError(
+            'Checkpoint parallel-global branch keys mismatch: '
+            f'missing={sorted(expected_branch - actual_branch)}, '
+            f'unexpected={sorted(actual_branch - expected_branch)}')
+
+    if checkpoint_config is not None:
+        if not isinstance(checkpoint_config, dict):
+            raise ValueError('Checkpoint config must be a dictionary')
+        declared = checkpoint_config.get('model', checkpoint_config)
+        if not isinstance(declared, dict):
+            raise ValueError('Checkpoint model config must be a dictionary')
+        saved_mode = validate_virtual_node_mode(declared.get('virtual_node_mode', 'single'))
+        if saved_mode != requested:
+            raise ValueError('Checkpoint virtual_node_mode config/state mismatch')
+        if requested != 'single':
+            saved_group_size = validate_virtual_group_size(
+                declared.get('virtual_group_size', 5))
+            if saved_group_size != model.virtual_group_size:
+                raise ValueError('Checkpoint virtual_group_size config/state mismatch')
+
+
+class ModelConfig:
+    """模型配置类"""
+    
+    def __init__(self, config_dict: Optional[Dict] = None):
+        # 基础配置
+        self.hidden_dim = 256
+        self.num_attention_heads = 8
+        self.dropout = 0.1
+        self.leaky_relu_slope = 0.2
+        
+        # 图配置
+        self.use_edge_features = True
+        self.edge_dim = 32
+        self.concat_heads = True
+        
+        # 网络结构配置
+        self.num_gcn_layers = 3
+        self.num_gat_layers = 2
+        self.gat_attention_type = 'gat'
+        
+        # 序列配置
+        self.max_seq_len = 100
+        self.alphabet = "ACDEFGHIKLMNPQRSTVWY"
+        self.pad_char = "U"
+        
+        # 特征维度配置
+        self.aa_embedding_dim = 64
+        self.position_embedding_dim = 32
+        self.physicochemical_dim = 32
+        self.num_physicochemical_features = 4
+        self.num_state_features = 3
+        self.num_env_features = 2
+        self.env_feature_name = 'rt'
+        self.env_feature_scale = 0.01
+        self.use_position_embedding = True
+        # Legacy input concatenation, or add positions once before the first GAT.
+        self.position_embedding_mode = 'input_concat'
+        self.use_physicochemical_features = True
+        self.use_state_features = True
+        self.use_env_features = True
+        # 序列衍生理论键离子特征（prefix/suffix mass、b/y 理论 m/z、H2O/NH3-loss、
+        # Pro 上下文等，见 data/theory_features.py）；开启后 bond head 多一路投影
+        self.use_theory_features = False
+        # Reuse the same projected theory at the prediction head, before GCN,
+        # or at both points. Absence retains the original late route.
+        self.theory_fusion_stage = 'late'
+        # Fixed topology; optionally refresh edge states before every message
+        # layer using initial or current node context. Static keeps legacy keys.
+        self.edge_state_mode = 'static'
+        # Optional architecture experiments; absent keys retain legacy behavior.
+        self.use_fragment_readout = False
+        self.fragment_readout_dim = 64
+        self.use_residue_chemistry = False
+        self.residue_chemistry_dim = 32
+        self.sequence_adapter_type = 'none'
+        self.sequence_adapter_dim = 96
+        self.sequence_conv_kernels = [3, 5, 7]
+        # Optional full-width residue Conv1D before global packing and FiLM;
+        # none preserves the legacy model state and initialization RNG.
+        self.node_conv_mode = 'none'
+        # Experimental grouped and parallel virtual nodes are opt-in. The
+        # single route preserves its original graph, RNG and checkpoint schema.
+        self.virtual_node_mode = 'single'
+        self.virtual_group_size = 5
+        self.bond_condition_mode = 'none'
+        self.bond_condition_dim = 32
+        self.bond_head_type = 'concat_mlp'
+        # Independent from the binary/four-state supervision choice. Legacy
+        # concat adds neither state-dict keys nor initialization RNG draws.
+        self.bond_fusion_mode = 'concat'
+        self.use_charge_partition_features = False
+        self.bond_cross_attention_heads = 4
+        # Target-domain operational fragment matches, used only as training targets.
+        self.use_ion12_aux_head = False
+        # Deep supervision 辅助头：指定 GAT 层索引（0-based）的输出各接一个轻量
+        # bond 预测头，仅训练期参与损失（eval/inference 不计算，不影响推理路径）。
+        self.use_deep_supervision = False
+        self.deep_supervision_layers = [1, 3]
+        # 肽级辅助头：global node 表示回归该肽可观测断裂比例（需 use_global_node=True），
+        # 与 Spearman/Top-K 排序指标对齐，起正则作用；同样仅训练期计算。
+        self.use_peptide_aux_head = False
+        # FiLM 条件调制：由 [charge, nce] 经小 MLP 生成逐样本 (γ, β)，对全部节点特征
+        # 做乘性+平移调制 h=(1+γ)h+β。现有三条条件注入路（global node / state / env）
+        # 全是加性，FiLM 显式参数化 charge×nce 乘性交互（~33K 参数）。
+        # 历史实现最终使用 Xavier 初始化；本轮架构实验保持该行为。
+        self.use_condition_film = False
+        # Feature-group progressive addition 的 per-feature mask（True=保留，False=屏蔽）。
+        # 维度固定对齐 state=[charge, pep_mass, intensity]、env=[nce, scan_num]。
+        # 在 NodeEncoder._encode_state/_encode_environmental 与 GraphBuilder._create_edge_features
+        # 三处使用点同步生效（global virtual node 复用 _encode_state 输出，自动同步）。
+        # mask 不改变张量维度，故 state_encoder/env_encoder 输入维度与 checkpoint 完全兼容。
+        self.state_feature_mask = [True, True, True]
+        self.env_feature_mask = [True, True]
+
+        # 边配置
+        self.edge_types = ['sequence', 'distance', 'functional', 'long_range', 'global']
+        self.edge_embedding_dim = 16
+        self.distance_embedding_dim = 16
+        self.max_distance = 10
+        self.use_edge_type_embedding = True
+        self.use_distance_embedding = True
+        self.use_raw_edge_attr = True
+        self.gat_use_edge_bias = True
+        self.gat_use_edge_gate = True
+        self.bond_use_edge_repr = True
+        self.bond_use_diff_feature = True
+        self.bond_use_product_feature = True
+
+        # 图结构增强
+        self.use_long_range_edges = False
+        self.long_range_stride = 10
+        self.long_range_hops = 1
+        self.use_global_node = False
+        
+        # 输出配置
+        self.num_classes = 20
+        
+        # 其他配置
+        # 更新配置
+        if config_dict:
+            self.update_config(config_dict)
+        from .attention_v2 import validate_attention_type
+        validate_attention_type(self.gat_attention_type)
+        from .position_encoding import validate_position_mode
+        validate_position_mode(self.position_embedding_mode)
+        from .bond_cross_attention import validate_bond_head_type
+        validate_bond_head_type(self.bond_head_type)
+        from .theory_fusion import validate_theory_fusion_stage
+        validate_theory_fusion_stage(self.theory_fusion_stage)
+        from .dynamic_edges import validate_edge_state_mode
+        validate_edge_state_mode(self.edge_state_mode)
+        from .bond_fusion_heads import validate_bond_fusion_mode
+        validate_bond_fusion_mode(self.bond_fusion_mode)
+        from .node_context_conv import validate_node_conv_mode
+        validate_node_conv_mode(self.node_conv_mode)
+        validate_virtual_node_mode(self.virtual_node_mode)
+        validate_virtual_group_size(self.virtual_group_size)
+    
+    def update_config(self, config_dict: Dict):
+        """更新配置参数"""
+        for key, value in config_dict.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+            else:
+                print(f"Warning: Unknown config parameter: {key}")
+    
+    def to_dict(self) -> Dict:
+        """转换为字典"""
+        config_dict = {}
+        for attr in dir(self):
+            if not attr.startswith('_'):
+                value = getattr(self, attr)
+                if not callable(value):
+                    config_dict[attr] = value
+        return config_dict
+
+
+def build_model_config(config_dict: Dict[str, Any]) -> ModelConfig:
+    """从完整配置中构建模型配置，并合并数据侧环境特征设置。"""
+    if not isinstance(config_dict, dict):
+        raise TypeError(f"config_dict must be a dict, got {type(config_dict)}")
+
+    if 'model' not in config_dict:
+        return ModelConfig(config_dict)
+
+    merged_model_config = dict(config_dict.get('model', {}))
+    data_config = config_dict.get('data', {})
+    if isinstance(data_config, dict):
+        for key in ('env_feature_name', 'env_feature_scale'):
+            if key in data_config:
+                merged_model_config[key] = data_config[key]
+
+    return ModelConfig(merged_model_config)
+
+
+class WeightInitialization:
+    """权重初始化工具类"""
+    
+    @staticmethod
+    def xavier_uniform(module: nn.Module):
+        """Xavier均匀初始化"""
+        if isinstance(module, nn.Linear):
+            nn.init.xavier_uniform_(module.weight)
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0)
+        elif isinstance(module, nn.Embedding):
+            nn.init.xavier_uniform_(module.weight)
+    
+    @staticmethod
+    def xavier_normal(module: nn.Module):
+        """Xavier正态初始化"""
+        if isinstance(module, nn.Linear):
+            nn.init.xavier_normal_(module.weight)
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0)
+        elif isinstance(module, nn.Embedding):
+            nn.init.xavier_normal_(module.weight)
+    
+    @staticmethod
+    def kaiming_uniform(module: nn.Module):
+        """Kaiming均匀初始化"""
+        if isinstance(module, nn.Linear):
+            nn.init.kaiming_uniform_(module.weight, nonlinearity='relu')
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0)
+    
+    @staticmethod
+    def kaiming_normal(module: nn.Module):
+        """Kaiming正态初始化"""
+        if isinstance(module, nn.Linear):
+            nn.init.kaiming_normal_(module.weight, nonlinearity='relu')
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0)
+    
+    @staticmethod
+    def orthogonal(module: nn.Module):
+        """正交初始化"""
+        if isinstance(module, nn.Linear):
+            nn.init.orthogonal_(module.weight)
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0)
+    
+    @staticmethod
+    def initialize_model(model: nn.Module, method: str = 'xavier_uniform'):
+        """初始化整个模型"""
+        init_methods = {
+            'xavier_uniform': WeightInitialization.xavier_uniform,
+            'xavier_normal': WeightInitialization.xavier_normal,
+            'kaiming_uniform': WeightInitialization.kaiming_uniform,
+            'kaiming_normal': WeightInitialization.kaiming_normal,
+            'orthogonal': WeightInitialization.orthogonal
+        }
+        
+        if method not in init_methods:
+            raise ValueError(f"Unknown initialization method: {method}")
+        
+        init_method = init_methods[method]
+        model.apply(init_method)
+
+
+class Regularization:
+    """正则化工具类"""
+    
+    @staticmethod
+    def l1_regularization(model: nn.Module, alpha: float = 0.01) -> torch.Tensor:
+        """L1正则化"""
+        l1_loss = 0
+        for param in model.parameters():
+            l1_loss += torch.sum(torch.abs(param))
+        return alpha * l1_loss
+    
+    @staticmethod
+    def l2_regularization(model: nn.Module, alpha: float = 0.01) -> torch.Tensor:
+        """L2正则化"""
+        l2_loss = 0
+        for param in model.parameters():
+            l2_loss += torch.sum(param ** 2)
+        return alpha * l2_loss
+    
+    @staticmethod
+    def elastic_net_regularization(model: nn.Module, 
+                                  l1_alpha: float = 0.01,
+                                  l2_alpha: float = 0.01) -> torch.Tensor:
+        """弹性网络正则化"""
+        l1_loss = Regularization.l1_regularization(model, l1_alpha)
+        l2_loss = Regularization.l2_regularization(model, l2_alpha)
+        return l1_loss + l2_loss
+
+
+class GraphUtils:
+    """图处理工具类"""
+    
+    @staticmethod
+    def build_adjacency_matrix(edge_index: torch.Tensor, 
+                              num_nodes: int,
+                              add_self_loops: bool = True) -> torch.Tensor:
+        """构建邻接矩阵"""
+        adj = torch.zeros(num_nodes, num_nodes, device=edge_index.device)
+        
+        row, col = edge_index
+        adj[row, col] = 1.0
+        adj[col, row] = 1.0  # 对称化
+        
+        if add_self_loops:
+            adj = adj + torch.eye(num_nodes, device=edge_index.device)
+        
+        return adj
+    
+    @staticmethod
+    def normalize_adjacency(adj: torch.Tensor) -> torch.Tensor:
+        """归一化邻接矩阵"""
+        # 计算度矩阵
+        degree = torch.sum(adj, dim=1)
+        degree_inv_sqrt = torch.pow(degree, -0.5)
+        degree_inv_sqrt[degree_inv_sqrt == float('inf')] = 0
+        
+        # 归一化
+        d_inv_sqrt = torch.diag(degree_inv_sqrt)
+        adj_normalized = torch.matmul(torch.matmul(d_inv_sqrt, adj), d_inv_sqrt)
+        
+        return adj_normalized
+    
+    @staticmethod
+    def compute_graph_laplacian(edge_index: torch.Tensor,
+                               num_nodes: int,
+                               normalized: bool = True) -> torch.Tensor:
+        """计算图拉普拉斯矩阵"""
+        adj = GraphUtils.build_adjacency_matrix(edge_index, num_nodes)
+        
+        if normalized:
+            adj = GraphUtils.normalize_adjacency(adj)
+        
+        degree = torch.sum(adj, dim=1)
+        laplacian = torch.diag(degree) - adj
+        
+        return laplacian
+    
+    @staticmethod
+    def extract_subgraph(node_features: torch.Tensor,
+                        edge_index: torch.Tensor,
+                        subgraph_nodes: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
+        """提取子图"""
+        # 创建节点映射
+        node_map = {old_idx: new_idx for new_idx, old_idx in enumerate(subgraph_nodes)}
+        
+        # 提取节点特征
+        subgraph_features = node_features[subgraph_nodes]
+        
+        # 提取边
+        subgraph_edges = []
+        for i in range(edge_index.size(1)):
+            src, dst = edge_index[0, i], edge_index[1, i]
+            if src.item() in node_map and dst.item() in node_map:
+                new_src = node_map[src.item()]
+                new_dst = node_map[dst.item()]
+                subgraph_edges.append([new_src, new_dst])
+        
+        if subgraph_edges:
+            subgraph_edge_index = torch.tensor(subgraph_edges).t().contiguous()
+        else:
+            subgraph_edge_index = torch.empty(2, 0, dtype=torch.long)
+        
+        return subgraph_features, subgraph_edge_index
+
+
+class ModelProfiler:
+    """模型分析工具"""
+    
+    @staticmethod
+    def count_parameters(model: nn.Module) -> Dict[str, int]:
+        """计算模型参数数量"""
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        
+        return {
+            'total_parameters': total_params,
+            'trainable_parameters': trainable_params,
+            'non_trainable_parameters': total_params - trainable_params
+        }
+    
+    @staticmethod
+    def get_model_size(model: nn.Module) -> float:
+        """获取模型大小（MB）"""
+        param_size = 0
+        buffer_size = 0
+        
+        for param in model.parameters():
+            param_size += param.nelement() * param.element_size()
+        
+        for buffer in model.buffers():
+            buffer_size += buffer.nelement() * buffer.element_size()
+        
+        return (param_size + buffer_size) / (1024 ** 2)  # 转换为MB
+    
+    @staticmethod
+    def profile_model(model: nn.Module, 
+                    input_data: Dict,
+                    device: torch.device) -> Dict[str, Any]:
+        """分析模型性能"""
+        model.eval()
+        
+        # 预热
+        with torch.no_grad():
+            for _ in range(3):
+                _ = model(input_data)
+        
+        # 测量推理时间
+        with torch.no_grad():
+            start_time = torch.cuda.Event(enable_timing=True)
+            end_time = torch.cuda.Event(enable_timing=True)
+            
+            start_time.record()
+            for _ in range(100):
+                _ = model(input_data)
+            end_time.record()
+            
+            torch.cuda.synchronize()
+            avg_time = (start_time.elapsed_time(end_time) / 100) / 1000  # 转换为秒
+        
+        # 内存使用
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+            with torch.no_grad():
+                _ = model(input_data)
+            peak_memory = torch.cuda.max_memory_allocated() / (1024 ** 2)  # MB
+        else:
+            peak_memory = 0
+        
+        return {
+            'parameters': ModelProfiler.count_parameters(model),
+            'model_size_mb': ModelProfiler.get_model_size(model),
+            'avg_inference_time_s': avg_time,
+            'peak_memory_mb': peak_memory
+        }
+
+
+class CheckpointManager:
+    """检查点管理工具"""
+    
+    @staticmethod
+    def save_checkpoint(model: nn.Module,
+                       optimizer: torch.optim.Optimizer,
+                       epoch: int,
+                       loss: float,
+                       metrics: Dict,
+                       filepath: str,
+                       is_best: bool = False):
+        """保存检查点"""
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': loss,
+            'metrics': metrics,
+            'config': model.config.to_dict() if hasattr(model, 'config') else None
+        }
+        
+        torch.save(checkpoint, filepath)
+        
+        if is_best:
+            best_filepath = filepath.replace('.pt', '_best.pt')
+            torch.save(checkpoint, best_filepath)
+    
+    @staticmethod
+    def load_checkpoint(filepath: str,
+                       model: nn.Module,
+                       optimizer: Optional[torch.optim.Optimizer] = None,
+                       device: torch.device = None) -> Dict:
+        """加载检查点"""
+        if device is None:
+            device = next(model.parameters()).device
+        
+        checkpoint = torch.load(filepath, map_location=device, weights_only=False)
+
+        if hasattr(model, 'gat_attention_type'):
+            from .attention_v2 import validate_attention_checkpoint
+            validate_attention_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
+
+        if hasattr(model, 'theory_fusion_stage'):
+            from .theory_fusion import validate_theory_fusion_checkpoint
+            validate_theory_fusion_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
+
+        if hasattr(model, 'edge_state_mode'):
+            from .dynamic_edges import validate_edge_state_checkpoint
+            validate_edge_state_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
+
+        if hasattr(model, 'bond_fusion_mode'):
+            from .bond_fusion_heads import validate_bond_fusion_checkpoint
+            validate_bond_fusion_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
+
+        if hasattr(model, 'node_conv_mode'):
+            from .node_context_conv import validate_node_conv_checkpoint
+            validate_node_conv_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
+
+        if hasattr(model, 'virtual_node_mode'):
+            validate_virtual_node_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
+
+        # New experimental branches must never be silently dropped/left random
+        # by strict=False. Legacy checkpoints have neither prefix and remain
+        # compatible with both flags off. Inspect actual keys, also for older
+        # checkpoints without serialized config metadata.
+        saved_keys = set(checkpoint['model_state_dict'])
+        requested_keys = set(model.state_dict())
+        for prefix in ('residue_chemistry.', 'fragment_readout.', 'sequence_adapter.',
+                       'bond_condition_readout.', 'ion12_head.'):
+            saved_branch = {key for key in saved_keys if key.startswith(prefix)}
+            requested_branch = {key for key in requested_keys if key.startswith(prefix)}
+            if saved_branch != requested_branch:
+                raise ValueError(
+                    f"Checkpoint architecture mismatch for {prefix[:-1]}: "
+                    "use the same architecture config for training and inference; "
+                    f"missing={sorted(requested_branch - saved_branch)}, "
+                    f"unexpected={sorted(saved_branch - requested_branch)}"
+                )
+
+        mode_key = 'bond_condition_readout.mode_code'
+        if mode_key in requested_keys:
+            saved_mode = checkpoint['model_state_dict'][mode_key]
+            requested_mode = model.state_dict()[mode_key]
+            if not torch.is_tensor(saved_mode) or not torch.equal(
+                    saved_mode.detach().cpu(), requested_mode.detach().cpu()):
+                raise ValueError(
+                    'Checkpoint bond_condition_mode mismatch: concat and gated '
+                    'share shapes but must use their original mode for inference')
+
+        # strict=False：容忍结构差异（例如已移除未使用的 layer_norms 字段），打印缺失/多余键以便排查。
+        missing, unexpected = model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        if missing or unexpected:
+            logger.warning(
+                "checkpoint %s 存在结构差异 — missing: %s, unexpected: %s",
+                filepath, missing, unexpected,
+            )
+
+        if optimizer is not None:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+        return checkpoint
+
+
+class LearningRateScheduler:
+    """学习率调度器工具"""
+    
+    @staticmethod
+    def cosine_annealing_with_warmup(optimizer: torch.optim.Optimizer,
+                                   warmup_epochs: int,
+                                   max_epochs: int,
+                                   min_lr: float = 0.0):
+        """余弦退火与预热"""
+        lr_lambdas = []
+        for param_group in optimizer.param_groups:
+            base_lr = float(param_group.get('lr', 0.0))
+            if base_lr <= 0.0:
+                min_lr_ratio = 0.0
+            else:
+                min_lr_ratio = min(max(min_lr / base_lr, 0.0), 1.0)
+
+            def lr_lambda(current_epoch, min_lr_ratio=min_lr_ratio):
+                if current_epoch < warmup_epochs:
+                    # 预热阶段
+                    return float(current_epoch + 1) / float(max(1, warmup_epochs))
+
+                # 余弦退火阶段；LambdaLR 需要的是相对 base_lr 的倍率，而不是绝对 lr。
+                progress = float(current_epoch - warmup_epochs) / float(max(1, max_epochs - warmup_epochs))
+                progress = min(max(progress, 0.0), 1.0)
+                cosine_ratio = 0.5 * (1.0 + math.cos(math.pi * progress))
+                return max(min_lr_ratio, cosine_ratio)
+
+            lr_lambdas.append(lr_lambda)
+        
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambdas)
+    
+    @staticmethod
+    def step_with_warmup(optimizer: torch.optim.Optimizer,
+                       warmup_epochs: int,
+                       step_size: int,
+                       gamma: float = 0.1):
+        """步长衰减与预热"""
+        def lr_lambda(current_epoch):
+            if current_epoch < warmup_epochs:
+                # 预热阶段
+                return float(current_epoch) / float(max(1, warmup_epochs))
+            else:
+                # 步长衰减阶段
+                decay_epoch = current_epoch - warmup_epochs
+                return gamma ** (decay_epoch // step_size)
+        
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)

@@ -1,0 +1,26 @@
+{
+ "config": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/pre_synthesis_theory_folded_film/5fold/20260907_124432/fold_9075/config.yaml",
+ "checkpoint": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/pre_synthesis_theory_folded_film/5fold/20260907_124432/fold_9075/checkpoints/gt_pre/20260907_130026/best_model.pt",
+ "test_csv": "/mnt/pvc/graphtrans/DBond/dataset/5fold_folded/9075.test.fbr.multi.csv",
+ "num_requested": 500,
+ "num_valid": 500,
+ "sampling_seed": 43,
+ "attention_mode": "functional",
+ "max_seq_len": 32,
+ "effect": {
+  "mode": "functional",
+  "raw_mean_diff": -0.02203104855093485,
+  "cohen_d_signed": -0.24346616625549253,
+  "cohen_d_abs": 0.24346616625549253,
+  "t_stat": -13.916149892405523,
+  "p_value": 1.0405431167974071e-43,
+  "auc": 0.4377965795338682,
+  "n_broken": 6176.0,
+  "n_intact": 6835.0,
+  "interpretation": "Saliency associated with intact bonds (broken < intact)",
+  "cohen_d_ci_low": -0.2935956240703394,
+  "cohen_d_ci_high": -0.1919561132666751,
+  "bootstrap_iters": 1000.0,
+  "ci_level": 0.95
+ }
+}

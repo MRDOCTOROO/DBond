@@ -1,0 +1,379 @@
+{
+  "version": 1,
+  "title": "Graph Representation",
+  "type": "flow-diagram",
+  "source": "edited",
+  "profile": "default",
+  "theme": "tech-blue",
+  "layout": "horizontal",
+  "counts": {
+    "nodes": 40,
+    "edges": 20,
+    "modules": 0
+  },
+  "nodes": [
+    {
+      "id": "nL_title",
+      "label": "Linear Peptide Sequence",
+      "type": "text",
+      "size": "xl"
+    },
+    {
+      "id": "nL_h3n",
+      "label": "H 3 N +",
+      "type": "text",
+      "size": "tiny"
+    },
+    {
+      "id": "nL_ala1",
+      "label": "Ala 1",
+      "type": "user",
+      "size": "small"
+    },
+    {
+      "id": "nL_gly2",
+      "label": "Gly 2",
+      "type": "user",
+      "size": "small"
+    },
+    {
+      "id": "nL_leu3",
+      "label": "Leu 3",
+      "type": "user",
+      "size": "small"
+    },
+    {
+      "id": "nL_ser4",
+      "label": "Ser 4",
+      "type": "user",
+      "size": "small"
+    },
+    {
+      "id": "nL_lys5",
+      "label": "Lys 5",
+      "type": "user",
+      "size": "small"
+    },
+    {
+      "id": "nL_tyr6",
+      "label": "Tyr 6",
+      "type": "user",
+      "size": "small"
+    },
+    {
+      "id": "nL_coo",
+      "label": "- COO -",
+      "type": "text",
+      "size": "tiny"
+    },
+    {
+      "id": "nL_q1",
+      "label": "y 1",
+      "type": "text",
+      "size": "tiny"
+    },
+    {
+      "id": "nL_q2",
+      "label": "y 2",
+      "type": "text",
+      "size": "tiny"
+    },
+    {
+      "id": "nL_q3",
+      "label": "y 3",
+      "type": "text",
+      "size": "tiny"
+    },
+    {
+      "id": "nL_q4",
+      "label": "y 4",
+      "type": "text",
+      "size": "tiny"
+    },
+    {
+      "id": "nL_q5",
+      "label": "y 5",
+      "type": "text",
+      "size": "tiny"
+    },
+    {
+      "id": "nM_arrow",
+      "label": "nM_arrow",
+      "type": "service",
+      "size": "medium"
+    },
+    {
+      "id": "nM_label",
+      "label": "Transform to Graph",
+      "type": "text",
+      "size": "medium"
+    },
+    {
+      "id": "nR_title",
+      "label": "Graph Representation (DBond-GT)",
+      "type": "text",
+      "size": "xl"
+    },
+    {
+      "id": "nR_G",
+      "label": "G",
+      "type": "user",
+      "size": "small"
+    },
+    {
+      "id": "nR_ala1",
+      "label": "Ala 1",
+      "type": "user",
+      "size": "small"
+    },
+    {
+      "id": "nR_gly2",
+      "label": "Gly 2",
+      "type": "user",
+      "size": "small"
+    },
+    {
+      "id": "nR_leu3",
+      "label": "Leu 3",
+      "type": "user",
+      "size": "small"
+    },
+    {
+      "id": "nR_ser4",
+      "label": "Ser 4",
+      "type": "user",
+      "size": "small"
+    },
+    {
+      "id": "nR_lys5",
+      "label": "Lys 5",
+      "type": "user",
+      "size": "small"
+    },
+    {
+      "id": "nR_tyr6",
+      "label": "Tyr 6",
+      "type": "user",
+      "size": "small"
+    },
+    {
+      "id": "nR_q12",
+      "label": "y 1",
+      "type": "text",
+      "size": "tiny"
+    },
+    {
+      "id": "nR_q23",
+      "label": "y 2",
+      "type": "text",
+      "size": "tiny"
+    },
+    {
+      "id": "nR_q34",
+      "label": "y 3",
+      "type": "text",
+      "size": "tiny"
+    },
+    {
+      "id": "nR_q45",
+      "label": "y 4",
+      "type": "text",
+      "size": "tiny"
+    },
+    {
+      "id": "nR_q56",
+      "label": "y 5",
+      "type": "text",
+      "size": "tiny"
+    },
+    {
+      "id": "nLeg_box",
+      "label": "nLeg_box",
+      "type": "service",
+      "size": "xl"
+    },
+    {
+      "id": "nLeg_title",
+      "label": "Legend",
+      "type": "text",
+      "size": "tiny"
+    },
+    {
+      "id": "nLeg1_circle",
+      "label": "nLeg1_circle",
+      "type": "user",
+      "size": "tiny"
+    },
+    {
+      "id": "nLeg1_text",
+      "label": "Residue (node)",
+      "type": "text",
+      "size": "small"
+    },
+    {
+      "id": "nLeg2_text",
+      "label": "Peptide bond (sequence adjacency)",
+      "type": "text",
+      "size": "medium"
+    },
+    {
+      "id": "nLeg3_text",
+      "label": "Sequence-window edge (non-adjacent seq-distance)",
+      "type": "text",
+      "size": "large"
+    },
+    {
+      "id": "nLeg4_text",
+      "label": "Global connection to virtual node",
+      "type": "text",
+      "size": "small"
+    },
+    {
+      "id": "nLeg5_circle",
+      "label": "G",
+      "type": "user",
+      "size": "tiny"
+    },
+    {
+      "id": "nLeg5_text",
+      "label": "Global virtual node (captures global context)",
+      "type": "text",
+      "size": "medium"
+    },
+    {
+      "id": "nLeg6_q",
+      "label": "y i",
+      "type": "text",
+      "size": "tiny"
+    },
+    {
+      "id": "nLeg6_text",
+      "label": "Bond-label marker: y i (cleavage label)",
+      "type": "text",
+      "size": "large"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1",
+      "from": "nL_h3n",
+      "to": "nL_ala1",
+      "type": "bidirectional"
+    },
+    {
+      "id": "edge-2",
+      "from": "nL_ala1",
+      "to": "nL_gly2",
+      "type": "bidirectional"
+    },
+    {
+      "id": "edge-3",
+      "from": "nL_gly2",
+      "to": "nL_leu3",
+      "type": "bidirectional"
+    },
+    {
+      "id": "edge-4",
+      "from": "nL_leu3",
+      "to": "nL_ser4",
+      "type": "bidirectional"
+    },
+    {
+      "id": "edge-5",
+      "from": "nL_ser4",
+      "to": "nL_lys5",
+      "type": "bidirectional"
+    },
+    {
+      "id": "edge-6",
+      "from": "nL_lys5",
+      "to": "nL_tyr6",
+      "type": "bidirectional"
+    },
+    {
+      "id": "edge-7",
+      "from": "nL_tyr6",
+      "to": "nL_coo",
+      "type": "bidirectional"
+    },
+    {
+      "id": "edge-8",
+      "from": "nR_ala1",
+      "to": "nR_gly2",
+      "type": "bidirectional"
+    },
+    {
+      "id": "edge-9",
+      "from": "nR_gly2",
+      "to": "nR_leu3",
+      "type": "bidirectional"
+    },
+    {
+      "id": "edge-10",
+      "from": "nR_leu3",
+      "to": "nR_ser4",
+      "type": "bidirectional"
+    },
+    {
+      "id": "edge-11",
+      "from": "nR_ser4",
+      "to": "nR_lys5",
+      "type": "bidirectional"
+    },
+    {
+      "id": "edge-12",
+      "from": "nR_lys5",
+      "to": "nR_tyr6",
+      "type": "bidirectional"
+    },
+    {
+      "id": "edge-13",
+      "from": "nR_G",
+      "to": "nR_ala1",
+      "type": "data"
+    },
+    {
+      "id": "edge-14",
+      "from": "nR_G",
+      "to": "nR_gly2",
+      "type": "data"
+    },
+    {
+      "id": "edge-15",
+      "from": "nR_G",
+      "to": "nR_leu3",
+      "type": "data"
+    },
+    {
+      "id": "edge-16",
+      "from": "nR_G",
+      "to": "nR_ser4",
+      "type": "data"
+    },
+    {
+      "id": "edge-17",
+      "from": "nR_G",
+      "to": "nR_lys5",
+      "type": "data"
+    },
+    {
+      "id": "edge-18",
+      "from": "nR_G",
+      "to": "nR_tyr6",
+      "type": "data"
+    },
+    {
+      "id": "edge-19",
+      "from": "nR_ala1",
+      "to": "nR_leu3",
+      "type": "data"
+    },
+    {
+      "id": "edge-20",
+      "from": "nR_ser4",
+      "to": "nR_tyr6",
+      "type": "data"
+    }
+  ],
+  "modules": []
+}

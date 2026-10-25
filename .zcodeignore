@@ -1,0 +1,151 @@
+# =====================================================================
+# DBond 仓库 .gitignore（2026-10-14 整理版）
+# 原则：① 一切运行时产物、权重、环境、机器相关文件不入库；
+#       ② 论文当前图件的源码/成品、复现所需的配置与脚本必须能直接 add 入库；
+#       ③ 归档区 archive/ 与实验台账 docs/experiment_log.md 是例外白名单。
+# =====================================================================
+
+# ===== 1. 环境与本地工具（绝不入库） =====
+.vscode/**
+__pycache__/
+*.pyc
+.venv/
+cache/
+node_modules/
+.claude/*
+.kilo/
+.zcode/*
+# AI 入口文件仅本地使用，不入库（云端看不到 AGENTS.md / CLAUDE.md）
+/CLAUDE.md
+/AGENTS.md
+# draw.io skill scratch dirs（真正的成品在 figures/）
+.drawio-tmp/
+
+# ===== 2. 训练/评估运行时产物（云端生成，目录结构用 .gitkeep 保留） =====
+tensorboard/
+checkpoint/*
+best_model/*
+result/*
+checkpoints/
+results/
+logs/
+state/
+dataset/*
+
+# ===== 3. 白名单：需要入库的目录结构与最小数据 =====
+# result/ 结构 + 少量口径样例
+!result/
+!result/pred/
+!result/metric/
+!result/pred/dbond_m/
+!result/pred/dbond_s/
+!result/pred/dbond_m/multi/
+!result/pred/dbond_s/multi/
+!result/metric/dbond_m/
+!result/metric/dbond_s/
+!result/metric/dbond_m/multi/
+!result/metric/dbond_s/multi/
+!result/pred/dbond_m/multi/default.pred.csv
+!result/pred/dbond_s/multi/default.pred.csv
+!result/metric/dbond_s/multi/default_metric.csv
+!result/metric/dbond_s/single/default_metric.csv
+!result/metric/dbond_m/multi/default_metric.csv
+!best_model/
+!best_model/dbond_m/
+!best_model/dbond_s/
+# dataset 中随仓库发布的基线数据（5 组划分的原始行级 CSV）
+!dataset/dataset.fbr.csv
+!dataset/dbond_m.test.csv
+!dataset/dbond_m.train.shuffle.csv
+!dataset/dbond_s.test.csv
+!dataset/dbond_s.train.shuffle.csv
+# 保留所有目录里的 .gitkeep 占位
+!**/.gitkeep
+
+# ===== 4. 本地临时验证环境/脚本（如做代码验证时创建的 venv、一次性脚本）=====
+.r20_test_venv/
+.r20_test_figs/
+.r20_functional_test.py
+*_test_venv/
+.*_test_venv/
+.*_functional_test.py
+*_functional_test.py
+# 本地临时的 PDF 提取/分析产物
+.pdf_tmp_venv/
+.pdf_*.py
+.pdf_fulltext.txt
+.pdf_*.txt
+plans/*
+nul
+
+# ===== 5. 权重/缓存/大文件兜底 =====
+*.pt
+*.ckpt
+*.pth
+*.safetensors
+*.h5
+# 图件中间渲染（scratch）；当前论文图件的白名单见文末第 9 节
+*.svg
+*.png
+*.drawio
+实验图/*
+
+# ===== 6. 对比模型镜像（ludbond / ludbondaf：保留独立发布形态，只排除其训练产物）=====
+ludbond/tensorboard/
+ludbond/dataset/*
+!ludbond/dataset/.gitkeep
+ludbond/result/
+ludbond/PBCLA/mgf_dataset/
+ludbondaf/tensorboard/
+ludbondaf/dataset/*
+!ludbondaf/dataset/.gitkeep
+ludbondaf/result/
+ludbondaf/best_model/*
+!ludbondaf/best_model/.gitkeep
+!ludbondaf/best_model/dbond_m_exp_af/.gitkeep
+ludbondaf/checkpoint/*
+!ludbondaf/checkpoint/.gitkeep
+# LOFO / 特征组消融等批量实验的派生产物（权重由 *.pt 覆盖，这里覆盖日志/摘要/派生配置）
+graph_transform/config/lofo_derived/
+
+# ===== 7. docs/ 仅本地：工作草稿、评审材料、旧文档（archive/docs/ 同理）=====
+docs/*
+# 例外：实验台账随代码入库（每次实验提交都要同步更新，见 AGENTS.md）
+!docs/experiment_log.md
+
+# ===== 8. 归档区 archive/ 随仓库走（含其内 svg/png 快照），便于追溯历史资产 =====
+!archive/**
+
+# ===== 9. 当前论文图件的白名单（第 5 节的 *.png/*.svg/*.drawio 兜底不适用于它们）=====
+!figures/graph_representation.drawio
+!figures/workflow_mesure.drawio
+!figures/workflow_mesure.svg
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

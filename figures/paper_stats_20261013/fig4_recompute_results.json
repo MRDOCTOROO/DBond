@@ -1,0 +1,10 @@
+{
+ "source_csv": "D:\\UserData\\Desktop\\Github-project\\Dbond2\\DBond\\figures\\residue_pair_film_fold9075\\residue_pair_stats.csv",
+ "cells_total": 576,
+ "cells_n_zero": 302,
+ "cells_0_lt_n_lt_50": 0,
+ "cells_n_ge_50": 274,
+ "pearson_r": 0.8386893416757827,
+ "mae_pp": 5.027179943616459,
+ "frac_abs_diff_le_10pp": 0.8759124087591241
+}

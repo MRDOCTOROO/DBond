@@ -1,0 +1,941 @@
+"""
+图构建器
+
+本文件包含了将蛋白质序列转换为图结构的各种策略和实现。
+支持多种图构建方法，包括序列连接、距离基线和混合策略。
+"""
+
+import torch
+import numpy as np
+import networkx as nx
+from typing import Dict, List, Optional, Tuple, Any
+import math
+
+
+def _get_config_value(config: Any, key: str, default: Any) -> Any:
+    if isinstance(config, dict):
+        if key in config:
+            return config[key]
+        data_config = config.get('data', {})
+        if isinstance(data_config, dict) and key in data_config:
+            return data_config[key]
+        model_config = config.get('model', {})
+        if isinstance(model_config, dict) and key in model_config:
+            return model_config[key]
+        return default
+    if hasattr(config, key):
+        return getattr(config, key)
+    return default
+
+
+class GraphBuilder:
+    """基础图构建器"""
+    
+    def __init__(self, config: Any):
+        """
+        初始化图构建器
+        
+        Args:
+            config: 配置对象
+        """
+        self.config = config
+        self.alphabet = _get_config_value(config, 'alphabet', "ACDEFGHIKLMNPQRSTVWY")
+        self.max_distance = _get_config_value(config, 'max_distance', 10)
+        self.edge_types = _get_config_value(config, 'edge_types', ['sequence', 'distance', 'functional'])
+        self.use_long_range_edges = _get_config_value(config, 'use_long_range_edges', False)
+        self.long_range_stride = max(1, int(_get_config_value(config, 'long_range_stride', 10)))
+        self.long_range_hops = max(1, int(_get_config_value(config, 'long_range_hops', 1)))
+        self.use_global_node = _get_config_value(config, 'use_global_node', False)
+        self.virtual_node_mode = _get_config_value(config, 'virtual_node_mode', 'single')
+        if self.virtual_node_mode not in ('single', 'grouped_skip', 'grouped_strict',
+                                          'parallel4', 'parallel4_cross'):
+            raise ValueError(f"Unknown virtual_node_mode: {self.virtual_node_mode!r}")
+        group_size = _get_config_value(config, 'virtual_group_size', 5)
+        if isinstance(group_size, bool) or not isinstance(group_size, int) or group_size < 1:
+            raise ValueError('virtual_group_size must be a positive integer')
+        self.virtual_group_size = group_size
+        if self.virtual_node_mode != 'single' and not self.use_global_node:
+            raise ValueError('Multiple virtual nodes require use_global_node=True')
+        if self.virtual_node_mode != 'single' and len(self.edge_types) <= 4:
+            raise ValueError('Multiple virtual nodes require edge type 4 (global)')
+        self.env_feature_name = _get_config_value(config, 'env_feature_name', 'rt')
+        self.env_feature_scale = float(_get_config_value(config, 'env_feature_scale', 0.01))
+        # 状态/环境特征消融开关：与 NodeEncoder / global_node_proj 保持一致，
+        # 关闭后 charge/pep_mass/intensity/nce/scan_num 不再写入 edge_attr，
+        # 使 state/env 消融在三处使用点（节点级 / 全局节点 / 边级）同时生效。
+        self.use_state_features = _get_config_value(config, 'use_state_features', True)
+        self.use_env_features = _get_config_value(config, 'use_env_features', True)
+        # Feature-group progressive addition 的 per-feature mask（与 NodeEncoder 同源 config）。
+        # state 顺序 [charge, pep_mass, intensity]，env 顺序 [nce, scan_num]。
+        # 与 use_*_features 配合：整组关闭时 _create_edge_features 已走全 0 分支，mask 不再生效。
+        _state_mask = _get_config_value(config, 'state_feature_mask', [True, True, True])
+        _env_mask = _get_config_value(config, 'env_feature_mask', [True, True])
+        self.state_feature_mask = [bool(m) for m in _state_mask]
+        self.env_feature_mask = [bool(m) for m in _env_mask]
+        self._distance_min_scale = 0.8
+        self._edge_cache = {}
+
+    def node_count(self, seq_len: int) -> int:
+        """Number of packed nodes for a sequence, including virtual nodes."""
+        if not self.use_global_node:
+            return seq_len
+        if self.virtual_node_mode == 'single':
+            return seq_len + 1
+        if self.virtual_node_mode in ('parallel4', 'parallel4_cross'):
+            return seq_len + 4
+        group_count = (seq_len + self.virtual_group_size - 1) // self.virtual_group_size
+        return seq_len + group_count + 1
+
+    def _edge_cache_key(self, seq_len: int, strategy: str) -> Tuple:
+        return (
+            strategy,
+            seq_len,
+            self.max_distance,
+            self.use_long_range_edges,
+            self.long_range_stride,
+            self.long_range_hops,
+            self.use_global_node,
+            self.virtual_node_mode,
+            self.virtual_group_size,
+        )
+
+    def _normalize_secondary_env_feature(self, value: float) -> float:
+        """对第二环境变量做与节点编码器一致的归一化。"""
+        if self.env_feature_name == 'scan_num':
+            return math.log1p(max(value, 0.0)) / 20.0
+        return value * self.env_feature_scale
+    
+    def build_graph(self, 
+                   sequence: str,
+                   sample_features: Dict[str, float],
+                   strategy: str = 'sequence') -> Dict[str, torch.Tensor]:
+        """
+        构建图结构
+        
+        Args:
+            sequence: 蛋白质序列
+            env_vars: 环境变量
+            strategy: 构建策略
+            
+        Returns:
+            Dict: 包含图数据的字典
+        """
+        if strategy == 'sequence':
+            return self._build_sequence_graph(sequence, sample_features)
+        elif strategy == 'distance':
+            return self._build_distance_graph(sequence, sample_features)
+        elif strategy == 'hybrid':
+            return self._build_hybrid_graph(sequence, sample_features)
+        else:
+            raise ValueError(f"Unknown graph building strategy: {strategy}")
+    
+    def _build_sequence_graph(self, sequence: str, sample_features: Dict[str, float]) -> Dict[str, torch.Tensor]:
+        """构建基于序列连接的图"""
+        seq_len = len(sequence)
+        edge_index, edge_type_tensor, edge_distance_tensor, bond_edge_map = self._get_or_build_edges(seq_len, 'sequence')
+        edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, sample_features)
+
+        return {
+            'edge_index': edge_index,
+            'edge_attr': edge_attr,
+            'edge_types': edge_type_tensor,
+            'edge_distances': edge_distance_tensor,
+            'bond_edge_map': bond_edge_map,
+        }
+    
+    def _build_distance_graph(self, sequence: str, sample_features: Dict[str, float]) -> Dict[str, torch.Tensor]:
+        """构建基于距离的图"""
+        seq_len = len(sequence)
+        edge_index, edge_type_tensor, edge_distance_tensor, bond_edge_map = self._get_or_build_edges(seq_len, 'distance')
+        edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, sample_features)
+
+        return {
+            'edge_index': edge_index,
+            'edge_attr': edge_attr,
+            'edge_types': edge_type_tensor,
+            'edge_distances': edge_distance_tensor,
+            'bond_edge_map': bond_edge_map,
+        }
+    
+    def _build_hybrid_graph(self, sequence: str, sample_features: Dict[str, float]) -> Dict[str, torch.Tensor]:
+        """构建混合图"""
+        seq_len = len(sequence)
+        edge_index, edge_type_tensor, edge_distance_tensor, bond_edge_map = self._get_or_build_edges(seq_len, 'hybrid')
+        edge_attr = self._create_edge_features(edge_type_tensor, edge_distance_tensor, sample_features)
+
+        return {
+            'edge_index': edge_index,
+            'edge_attr': edge_attr,
+            'edge_types': edge_type_tensor,
+            'edge_distances': edge_distance_tensor,
+            'bond_edge_map': bond_edge_map,
+        }
+
+    def _get_or_build_edges(self, seq_len: int, strategy: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        key = self._edge_cache_key(seq_len, strategy)
+        cached = self._edge_cache.get(key)
+        if cached is not None:
+            return cached
+
+        if strategy == 'sequence':
+            edge_index, edge_types, edge_distances, bond_edge_map = self._build_sequence_edges(seq_len)
+        elif strategy == 'distance':
+            edge_index, edge_types, edge_distances, bond_edge_map = self._build_distance_edges(seq_len)
+        elif strategy == 'hybrid':
+            edge_index, edge_types, edge_distances, bond_edge_map = self._build_hybrid_edges(seq_len)
+        else:
+            raise ValueError(f"Unknown graph building strategy: {strategy}")
+
+        self._edge_cache[key] = (edge_index, edge_types, edge_distances, bond_edge_map)
+        return edge_index, edge_types, edge_distances, bond_edge_map
+
+    def _build_sequence_edges(self, seq_len: int, include_optional: bool = True) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        edge_indices = []
+        edge_types = []
+        edge_distances = []
+
+        for i in range(seq_len - 1):
+            edge_indices.append([i, i + 1])
+            edge_indices.append([i + 1, i])
+            edge_types.extend([0, 0])
+            edge_distances.extend([1, 1])
+
+        return self._finalize_edges(edge_indices, edge_types, edge_distances, seq_len, include_optional)
+
+    def _build_distance_edges(self, seq_len: int, include_optional: bool = True) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        max_seq_dist = int(math.ceil(self.max_distance / self._distance_min_scale))
+
+        edge_indices = []
+        edge_types = []
+        edge_distances = []
+
+        for i in range(seq_len):
+            max_j = min(seq_len - 1, i + max_seq_dist)
+            for j in range(i + 1, max_j + 1):
+                seq_dist = j - i
+                # folding_factor 为无出处的历史启发式（非物理推导，无消融支撑）。
+                # 主模型 max_distance=6 的有效语义是 |i-j|<=5、整数距离为 d、
+                # 仅 d=1 属于 near 边型。它并非可直接删除的 no-op：删除后会新增
+                # d=6 连边，并将 d=2 从 remote 改成 near。为保持历史对照保留算法。
+                # 其余 max_distance 的有效半径非直觉：
+                # md3/4/5/7/8 -> R=2/3/4/8/9（d=7,8 的嵌入距离均被抹为 6）。
+                # 论文按有效语义描述：|i-j|<=5 连边，相邻边独占边型。
+                folding_factor = 1.0 + 0.2 * np.sin(seq_dist * 0.5)
+                distance = seq_dist * folding_factor
+                if distance <= self.max_distance:
+                    edge_indices.append([i, j])
+                    edge_indices.append([j, i])
+
+                    if distance <= 2:
+                        edge_type = 1
+                    else:
+                        edge_type = 2
+
+                    edge_types.extend([edge_type, edge_type])
+                    clipped_distance = min(int(distance), self.max_distance)
+                    edge_distances.extend([clipped_distance, clipped_distance])
+
+        return self._finalize_edges(edge_indices, edge_types, edge_distances, seq_len, include_optional)
+
+    def _build_hybrid_edges(self, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        # hybrid = distance 边 + 长程边（在 distance 基础上强制叠加稀疏长程连接，
+        # 不依赖 use_long_range_edges 全局开关，保证 hybrid 与 distance 有实质区别）。
+        dist_edge_index, dist_edge_types, dist_edge_distances, _ = self._build_distance_edges(seq_len, include_optional=False)
+
+        edge_indices = dist_edge_index.t().tolist() if dist_edge_index.numel() > 0 else []
+        edge_types = dist_edge_types.tolist() if dist_edge_types.numel() > 0 else []
+        edge_distances = dist_edge_distances.tolist() if dist_edge_distances.numel() > 0 else []
+
+        # 手动叠加长程边（与 _add_long_range_edges 同语义），不受全局开关影响
+        long_range_type = 3
+        for i in range(seq_len):
+            for hop in range(1, self.long_range_hops + 1):
+                j = i + hop * self.long_range_stride
+                if j >= seq_len:
+                    break
+                seq_dist = j - i
+                edge_indices.append([i, j])
+                edge_indices.append([j, i])
+                edge_types.extend([long_range_type, long_range_type])
+                edge_dist = min(seq_dist, self.max_distance)
+                edge_distances.extend([edge_dist, edge_dist])
+
+        # include_optional=True 让 _finalize_edges 叠加 global 节点边（与基线一致）
+        return self._finalize_edges(edge_indices, edge_types, edge_distances, seq_len, include_optional=True)
+
+    def _finalize_edges(self,
+                        edge_indices: List[List[int]],
+                        edge_types: List[int],
+                        edge_distances: List[int],
+                        seq_len: int,
+                        include_optional: bool) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if include_optional:
+            if self.use_long_range_edges:
+                self._add_long_range_edges(edge_indices, edge_types, edge_distances, seq_len)
+            if self.use_global_node:
+                if self.virtual_node_mode == 'single':
+                    self._add_global_edges(edge_indices, edge_types, edge_distances, seq_len)
+                elif self.virtual_node_mode in ('parallel4', 'parallel4_cross'):
+                    self._add_parallel_global_edges(edge_indices, edge_types, edge_distances, seq_len)
+                else:
+                    self._add_grouped_virtual_edges(edge_indices, edge_types, edge_distances, seq_len)
+
+        if edge_indices:
+            edge_map = {}
+            for (src, dst), edge_type, edge_distance in zip(edge_indices, edge_types, edge_distances):
+                key = (int(src), int(dst))
+                if key not in edge_map:
+                    edge_map[key] = (int(edge_type), int(edge_distance))
+
+            edge_indices = [[src, dst] for (src, dst) in edge_map.keys()]
+            edge_types = [edge_map[key][0] for key in edge_map]
+            edge_distances = [edge_map[key][1] for key in edge_map]
+
+            edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+            edge_type_tensor = torch.tensor(edge_types, dtype=torch.long)
+            edge_distance_tensor = torch.tensor(edge_distances, dtype=torch.long)
+        else:
+            edge_index = torch.empty((2, 0), dtype=torch.long)
+            edge_type_tensor = torch.empty((0,), dtype=torch.long)
+            edge_distance_tensor = torch.empty((0,), dtype=torch.long)
+        bond_edge_map = self._build_bond_edge_map(edge_index, seq_len)
+
+        return edge_index, edge_type_tensor, edge_distance_tensor, bond_edge_map
+
+    def _build_bond_edge_map(self, edge_index: torch.Tensor, seq_len: int) -> torch.Tensor:
+        """为每个相邻 bond 记录其在 edge_index / edge_attr 中的行号。"""
+        bond_len = max(seq_len - 1, 0)
+        if bond_len == 0:
+            return torch.empty((0,), dtype=torch.long)
+
+        edge_lookup = {
+            (int(src), int(dst)): edge_idx
+            for edge_idx, (src, dst) in enumerate(edge_index.t().tolist())
+        }
+        bond_edge_indices = []
+        for src in range(bond_len):
+            key = (src, src + 1)
+            edge_idx = edge_lookup.get(key)
+            if edge_idx is None:
+                raise RuntimeError(f"Missing sequential edge {key} in graph construction.")
+            bond_edge_indices.append(edge_idx)
+        return torch.tensor(bond_edge_indices, dtype=torch.long)
+
+    def _add_long_range_edges(self,
+                              edge_indices: List[List[int]],
+                              edge_types: List[int],
+                              edge_distances: List[int],
+                              seq_len: int) -> None:
+        long_range_type = 3
+        for i in range(seq_len):
+            for hop in range(1, self.long_range_hops + 1):
+                j = i + hop * self.long_range_stride
+                if j >= seq_len:
+                    break
+                seq_dist = j - i
+                edge_indices.append([i, j])
+                edge_indices.append([j, i])
+                edge_types.extend([long_range_type, long_range_type])
+                edge_dist = min(seq_dist, self.max_distance)
+                edge_distances.extend([edge_dist, edge_dist])
+
+    def _add_global_edges(self,
+                          edge_indices: List[List[int]],
+                          edge_types: List[int],
+                          edge_distances: List[int],
+                          seq_len: int) -> None:
+        if seq_len <= 0:
+            return
+        global_type = 4
+        global_idx = seq_len
+        for i in range(seq_len):
+            edge_indices.append([i, global_idx])
+            edge_indices.append([global_idx, i])
+            edge_types.extend([global_type, global_type])
+            edge_distances.extend([0, 0])
+
+    def _add_grouped_virtual_edges(self,
+                                   edge_indices: List[List[int]],
+                                   edge_types: List[int],
+                                   edge_distances: List[int],
+                                   seq_len: int) -> None:
+        """Connect consecutive residue groups to one peptide-level top node.
+
+        Packed order is residues, groups, top. All new edges reuse the legacy
+        global type (4) and distance (0), preserving the EdgeEncoder schema.
+        """
+        group_count = (seq_len + self.virtual_group_size - 1) // self.virtual_group_size
+        top_idx = seq_len + group_count
+        for residue_idx in range(seq_len):
+            group_idx = seq_len + residue_idx // self.virtual_group_size
+            edge_indices.extend([[residue_idx, group_idx], [group_idx, residue_idx]])
+            edge_types.extend([4, 4])
+            edge_distances.extend([0, 0])
+            if self.virtual_node_mode == 'grouped_skip':
+                edge_indices.extend([[residue_idx, top_idx], [top_idx, residue_idx]])
+                edge_types.extend([4, 4])
+                edge_distances.extend([0, 0])
+        for group_offset in range(group_count):
+            group_idx = seq_len + group_offset
+            edge_indices.extend([[group_idx, top_idx], [top_idx, group_idx]])
+            edge_types.extend([4, 4])
+            edge_distances.extend([0, 0])
+
+    @staticmethod
+    def _add_parallel_global_edges(edge_indices: List[List[int]],
+                                   edge_types: List[int],
+                                   edge_distances: List[int],
+                                   seq_len: int) -> None:
+        """Four independent slots each exchange messages with all real residues.
+
+        There are deliberately no slot-to-slot edges. Both parallel modes use
+        exactly the same graph; only the bond readout differs between them.
+        """
+        for slot in range(4):
+            global_idx = seq_len + slot
+            for residue_idx in range(seq_len):
+                edge_indices.extend([[residue_idx, global_idx], [global_idx, residue_idx]])
+                edge_types.extend([4, 4])
+                edge_distances.extend([0, 0])
+    
+    def _predict_distance_matrix(self, seq_len: int) -> np.ndarray:
+        """历史序列距离启发式矩阵；非物理距离，当前连边路径不调用。"""
+        distance_matrix = np.zeros((seq_len, seq_len))
+        
+        # 仅为历史启发式表达，不代表已验证的空间距离预测。
+        for i in range(seq_len):
+            for j in range(seq_len):
+                if i == j:
+                    distance_matrix[i, j] = 0
+                else:
+                    # 基于序列距离的简化预测
+                    seq_dist = abs(i - j)
+                    # 确定性的历史正弦项，无物理折叠依据。
+                    folding_factor = 1.0 + 0.2 * np.sin(seq_dist * 0.5)
+                    distance_matrix[i, j] = seq_dist * folding_factor
+        
+        return distance_matrix
+    
+    def _create_edge_features(self, 
+                           edge_types: torch.Tensor,
+                           edge_distances: torch.Tensor,
+                           sample_features: Dict[str, float]) -> torch.Tensor:
+        """创建边特征"""
+        if edge_types.numel() == 0:
+            return torch.empty((0, 8), dtype=torch.float32)
+
+        edge_types_f = edge_types.to(dtype=torch.float32)
+        edge_distances_f = edge_distances.to(dtype=torch.float32)
+        inv_distance = 1.0 / (1.0 + edge_distances_f)
+
+        base_features = torch.stack([edge_types_f, edge_distances_f, inv_distance], dim=1)
+        # state/env 消融：与 NodeEncoder / global_node_proj 一致，关闭时置零，
+        # 使 charge/pep_mass/intensity/nce/scan_num 不再通过 edge_attr 漏入模型。
+        # 在整组开启时，进一步按 state_feature_mask / env_feature_mask 做子组级屏蔽
+        # （feature-group progressive addition：逐组保留，其余位置置 0）。
+        if self.use_state_features:
+            sm = self.state_feature_mask
+            state_vals = [
+                (sample_features.get('charge', 0.0) * 0.1) if sm[0] else 0.0,
+                (sample_features.get('pep_mass', 0.0) / 2000.0) if sm[1] else 0.0,
+                (math.log1p(max(sample_features.get('intensity', 0.0), 0.0)) / 20.0) if sm[2] else 0.0,
+            ]
+        else:
+            state_vals = [0.0, 0.0, 0.0]
+        if self.use_env_features:
+            em = self.env_feature_mask
+            env_vals = [
+                (sample_features.get('nce', 0.0) * 0.01) if em[0] else 0.0,
+                (self._normalize_secondary_env_feature(
+                    sample_features.get(
+                        self.env_feature_name,
+                        sample_features.get('rt', 0.0),
+                    )
+                )) if em[1] else 0.0,
+            ]
+        else:
+            env_vals = [0.0, 0.0]
+        env_features = torch.tensor(
+            state_vals + env_vals,
+            dtype=torch.float32,
+            device=base_features.device,
+        ).unsqueeze(0).expand(base_features.size(0), -1)
+
+        return torch.cat([base_features, env_features], dim=1)
+
+
+class SequenceGraphBuilder(GraphBuilder):
+    """专门的序列图构建器"""
+    
+    def __init__(self, config: Any):
+        super().__init__(config)
+        
+        # 氨基酸相似性矩阵
+        self.aa_similarity = self._create_aa_similarity_matrix()
+        
+        # 物理化学性质
+        self.aa_properties = self._get_aa_properties()
+    
+    def build_advanced_graph(self, 
+                          sequence: str,
+                          env_vars: Dict[str, float],
+                          include_structure: bool = True) -> Dict[str, torch.Tensor]:
+        """
+        构建高级图结构
+        
+        Args:
+            sequence: 蛋白质序列
+            env_vars: 环境变量
+            include_structure: 是否包含结构信息
+            
+        Returns:
+            Dict: 包含图数据的字典
+        """
+        seq_len = len(sequence)
+        
+        # 基础序列边
+        edge_indices = []
+        edge_types = []
+        edge_distances = []
+        edge_weights = []
+        
+        # 1. 序列连接边
+        for i in range(seq_len - 1):
+            edge_indices.extend([[i, i + 1], [i + 1, i]])
+            edge_types.extend([0, 0])
+            edge_distances.extend([1, 1])
+            edge_weights.extend([1.0, 1.0])
+        
+        # 2. 相似性边
+        similarity_threshold = 0.7
+        for i in range(seq_len):
+            for j in range(i + 2, min(i + 6, seq_len)):  # 跳过相邻的
+                aa_i, aa_j = sequence[i], sequence[j]
+                similarity = self.aa_similarity[aa_i][aa_j]
+                
+                if similarity > similarity_threshold:
+                    edge_indices.extend([[i, j], [j, i]])
+                    edge_types.extend([1, 1])  # 相似性边
+                    edge_distances.extend([j - i, j - i])
+                    edge_weights.extend([similarity, similarity])
+        
+        # 3. 功能边（基于物理化学性质）
+        if include_structure:
+            functional_edges = self._build_functional_edges(sequence)
+            for src, dst, weight in functional_edges:
+                edge_indices.extend([[src, dst], [dst, src]])
+                edge_types.extend([2, 2])  # 功能边
+                edge_distances.extend([abs(dst - src), abs(dst - src)])
+                edge_weights.extend([weight, weight])
+        
+        edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+        edge_type_tensor = torch.tensor(edge_types, dtype=torch.long)
+        edge_distance_tensor = torch.tensor(edge_distances, dtype=torch.long)
+        edge_weight_tensor = torch.tensor(edge_weights, dtype=torch.float32)
+        
+        # 增强的边特征
+        edge_attr = self._create_enhanced_edge_features(
+            edge_type_tensor, edge_distance_tensor, edge_weight_tensor, sequence, env_vars
+        )
+        
+        return {
+            'edge_index': edge_index,
+            'edge_attr': edge_attr,
+            'edge_types': edge_type_tensor,
+            'edge_distances': edge_distance_tensor,
+            'edge_weights': edge_weight_tensor
+        }
+    
+    def _build_functional_edges(self, sequence: str) -> List[Tuple[int, int, float]]:
+        """构建功能边"""
+        functional_edges = []
+        seq_len = len(sequence)
+        
+        # 寻找功能相似的氨基酸区域
+        window_size = 3
+        for i in range(seq_len - window_size):
+            window1 = sequence[i:i + window_size]
+            
+            for j in range(i + window_size + 1, seq_len - window_size):
+                window2 = sequence[j:j + window_size]
+                
+                # 计算窗口间的功能相似性
+                similarity = self._compute_functional_similarity(window1, window2)
+                
+                if similarity > 0.6:
+                    functional_edges.append((i + 1, j + 1, similarity))
+        
+        return functional_edges
+    
+    def _compute_functional_similarity(self, window1: str, window2: str) -> float:
+        """计算功能相似性"""
+        similarity = 0.0
+        
+        for aa1, aa2 in zip(window1, window2):
+            # 基于物理化学性质的相似性
+            prop1 = self.aa_properties.get(aa1, [0, 0, 0, 0])
+            prop2 = self.aa_properties.get(aa2, [0, 0, 0, 0])
+            
+            # 计算欧几里得距离的倒数
+            dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(prop1, prop2)))
+            similarity += 1.0 / (1.0 + dist)
+        
+        return similarity / len(window1)
+    
+    def _create_enhanced_edge_features(self,
+                                   edge_types: torch.Tensor,
+                                   edge_distances: torch.Tensor,
+                                   edge_weights: torch.Tensor,
+                                   sequence: str,
+                                   env_vars: Dict[str, float]) -> torch.Tensor:
+        """创建增强的边特征"""
+        num_edges = len(edge_types)
+        edge_features = []
+        
+        for i in range(num_edges):
+            edge_type = edge_types[i].item()
+            distance = edge_distances[i].item()
+            weight = edge_weights[i].item()
+            
+            # 基础特征
+            features = [
+                float(edge_type),  # 边类型
+                float(distance),  # 距离
+                float(weight),  # 权重
+                1.0 / (1.0 + distance),  # 距离倒数
+                math.log(1.0 + distance),  # 对数距离
+            ]
+            
+            # 环境调制特征
+            charge_effect = env_vars.get('charge', 0.0) * 0.1
+            nce_effect = env_vars.get('nce', 0.0) * 0.01
+            fbr_effect = env_vars.get('fbr', 0.0)
+            
+            features.extend([
+                charge_effect * (1.0 + weight),
+                nce_effect * (1.0 / (1.0 + distance)),
+                fbr_effect * weight,
+                charge_effect * nce_effect,
+            ])
+            
+            # 边类型独热编码
+            type_one_hot = [0.0] * len(self.edge_types)
+            if edge_type < len(self.edge_types):
+                type_one_hot[edge_type] = 1.0
+            features.extend(type_one_hot)
+            
+            edge_features.append(features)
+        
+        return torch.tensor(edge_features, dtype=torch.float32)
+    
+    def _create_aa_similarity_matrix(self) -> Dict[str, Dict[str, float]]:
+        """创建氨基酸相似性矩阵"""
+        # 简化的BLOSUM62相似性矩阵
+        similarity = {
+            'A': {'A': 4.0, 'R': -1.0, 'N': -2.0, 'D': -2.0, 'C': 0.0, 'Q': -1.0, 'E': -1.0, 'G': 0.0, 'H': -2.0, 'I': -1.0, 'L': -1.0, 'K': -1.0, 'M': -1.0, 'F': -2.0, 'P': -1.0, 'S': 1.0, 'T': 0.0, 'W': -3.0, 'Y': -2.0, 'V': 0.0},
+            'R': {'A': -1.0, 'R': 5.0, 'N': 0.0, 'D': -2.0, 'C': -3.0, 'Q': 1.0, 'E': 0.0, 'G': -2.0, 'H': 0.0, 'I': -3.0, 'L': -2.0, 'K': 2.0, 'M': -1.0, 'F': -3.0, 'P': -2.0, 'S': -1.0, 'T': -1.0, 'W': -3.0, 'Y': -2.0, 'V': -3.0},
+            'N': {'A': -2.0, 'R': 0.0, 'N': 6.0, 'D': 1.0, 'C': -3.0, 'Q': 0.0, 'E': 0.0, 'G': 0.0, 'H': 1.0, 'I': -3.0, 'L': -3.0, 'K': 0.0, 'M': -2.0, 'F': -3.0, 'P': -2.0, 'S': 1.0, 'T': 0.0, 'W': -4.0, 'Y': -2.0, 'V': -3.0},
+            'D': {'A': -2.0, 'R': -2.0, 'N': 1.0, 'D': 6.0, 'C': -3.0, 'Q': 0.0, 'E': 2.0, 'G': -1.0, 'H': -1.0, 'I': -3.0, 'L': -4.0, 'K': -1.0, 'M': -3.0, 'F': -3.0, 'P': -1.0, 'S': 0.0, 'T': -1.0, 'W': -4.0, 'Y': -3.0, 'V': -3.0},
+            'C': {'A': 0.0, 'R': -3.0, 'N': -3.0, 'D': -3.0, 'C': 9.0, 'Q': -3.0, 'E': -4.0, 'G': -3.0, 'H': -3.0, 'I': -1.0, 'L': -1.0, 'K': -3.0, 'M': -1.0, 'F': -2.0, 'P': -3.0, 'S': -1.0, 'T': -1.0, 'W': -2.0, 'Y': -2.0, 'V': -1.0},
+            'Q': {'A': -1.0, 'R': 1.0, 'N': 0.0, 'D': 0.0, 'C': -3.0, 'Q': 5.0, 'E': 2.0, 'G': -2.0, 'H': 0.0, 'I': -3.0, 'L': -2.0, 'K': 1.0, 'M': 0.0, 'F': -3.0, 'P': -1.0, 'S': 0.0, 'T': -1.0, 'W': -2.0, 'Y': -1.0, 'V': -2.0},
+            'E': {'A': -1.0, 'R': 0.0, 'N': 0.0, 'D': 2.0, 'C': -4.0, 'Q': 2.0, 'E': 5.0, 'G': -2.0, 'H': 0.0, 'I': -3.0, 'L': -3.0, 'K': 1.0, 'M': -2.0, 'F': -3.0, 'P': -1.0, 'S': 0.0, 'T': -1.0, 'W': -3.0, 'Y': -2.0, 'V': -2.0},
+            'G': {'A': 0.0, 'R': -2.0, 'N': 0.0, 'D': -1.0, 'C': -3.0, 'Q': -2.0, 'E': -2.0, 'G': 6.0, 'H': -2.0, 'I': -4.0, 'L': -4.0, 'K': -2.0, 'M': -3.0, 'F': -3.0, 'P': -2.0, 'S': 0.0, 'T': -2.0, 'W': -2.0, 'Y': -3.0, 'V': -3.0},
+            'H': {'A': -2.0, 'R': 0.0, 'N': 1.0, 'D': -1.0, 'C': -3.0, 'Q': 0.0, 'E': 0.0, 'G': -2.0, 'H': 8.0, 'I': -3.0, 'L': -3.0, 'K': -1.0, 'M': -2.0, 'F': -1.0, 'P': -2.0, 'S': -1.0, 'T': -2.0, 'W': -2.0, 'Y': 2.0, 'V': -3.0},
+            'I': {'A': -1.0, 'R': -3.0, 'N': -3.0, 'D': -3.0, 'C': -1.0, 'Q': -3.0, 'E': -3.0, 'G': -4.0, 'H': -3.0, 'I': 4.0, 'L': 2.0, 'K': -3.0, 'M': 1.0, 'F': 0.0, 'P': -2.0, 'S': -2.0, 'T': -1.0, 'W': -3.0, 'Y': -1.0, 'V': 3.0},
+            'L': {'A': -1.0, 'R': -2.0, 'N': -3.0, 'D': -4.0, 'C': -1.0, 'Q': -2.0, 'E': -3.0, 'G': -4.0, 'H': -3.0, 'I': 2.0, 'L': 4.0, 'K': -2.0, 'M': 2.0, 'F': 0.0, 'P': -3.0, 'S': -2.0, 'T': -1.0, 'W': -2.0, 'Y': -1.0, 'V': 1.0},
+            'K': {'A': -1.0, 'R': 2.0, 'N': 0.0, 'D': -1.0, 'C': -3.0, 'Q': 1.0, 'E': 1.0, 'G': -2.0, 'H': -1.0, 'I': -3.0, 'L': -2.0, 'K': 5.0, 'M': -1.0, 'F': -3.0, 'P': -1.0, 'S': 0.0, 'T': -1.0, 'W': -3.0, 'Y': -2.0, 'V': -2.0},
+            'M': {'A': -1.0, 'R': -1.0, 'N': -2.0, 'D': -3.0, 'C': -1.0, 'Q': 0.0, 'E': -2.0, 'G': -3.0, 'H': -2.0, 'I': 1.0, 'L': 2.0, 'K': -1.0, 'M': 5.0, 'F': 0.0, 'P': -2.0, 'S': -1.0, 'T': -1.0, 'W': -1.0, 'Y': -1.0, 'V': 1.0},
+            'F': {'A': -2.0, 'R': -3.0, 'N': -3.0, 'D': -3.0, 'C': -2.0, 'Q': -3.0, 'E': -3.0, 'G': -3.0, 'H': -1.0, 'I': 0.0, 'L': 0.0, 'K': -3.0, 'M': 0.0, 'F': 6.0, 'P': -4.0, 'S': -2.0, 'T': -2.0, 'W': 1.0, 'Y': 3.0, 'V': -1.0},
+            'P': {'A': -1.0, 'R': -2.0, 'N': -2.0, 'D': -1.0, 'C': -3.0, 'Q': -1.0, 'E': -1.0, 'G': -2.0, 'H': -2.0, 'I': -2.0, 'L': -3.0, 'K': -1.0, 'M': -2.0, 'F': -4.0, 'P': 7.0, 'S': -1.0, 'T': -1.0, 'W': -4.0, 'Y': -3.0, 'V': -2.0},
+            'S': {'A': 1.0, 'R': -1.0, 'N': 1.0, 'D': 0.0, 'C': -1.0, 'Q': 0.0, 'E': 0.0, 'G': 0.0, 'H': -1.0, 'I': -2.0, 'L': -2.0, 'K': 0.0, 'M': -1.0, 'F': -2.0, 'P': -1.0, 'S': 4.0, 'T': 1.0, 'W': -3.0, 'Y': -2.0, 'V': -2.0},
+            'T': {'A': 0.0, 'R': -1.0, 'N': 0.0, 'D': -1.0, 'C': -1.0, 'Q': -1.0, 'E': -1.0, 'G': -2.0, 'H': -2.0, 'I': -1.0, 'L': -1.0, 'K': -1.0, 'M': -1.0, 'F': -2.0, 'P': -1.0, 'S': 1.0, 'T': 5.0, 'W': -2.0, 'Y': -2.0, 'V': 0.0},
+            'W': {'A': -3.0, 'R': -3.0, 'N': -4.0, 'D': -4.0, 'C': -2.0, 'Q': -2.0, 'E': -3.0, 'G': -2.0, 'H': -2.0, 'I': -3.0, 'L': -2.0, 'K': -3.0, 'M': -1.0, 'F': 1.0, 'P': -4.0, 'S': -3.0, 'T': -2.0, 'W': 11.0, 'Y': 2.0, 'V': -3.0},
+            'Y': {'A': -2.0, 'R': -2.0, 'N': -2.0, 'D': -3.0, 'C': -2.0, 'Q': -1.0, 'E': -2.0, 'G': -3.0, 'H': 2.0, 'I': -1.0, 'L': -1.0, 'K': -2.0, 'M': -1.0, 'F': 3.0, 'P': -3.0, 'S': -2.0, 'T': -2.0, 'W': 2.0, 'Y': 7.0, 'V': -2.0},
+            'V': {'A': 0.0, 'R': -3.0, 'N': -3.0, 'D': -3.0, 'C': -1.0, 'Q': -2.0, 'E': -2.0, 'G': -3.0, 'H': -3.0, 'I': 3.0, 'L': 1.0, 'K': -2.0, 'M': 1.0, 'F': -1.0, 'P': -2.0, 'S': -2.0, 'T': 0.0, 'W': -3.0, 'Y': -2.0, 'V': 4.0}
+        }
+        
+        # 归一化相似性分数
+        for aa1 in similarity:
+            max_score = max(similarity[aa1].values())
+            min_score = min(similarity[aa1].values())
+            for aa2 in similarity[aa1]:
+                if max_score != min_score:
+                    similarity[aa1][aa2] = (similarity[aa1][aa2] - min_score) / (max_score - min_score)
+        
+        return similarity
+    
+    def _get_aa_properties(self) -> Dict[str, List[float]]:
+        """获取氨基酸物理化学性质"""
+        return {
+            'A': [1.8, 0.0, 0.0, 89.1],  # 疏水性, 电荷, 极性, 分子量
+            'R': [-4.5, 1.0, 1.0, 174.2],
+            'N': [-3.5, 0.0, 1.0, 132.1],
+            'D': [-3.5, -1.0, 1.0, 133.1],
+            'C': [2.5, 0.0, 0.0, 121.2],
+            'Q': [-3.5, 0.0, 1.0, 146.1],
+            'E': [-3.5, -1.0, 1.0, 147.1],
+            'G': [-0.4, 0.0, 0.0, 75.1],
+            'H': [-3.2, 0.1, 1.0, 155.2],
+            'I': [4.5, 0.0, 0.0, 131.2],
+            'L': [3.8, 0.0, 0.0, 131.2],
+            'K': [-3.9, 1.0, 1.0, 146.2],
+            'M': [1.9, 0.0, 0.0, 149.2],
+            'F': [2.8, 0.0, 0.0, 165.2],
+            'P': [-1.6, 0.0, 0.0, 115.1],
+            'S': [-0.8, 0.0, 1.0, 105.1],
+            'T': [-0.7, 0.0, 1.0, 119.1],
+            'W': [-0.9, 0.0, 0.0, 204.2],
+            'Y': [-1.3, 0.0, 1.0, 181.2],
+            'V': [4.2, 0.0, 0.0, 117.1]
+        }
+
+
+class KnowledgeGraphBuilder(GraphBuilder):
+    """基于知识的图构建器"""
+    
+    def __init__(self, config: Any):
+        super().__init__(config)
+        
+        # 加载蛋白质结构知识库
+        self.structure_knowledge = self._load_structure_knowledge()
+        self.domain_knowledge = self._load_domain_knowledge()
+    
+    def _load_structure_knowledge(self) -> Dict[str, Any]:
+        """加载结构知识"""
+        # 简化的结构知识库
+        return {
+            'motifs': {
+                'CXXC': 'disulfide_bond',
+                'HXH': 'metal_binding',
+                'GGXGG': 'glycine_rich',
+                'PXK': 'kinase_motif'
+            },
+            'secondary_structures': {
+                'helix_favoring': ['A', 'L', 'M', 'Q', 'E', 'K'],
+                'strand_favoring': ['V', 'I', 'Y', 'F', 'T', 'W'],
+                'turn_favoring': ['G', 'P', 'S', 'D', 'N']
+            }
+        }
+    
+    def _load_domain_knowledge(self) -> Dict[str, Any]:
+        """加载领域知识"""
+        return {
+            'functional_sites': {
+                'active_site': ['H', 'D', 'S', 'C'],
+                'binding_site': ['R', 'K', 'D', 'E'],
+                'catalytic_triad': ['H', 'D', 'S']
+            },
+            'conservation_scores': {
+                'highly_conserved': ['W', 'C', 'H', 'Y'],
+                'moderately_conserved': ['F', 'I', 'L', 'V', 'M'],
+                'variable': ['A', 'S', 'T', 'G', 'P']
+            }
+        }
+    
+    def build_knowledge_graph(self, 
+                           sequence: str,
+                           env_vars: Dict[str, float]) -> Dict[str, torch.Tensor]:
+        """构建基于知识的图"""
+        # 基础图
+        base_graph = self.build_advanced_graph(sequence, env_vars)
+        
+        # 添加知识边
+        knowledge_edges = self._extract_knowledge_edges(sequence)
+        
+        # 合并边
+        all_edge_indices = [base_graph['edge_index']]
+        all_edge_attrs = [base_graph['edge_attr']]
+        all_edge_types = [base_graph['edge_types']]
+        all_edge_distances = [base_graph['edge_distances']]
+        
+        for edge_info in knowledge_edges:
+            src, dst, edge_type, weight, features = edge_info
+            
+            edge_index = torch.tensor([[src, dst]], dtype=torch.long)
+            edge_attr = torch.tensor([features], dtype=torch.float32)
+            edge_type_tensor = torch.tensor([edge_type], dtype=torch.long)
+            edge_distance_tensor = torch.tensor([abs(dst - src)], dtype=torch.long)
+            
+            all_edge_indices.append(edge_index)
+            all_edge_attrs.append(edge_attr)
+            all_edge_types.append(edge_type_tensor)
+            all_edge_distances.append(edge_distance_tensor)
+        
+        # 合并所有边
+        final_edge_index = torch.cat(all_edge_indices, dim=1)
+        final_edge_attr = torch.cat(all_edge_attrs, dim=0)
+        final_edge_types = torch.cat(all_edge_types, dim=0)
+        final_edge_distances = torch.cat(all_edge_distances, dim=0)
+        
+        return {
+            'edge_index': final_edge_index,
+            'edge_attr': final_edge_attr,
+            'edge_types': final_edge_types,
+            'edge_distances': final_edge_distances
+        }
+    
+    def _extract_knowledge_edges(self, sequence: str) -> List[Tuple]:
+        """提取知识边"""
+        knowledge_edges = []
+        seq_len = len(sequence)
+        
+        # 1. 基于motif的边
+        for motif, motif_type in self.structure_knowledge['motifs'].items():
+            positions = self._find_motif_positions(sequence, motif)
+            for start_pos in positions:
+                end_pos = start_pos + len(motif) - 1
+                if end_pos < seq_len:
+                    edge_type = 3 + list(self.structure_knowledge['motifs'].keys()).index(motif_type)
+                    weight = 0.8
+                    features = self._create_knowledge_edge_features(motif_type, weight, sequence[start_pos:end_pos+1])
+                    knowledge_edges.append((start_pos, end_pos, edge_type, weight, features))
+        
+        # 2. 基于二级结构的边
+        ss_edges = self._build_secondary_structure_edges(sequence)
+        knowledge_edges.extend(ss_edges)
+        
+        # 3. 基于功能位点的边
+        functional_edges = self._build_functional_site_edges(sequence)
+        knowledge_edges.extend(functional_edges)
+        
+        return knowledge_edges
+    
+    def _find_motif_positions(self, sequence: str, motif: str) -> List[int]:
+        """查找motif位置"""
+        positions = []
+        motif_len = len(motif)
+        
+        for i in range(len(sequence) - motif_len + 1):
+            match = True
+            for j, aa in enumerate(motif):
+                if aa == 'X':  # 通配符
+                    continue
+                if sequence[i + j] != aa:
+                    match = False
+                    break
+            if match:
+                positions.append(i)
+        
+        return positions
+    
+    def _build_secondary_structure_edges(self, sequence: str) -> List[Tuple]:
+        """构建二级结构边"""
+        edges = []
+        
+        # 简化的二级结构预测
+        helix_regions = self._predict_helices(sequence)
+        strand_regions = self._predict_strands(sequence)
+        
+        for region in helix_regions:
+            start, end = region
+            for i in range(start, end):
+                for j in range(i + 3, min(end + 1, i + 8)):  # 螺旋内i,i+3,i+4连接
+                    edge_type = 7  # 螺旋边
+                    weight = 0.6
+                    features = self._create_knowledge_edge_features('helix', weight, sequence[i:j+1])
+                    edges.append((i, j, edge_type, weight, features))
+        
+        for region in strand_regions:
+            start, end = region
+            for i in range(start, end):
+                for j in range(start, end):
+                    if abs(i - j) >= 2:  # 折叠连接
+                        edge_type = 8  # 折叠边
+                        weight = 0.5
+                        features = self._create_knowledge_edge_features('strand', weight, sequence[i:j+1])
+                        edges.append((i, j, edge_type, weight, features))
+        
+        return edges
+    
+    def _predict_helices(self, sequence: str) -> List[Tuple[int, int]]:
+        """预测α螺旋区域"""
+        helices = []
+        helix_favoring = set(self.structure_knowledge['secondary_structures']['helix_favoring'])
+        
+        i = 0
+        while i < len(sequence) - 5:
+            # 检查连续的螺旋倾向氨基酸
+            helix_score = 0
+            for j in range(i, min(i + 6, len(sequence))):
+                if sequence[j] in helix_favoring:
+                    helix_score += 1
+            
+            if helix_score >= 4:  # 至少4个螺旋倾向氨基酸
+                start = i
+                # 扩展螺旋区域
+                while i < len(sequence) and sequence[i] in helix_favoring:
+                    i += 1
+                end = i - 1
+                if end - start >= 5:  # 至少5个残基
+                    helices.append((start, end))
+            else:
+                i += 1
+        
+        return helices
+    
+    def _predict_strands(self, sequence: str) -> List[Tuple[int, int]]:
+        """预测β折叠区域"""
+        strands = []
+        strand_favoring = set(self.structure_knowledge['secondary_structures']['strand_favoring'])
+        
+        i = 0
+        while i < len(sequence) - 3:
+            strand_score = 0
+            for j in range(i, min(i + 4, len(sequence))):
+                if sequence[j] in strand_favoring:
+                    strand_score += 1
+            
+            if strand_score >= 3:
+                start = i
+                while i < len(sequence) and sequence[i] in strand_favoring:
+                    i += 1
+                end = i - 1
+                if end - start >= 3:
+                    strands.append((start, end))
+            else:
+                i += 1
+        
+        return strands
+    
+    def _build_functional_site_edges(self, sequence: str) -> List[Tuple]:
+        """构建功能位点边"""
+        edges = []
+        
+        functional_sites = self.domain_knowledge['functional_sites']
+        
+        for site_type, residues in functional_sites.items():
+            positions = [i for i, aa in enumerate(sequence) if aa in residues]
+            
+            # 连接相同类型的功能残基
+            for i, pos1 in enumerate(positions):
+                for pos2 in positions[i+1:]:
+                    if pos2 - pos1 <= 10:  # 距离限制
+                        edge_type = 9 + list(functional_sites.keys()).index(site_type)
+                        weight = 0.7
+                        features = self._create_knowledge_edge_features(site_type, weight, sequence[pos1:pos2+1])
+                        edges.append((pos1, pos2, edge_type, weight, features))
+        
+        return edges
+    
+    def _create_knowledge_edge_features(self, 
+                                   edge_type: str,
+                                   weight: float,
+                                   sequence_segment: str) -> List[float]:
+        """创建知识边特征"""
+        features = [
+            float(edge_type),  # 边类型编码
+            weight,  # 权重
+            len(sequence_segment),  # 序列段长度
+        ]
+        
+        # 序列段组成特征
+        aa_counts = {}
+        for aa in sequence_segment:
+            aa_counts[aa] = aa_counts.get(aa, 0) + 1
+        
+        # 常见氨基酸比例
+        common_aas = ['A', 'G', 'L', 'V', 'S', 'E', 'K']
+        for aa in common_aas:
+            features.append(aa_counts.get(aa, 0) / len(sequence_segment))
+        
+        return features

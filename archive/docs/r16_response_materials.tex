@@ -1,0 +1,224 @@
+% =============================================================================
+% R-16 Reviewer Response Materials（v1）
+% [重大] 方法可复现性 | p7 L69-L83; p8 L12-L19
+%
+% 审稿意见：
+%   问题：缺少具体特征列表、维度、归一化方式、缺失值处理、特殊 D-amino acid
+%         编码、position embedding 类型和训练/测试标准化策略。
+%   建议：新增表格 "Input features used by DBond-GT"（feature group / names /
+%         dimension / normalization / source / whether ablated）；
+%         说明 D-Dap、D-Orn、D-Cha 等特殊残基如何编码；理化性质来自 L-还是
+%         D-氨基酸；归一化参数是否只由训练集估计。
+%
+% 事实来源（全部经源码核实，行号见注释）：
+%   - graph_transform/models/graph_transformer.py（NodeEncoder L27-335）
+%   - graph_transform/data/graph_builder.py（特征构建）
+%   - PBCLA/utils.py（特殊残基质量表）
+%   - 论文数据集部分（四种特殊氨基酸定义，已交叉验证质量吻合）
+%
+% 写作策略：
+%   - 全部如实陈述，包括"特殊残料理化特征为零向量"这一不利细节（主动披露
+%     优于被审稿人发现）；辩护理由：身份信息由独立的 aa embedding 承载
+%   - 归一化是"全固定常数、数据无关"，直接消除"测试集泄露"的担忧（有利点）
+%
+% [TODO 用户核对]
+%   1. Table 中 "消融" 列：state/env 对应论文消融表里的哪个变体（w/o State/Env?），
+%      需与论文实际消融表名称一致；position/理化若无消融实验，保持"—"。
+%   2. 若论文正文沿用了 DBond 的 Eq.(6) Ex=ReLU(L(bn(x)))（含 batch norm），
+%      需改为与 DBond-GT 实现一致（Linear→ReLU→Dropout，无 bn）。
+%   3. 建议 graph_transform/docs/interpretability_figures_guide.md 中
+%      "B=Asx/O=Pyrrolysine/Z=Glx" 的歧义码解释是错的，应修正为
+%      D-Dap/D-Orn/D-Cha/3-(3-Pyridyl)-D-Ala（与论文和质量表一致）。
+% =============================================================================
+
+% -----------------------------------------------------------------------------
+% 1) 正文改写（替换 p7 L69-L83 / p8 L12-L19 的特征融合描述段）
+%    原句："融合氨基酸类型、位置编码、理化性质、前体离子状态以及质谱实验
+%    环境等多源特征。"
+% -----------------------------------------------------------------------------
+DBond-GT 的节点输入由五组特征融合而成（Table~\ref{tab:input_features}）：
+（1）\textbf{氨基酸特征}：将 24 种 D-氨基酸（20 种天然氨基酸的 D-型对映体，
+外加 4 种合成特殊残基 D-Dap（B）、D-Orn（O）、3-(3-Pyridyl)-D-Ala（X）、
+D-Cha（Z），见数据集部分）与填充符一并映射为可学习的 64 维 embedding，
+每种残基（含特殊残基）拥有独立的可训练向量；（2）\textbf{位置特征}：采用
+可学习的位置 embedding（维度 32，最大序列长度 32）；（3）\textbf{理化性质
+特征}：每个残基查询 4 维标量性质（疏水性、电荷、极性、分子量），经线性层
+投影至 32 维；（4）\textbf{前体状态特征}：前体电荷、$m/z$ 与绝对强度 3 个
+标量，经固定常数变换后由多层感知机投影至 32 维并广播到序列每个残基；
+（5）\textbf{实验环境特征}：归一化碰撞能量（NCE）与扫描数（或保留时间）
+2 个标量，处理方式同（4）。五组特征拼接（$64+32+32+32+32=192$ 维）后经
+线性层融合为 256 维节点表示。
+
+所有数值变换均采用与数据无关的固定常数（Table~\ref{tab:input_features}
+"归一化"列），不涉及任何从训练数据估计的统计量；训练与测试样本经由同一
+数据管线与同一变换函数处理，因此不存在测试集信息经由归一化参数泄露的
+可能。对于缺失值，数据构建阶段要求上述各列必须存在；模型侧在対数变换前
+对强度类特征施加非负截断（$\max(\cdot,0)$），并在编码输出处执行
+nan-to-num 兜底（NaN$\to$0，$\pm\infty\to\pm10$）。
+
+% -----------------------------------------------------------------------------
+% 2) 审稿人点名的特征总表
+% -----------------------------------------------------------------------------
+\begin{table*}[t]
+\centering
+\caption{DBond-GT 的输入特征总表。五组节点特征拼接（192 维）后融合为 256
+维节点表示；所有归一化均为数据无关的固定常数变换，训练与测试使用完全相同
+的处理路径。}
+\label{tab:input_features}
+\small
+\begin{tabular}{llllll}
+\toprule
+特征组 & 特征（输入维度） & 归一化/变换 & 编码器（输出维度） & 来源 & 消融 \\
+\midrule
+氨基酸 & 残基码，24 种 + 填充（26 词表） & 无（token 索引） &
+可学习 embedding（64） & 氨基酸序列 & — \\
+位置 & 位置索引 $0$--$31$ & 无 &
+可学习 embedding（32） & 序列下标 & — \\
+理化性质 & 疏水性、电荷、极性、分子量（4） &
+查表后逐列 min--max（常数表） & 线性层 $4\!\to\!32$ &
+L-氨基酸标准表\textsuperscript{$\dagger$} & — \\
+前体状态 & 电荷、$m/z$、绝对强度（3） &
+$\times0.1$；$/2000$；$\ln(1+\max(x,0))/20$ &
+MLP $3\!\to\!64\!\to\!32$ & 一级质谱 & \checkmark \\
+实验环境 & NCE、扫描数（或保留时间）（2） &
+$\times0.01$；$\ln(1+\max(x,0))/20$（扫描数）或 $\times0.01$（保留时间） &
+MLP $2\!\to\!64\!\to\!32$ & 串联质谱 & \checkmark \\
+\bottomrule
+\end{tabular}
+
+\raggedright
+\textsuperscript{$\dagger$}\,疏水性取 Kyte--Doolittle 标度，分子量为自由
+氨基酸分子量，电荷与极性按标准赋值（详见正文说明）；D-型与 L-型对映异构体
+的上述四类标量性质数值相同。特殊残基 B/O/X/Z 与填充符的理化特征编码为零
+向量（其残基身份由氨基酸 embedding 的独立可训练向量承载）。
+% [TODO 核对] "消融"列：state/env 的 \checkmark 对应论文消融表中的变体名
+% （如 w/o State/Env），请与论文实际消融表保持一致；position 与理化性质
+% 目前无对应消融实验，保持 "—"。
+\end{table*}
+
+% -----------------------------------------------------------------------------
+% 3) 特殊残基编码说明（审稿人补充问题 1）
+%    论文数据集部分已定义四种特殊氨基酸；此处说明模型侧编码方式
+% -----------------------------------------------------------------------------
+\textbf{特殊残基的编码。}数据集在 20 种天然氨基酸之外引入了 4 种合成特殊
+残基：D-Dap（单字母码 B）、D-Orn（O）、3-(3-Pyridyl)-D-Ala（X）与 D-Cha
+（Z）。模型将它们与天然残基统一纳入 24 种残基码的词表：每种特殊残基在氨基
+酸 embedding 中拥有\textbf{独立的可学习 64 维向量}，不与任何天然氨基酸共
+享或合并，因此其编码完全由训练数据习得。在理化性质分支中，由于 B/O/X/Z
+暂无公认的标量性质取值，其 4 维理化特征编码为零向量；残基身份信息不受影
+响，由上述独立的 embedding 向量承载。实测数据中 B 与 O 为高频残基（测试集
+各约 $1.3\times10^{5}$ 次），X 为低频残基（约 $10^{3}$ 次），Z 仅在训练集
+中出现。
+
+% -----------------------------------------------------------------------------
+% 4) 理化性质来源说明（审稿人补充问题 2）
+% -----------------------------------------------------------------------------
+\textbf{理化性质的来源。}4 维理化特征取自 L-氨基酸标准表：疏水性为
+Kyte--Doolittle 标度，电荷按侧链解离属性赋值（K/R 为 $+1$、D/E 为 $-1$、
+H 为 $+0.1$，其余为 0），极性按极性/非极性侧链二值赋值，分子量为自由氨基
+酸分子量。D-氨基酸与对应 L-氨基酸互为对映异构体，二者的疏水性、净电荷、
+极性与分子量等标量性质在数值上完全相同（对映异构体的区别仅在于旋光性，
+而旋光性不属于上述任一特征），因此 L-氨基酸标准表的数值可直接用于 D-残
+基。查表所得的 4 维向量按常数表内的逐列最小--最大值缩放至 $[0,1]$，该
+min/max 亦为固定常数，与训练或测试数据无关。
+
+% -----------------------------------------------------------------------------
+% 5) 归一化与标准化策略（审稿人补充问题 3）
+% -----------------------------------------------------------------------------
+\textbf{归一化与标准化策略。}DBond-GT 不含任何从数据估计的归一化参数：
+所有数值特征（前体状态、实验环境、理化性质）均采用固定常数变换
+（Table~\ref{tab:input_features}"归一化"列，如 $\times0.1$、$/2000$、
+$\ln(1+\max(x,0))/20$ 等），常数在设计时依据各特征的典型取值范围确定量
+级对齐。由于不存在训练集统计量的估计与应用环节，训练与测试样本天然经过
+完全相同的变换（同一数据管线、同一变换函数），从根本上避免了标准化参数
+引入的测试集信息泄露问题。
+
+% -----------------------------------------------------------------------------
+% 6) 补充材料建议：完整理化性质数值表（保证可复现；放 supplementary）
+% -----------------------------------------------------------------------------
+% 如需进一步满足可复现性要求，可将以下 20 行数值表放入补充材料：
+%
+% \begin{table}[h]
+% \centering
+% \caption{理化性质数值表（原始值；查表后逐列 min--max 归一化至 $[0,1]$）。
+% 列依次为：疏水性（Kyte--Doolittle）、电荷、极性（0/1）、分子量（Da，自由氨基酸）。}
+% \begin{tabular}{lrrrr}
+% \toprule
+% 残基 & 疏水性 & 电荷 & 极性 & 分子量 \\
+% \midrule
+% A & 1.8 & 0.0 & 0 & 89.1 \\   C & 2.5 & 0.0 & 0 & 121.2 \\
+% D & $-3.5$ & $-1.0$ & 1 & 133.1 \\  E & $-3.5$ & $-1.0$ & 1 & 147.1 \\
+% F & 2.8 & 0.0 & 0 & 165.2 \\   G & $-0.4$ & 0.0 & 0 & 75.1 \\
+% H & $-3.2$ & 0.1 & 1 & 155.2 \\ I & 4.5 & 0.0 & 0 & 131.2 \\
+% K & $-3.9$ & 1.0 & 1 & 146.2 \\ L & 3.8 & 0.0 & 0 & 131.2 \\
+% M & 1.9 & 0.0 & 0 & 149.2 \\   N & $-3.5$ & 0.0 & 1 & 132.1 \\
+% P & $-1.6$ & 0.0 & 0 & 115.1 \\ Q & $-3.5$ & 0.0 & 1 & 146.1 \\
+% R & $-4.5$ & 1.0 & 1 & 174.2 \\ S & $-0.8$ & 0.0 & 1 & 105.1 \\
+% T & $-0.7$ & 0.0 & 1 & 119.1 \\ V & 4.2 & 0.0 & 0 & 117.1 \\
+% W & $-0.9$ & 0.0 & 0 & 204.2 \\ Y & $-1.3$ & 0.0 & 1 & 181.2 \\
+% \bottomrule
+% \end{tabular}
+% \end{table}
+% 注：B/O/X/Z 与填充符不在此表内，其理化特征为零向量。
+
+% -----------------------------------------------------------------------------
+% 7) Point-by-point 审稿回应（英文，response letter 用）
+% -----------------------------------------------------------------------------
+% Reviewer R-16 [Major] — Method reproducibility (p7 L69-L83; p8 L12-L19)
+%
+\textbf{Response:} We thank the reviewer for pointing out the missing
+implementation details of the multi-source feature construction. We have
+added a complete feature specification (new Table~\ref{tab:input_features})
+and revised the feature description in Sections~III-D and III-E accordingly.
+We address each requested item below.
+
+\begin{enumerate}
+    \item \textbf{Feature list, dimensions, and normalization.} The new
+    Table~\ref{tab:input_features} lists, for each of the five feature
+    groups, the constituent features, input dimensions, the exact
+    normalization formula, the encoder architecture and output dimension,
+    the data source, and whether the group is ablated. The five groups are
+    concatenated (192-d) and fused into 256-d node representations by a
+    linear layer.
+
+    \item \textbf{Encoding of special D-amino acids.} The alphabet comprises
+    24 residue codes: the D-enantiomers of the 20 canonical amino acids plus
+    four synthetic special residues defined in the dataset description ---
+    D-Dap (B), D-Orn (O), 3-(3-Pyridyl)-D-Ala (X), and D-Cha (Z). Each of
+    them, like every canonical residue, is assigned an \emph{independent
+    learnable 64-d embedding vector}, so their representations are learned
+    from data rather than merged with canonical residues. In the
+    physicochemical branch, these four residues are assigned a zero 4-d
+    property vector (no established scalar property values are available for
+    them); their identity information is instead carried by the independent
+    amino-acid embeddings. This is now stated explicitly in the revised
+    manuscript.
+
+    \item \textbf{Origin of physicochemical properties.} The four property
+    values (Kyte--Doolittle hydropathy, charge, polarity, molecular weight)
+    are taken from the standard L-amino-acid tables. Since D- and
+    L-amino acids are enantiomers, these scalar properties take identical
+    numerical values for both enantiomers (only optical activity differs,
+    which is not among the features); hence the L-amino-acid tables are
+    directly applicable to D-residues. The full property table is provided
+    in the supplementary material.
+
+    \item \textbf{Normalization estimated only on the training set?} No
+    data-estimated normalization exists in DBond-GT. All numeric transforms
+    are fixed, dataset-independent constants (e.g., charge$\times0.1$,
+    $m/z / 2000$, $\ln(1+\max(x,0))/20$, NCE$\times0.01$, and column-wise
+    min--max over the constant property table). Training and test samples
+    pass through the identical data pipeline and transform functions, so
+    there is no possibility of test-set information leaking through
+    normalization parameters.
+
+    \item \textbf{Position embedding type.} The position embedding is a
+    learnable embedding layer ($32$-d, maximum sequence length 32), not a
+    sinusoidal encoding. This is now specified in the revised text.
+
+    \item \textbf{Missing-value handling.} The data construction requires
+    all listed feature columns to be present. On the model side, intensity
+    features are clamped at zero before the log transform, and the encoding
+    outputs are passed through a nan-to-num guard
+    (NaN$\to$0, $\pm\infty\to\pm10$).
+\end{enumerate}
