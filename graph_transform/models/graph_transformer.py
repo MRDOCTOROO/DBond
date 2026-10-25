@@ -763,6 +763,31 @@ class GraphTransformer(nn.Module):
         self.enable_bond_fusion_diagnostics = False
         self.last_bond_fusion_diagnostics = {}
 
+        # Stage 12 is separate from the historical six-slot bond fusion study.
+        # Build the alternative head after legacy initialization under a forked
+        # RNG, leaving every shared backbone tensor and the legacy path intact.
+        from .stage12_fusion import validate_stage12_mode, _MODE_CODES
+        self.stage12_fusion_mode = validate_stage12_mode(
+            getattr(config, 'stage12_fusion_mode', 'legacy'))
+        if self.stage12_fusion_mode != 'legacy':
+            if (self.bond_head_type != 'four_state_mlp' or self.bond_fusion_mode != 'concat'
+                    or self.theory_fusion_stage != 'late' or not all((
+                        self.bond_use_edge_repr, self.bond_use_diff_feature,
+                        self.bond_use_product_feature, self.use_theory_features))):
+                raise ValueError('Stage 12 requires original six-source late four-state head')
+            with torch.random.fork_rng(devices=[]):
+                from .stage12_fusion import make_wide_mlp, ThreeBranchFusionHead
+                self.bond_head = (make_wide_mlp(self.hidden_dim, config.dropout)
+                    if self.stage12_fusion_mode == 'wide_mlp' else
+                    ThreeBranchFusionHead(self.hidden_dim, config.dropout,
+                                          self.stage12_fusion_mode))
+            self.register_buffer('stage12_fusion_mode_code', torch.tensor(
+                _MODE_CODES[self.stage12_fusion_mode], dtype=torch.int64))
+            self.register_buffer('stage12_fusion_schema_code', torch.tensor(1, dtype=torch.int64))
+            self.register_buffer('stage12_fusion_source_roles', torch.arange(6, dtype=torch.int64))
+        self.enable_stage12_diagnostics = False
+        self.last_stage12_diagnostics = {}
+
         # Full-width residue sequence context is separate from the historical
         # AA-embedding adapter. Build only after every legacy initialization.
         from .node_context_conv import validate_node_conv_mode, node_conv_mode_code, node_conv_spec
@@ -831,6 +856,7 @@ class GraphTransformer(nn.Module):
         from .dynamic_edges import validate_edge_state_checkpoint
         from .bond_fusion_heads import validate_bond_fusion_checkpoint
         from .node_context_conv import validate_node_conv_checkpoint
+        from .stage12_fusion import validate_stage12_checkpoint
         from .utils import validate_virtual_node_checkpoint
         try:
             validate_attention_checkpoint(self, state_dict)
@@ -840,6 +866,7 @@ class GraphTransformer(nn.Module):
             validate_theory_fusion_checkpoint(self, state_dict)
             validate_edge_state_checkpoint(self, state_dict)
             validate_bond_fusion_checkpoint(self, state_dict)
+            validate_stage12_checkpoint(self, state_dict)
             validate_node_conv_checkpoint(self, state_dict)
             validate_virtual_node_checkpoint(self, state_dict)
         except ValueError as error:
@@ -1181,6 +1208,7 @@ class GraphTransformer(nn.Module):
         self.last_four_state_logits = None
         fusion_diagnostics = bool(self.enable_bond_fusion_diagnostics)
         self.last_bond_fusion_diagnostics = {}
+        self.last_stage12_diagnostics = {}
         if fusion_diagnostics:
             from .bond_fusion_heads import BOND_FUSION_SOURCES
             diagnostic_sources = list(BOND_FUSION_SOURCES[:2]) + [name for name, enabled in zip(
@@ -1256,6 +1284,21 @@ class GraphTransformer(nn.Module):
                     state_logits = self.bond_head(bond_feature_parts).float()
                     if fusion_diagnostics:
                         self.last_bond_fusion_diagnostics.update(self.bond_head.last_diagnostics)
+                elif self.stage12_fusion_mode in ('equal', 'softmax_gate',
+                                                  'softmax_gate_residual'):
+                    # bond_src/dst and theory_flat already index valid_bond_mask:
+                    # no padded key can contribute to a branch or its softmax.
+                    self.bond_head.enable_diagnostics = self.enable_stage12_diagnostics
+                    state_logits = self.bond_head(bond_feature_parts).float()
+                    if self.enable_stage12_diagnostics:
+                        weights = self.bond_head.last_source_weights
+                        self.last_stage12_diagnostics = {
+                            'mode': self.stage12_fusion_mode,
+                            'valid_bonds': int(h_src.size(0)),
+                            'source_order': ['residue_interactions', 'edge', 'theory'],
+                            'source_weight_mean': weights.float().mean(dim=0).cpu().tolist()
+                                if weights.numel() else [0.0, 0.0, 0.0],
+                        }
                 elif self.bond_fusion_mode == 'gated':
                     source_weights = torch.softmax(self.bond_fusion_gate(bond_features), dim=-1)
                     # Six normalized source weights give unit gates initially;

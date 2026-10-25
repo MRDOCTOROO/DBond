@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "stage": "S12",
+  "namespace": "four_state_stage12_gated_fusion_ops_v1",
+  "status": "implementing",
+  "source_commit": null,
+  "smoke": null,
+  "launch": null,
+  "terminal": null,
+  "audit_manifest": null,
+  "folds": ["1222", "2252", "3514", "6072", "9075"],
+  "training_base_seed": 42,
+  "validation_split_base_seed": 42,
+  "control": "S12-A",
+  "arms": [
+    {"id": "S12-A", "mode": "legacy", "status": "planned"},
+    {"id": "S12-B", "mode": "wide_mlp", "status": "planned"},
+    {"id": "S12-C", "mode": "equal", "status": "planned"},
+    {"id": "S12-D", "mode": "softmax_gate", "status": "planned"},
+    {"id": "S12-E", "mode": "softmax_gate_residual", "status": "planned"}
+  ],
+  "allowed_states": ["planned", "implementing", "smoke_passed", "submitted", "running", "completed", "audited", "failed", "blocked", "audit_failed"],
+  "note": "Separate from historical structural_queue_v1.json and all Stage 11 ops; pod smoke/training/final audit not yet run."
+}

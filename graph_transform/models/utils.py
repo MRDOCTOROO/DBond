@@ -167,6 +167,9 @@ class ModelConfig:
         # Independent from the binary/four-state supervision choice. Legacy
         # concat adds neither state-dict keys nor initialization RNG draws.
         self.bond_fusion_mode = 'concat'
+        # New three-branch Stage 12 study. The absent/default route has no
+        # checkpoint marker and preserves the original four-state head.
+        self.stage12_fusion_mode = 'legacy'
         self.use_charge_partition_features = False
         self.bond_cross_attention_heads = 4
         # Target-domain operational fragment matches, used only as training targets.
@@ -230,6 +233,8 @@ class ModelConfig:
         validate_edge_state_mode(self.edge_state_mode)
         from .bond_fusion_heads import validate_bond_fusion_mode
         validate_bond_fusion_mode(self.bond_fusion_mode)
+        from .stage12_fusion import validate_stage12_mode
+        validate_stage12_mode(self.stage12_fusion_mode)
         from .node_context_conv import validate_node_conv_mode
         validate_node_conv_mode(self.node_conv_mode)
         validate_virtual_node_mode(self.virtual_node_mode)
