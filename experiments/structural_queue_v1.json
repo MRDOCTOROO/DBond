@@ -498,13 +498,39 @@
       "event_acknowledged": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_k5_seed_ensemble_batch/20261025_105747|failed",
       "failure": "seed42/fold3514 archived-vs-replayed q_seq absolute difference 0.0002601059649 exceeded prespecified 0.00005 tolerance; all other audited metrics nearly matched and Top10 matched. Diagnostic second replay was exact but is not substituted into this failed batch. Two historical sequence scores only 4.2822e-6 apart; their adjacent rank swap exactly explains the difference, though first-run per-sequence scores were not archived.",
       "diagnostic_only": "/mnt/pvc/graphtrans/four_state_k5_seed_ensemble_ops/diagnostic_3514/diagnostic_summary.json"
+    },
+    {
+      "id": 13,
+      "name": "single_k5_same_fold_seed_ensemble_ranking_v2",
+      "status": "submitted",
+      "authorized_at_local": "2026-10-25",
+      "predecessor_failed_stage": 12,
+      "protocol": "experiments/k5_seed_ensemble_ranking_v2.md",
+      "ops": "/mnt/pvc/graphtrans/four_state_k5_seed_ensemble_v2_ops",
+      "batch_prefix": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_k5_seed_ensemble_v2_batch",
+      "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_k5_seed_ensemble_v2_batch/20261025_111655",
+      "gitrev": "5a27abd18554f2aa1060cf91467fd2a27f3fc339",
+      "tag": "dbond-k5-seed-ensemble-v2-20261025",
+      "submitted_at_utc": "2026-10-25T11:16:55.390681+00:00",
+      "launch": "/mnt/pvc/graphtrans/four_state_k5_seed_ensemble_v2_ops/launch.json",
+      "worker_pid": 1930410,
+      "gpu": 0,
+      "batch_size": 512,
+      "runner_sha256": "9edf22027a4205b719c247dd04797cdb644ea1cbc2910b29ac550eb970b95089",
+      "protocol_sha256": "4e45cfa08e03f8080350b67d8b7c596fcf24c9c466466c34c684b73449806f69",
+      "preflight_sha256": "54688947c9c9d6ecba9729f409c392c5bf8e9bb7566548e68e3b6a99ba6ffd9c",
+      "source_stages": [11, 8, 10],
+      "training_base_seeds": [42, 43, 45],
+      "fold_ids": [1222, 2252, 3514, 6072, 9075],
+      "arms": ["seed42_single_k5", "seed43_single_k5", "seed45_single_k5", "equal_q_mean_3seed"],
+      "action": "From scratch replay all five folds. Source identity is SHA plus smooth/classification metric replay; historical q_seq/Top10 drift recorded only as diagnostics. Fixed same-pass three-seed equal q mean and 0.5 threshold; independently recompute saved NPZ and report before exact completion-event ack. No auto-follow-up."
     }
   ],
   "auto_advance": false,
   "scheduling_update": {
     "date_local": "2026-10-25",
     "reason": "User authorized continued ranking exploration on the supported single-global-node k5 four-state model; stage12 is a fixed three-seed same-fold inference ensemble.",
-    "current_fusion_action": "Stage12 submitted; review only its exact completion event and do not auto-advance.",
+    "current_fusion_action": "Stage12 failed and was reviewed/acked; stage13 independently submitted with a revised historical ranking replay diagnostic. Review only exact stage13 completion event and do not auto-advance.",
     "requested_combination": {
       "bond_head_type": "four_state_mlp",
       "report": "/mnt/pvc/graphtrans/four_state_width_ops/report.md",
@@ -515,7 +541,7 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "No automatic follow-up after stage12. Untouched sequence-disjoint confirmation remains necessary for a paper claim; learned graph and chemical priors remain deferred.",
+    "next_new_experiment": "No automatic follow-up after stage13. Untouched sequence-disjoint confirmation remains necessary for a paper claim; learned graph and chemical priors remain deferred.",
     "serial_stage_ids": []
   },
   "auto_advance_allowlist": []
