@@ -275,7 +275,8 @@ def smoke(gpu: int, source_commit: str | None) -> None:
     from training.four_state_loss import four_state_cross_entropy
     from training.trainer import Trainer
     from training.pairwise_sequence_ranking import pairwise_sequence_logistic_loss
-    from train_graph_model import create_datasets, create_optimizer
+    from train_graph_model import (create_datasets, create_optimizer,
+                                   ranking_loss_checkpoint_protocol)
     from test_four_state_dynamic_edges import seed as seed_everything
 
     require(torch.cuda.is_available(), 'Pod CUDA required for smoke')
@@ -351,6 +352,16 @@ def smoke(gpu: int, source_commit: str | None) -> None:
                 trainer = Trainer(model, create_optimizer(model, arm_runtime),
                                   BinaryBondLoss(arm_runtime['loss']), device=torch.device(f'cuda:{gpu}'),
                                   config=arm_runtime)
+                ranking_protocol = ranking_loss_checkpoint_protocol(trainer, config_path(arm))
+                require(ranking_protocol is not None
+                        and ranking_protocol['mode'] == 'pairwise_logistic'
+                        and ranking_protocol['weight'] == ARMS[arm]
+                        and ranking_protocol['temperature'] == .1
+                        and ranking_protocol['min_target_delta'] == .05
+                        and ranking_protocol['target_source'] ==
+                        'folded_outer_training_soft_multi_only'
+                        and ranking_protocol['source_config_sha256'] == file_sha(config_path(arm)),
+                        f'{arm}: actual trainer ranking settings cannot be checkpoint-bound')
                 loss, stats = trainer._forward_pass(batch)
                 require(torch.isfinite(loss) and stats['valid_bond_count'] > 0,
                         f'{arm}: non-finite/no-bond real forward')
@@ -531,6 +542,10 @@ def launch(receipt_path: Path | None, source_commit: str | None) -> None:
 
 
 def make_audit_manifest(info: dict) -> dict:
+    import torch
+    from models.graph_transformer import GraphTransformer
+    from models.utils import build_model_config
+
     root = bound_run_root(info)
     status, batch = (read_json(root / name) for name in ('status.json', 'manifest.json'))
     require(status['status'] == 'completed' and status['root'] == batch['root'] == info['root']
@@ -587,6 +602,40 @@ def make_audit_manifest(info: dict) -> dict:
                     == info['prior']['target_manifests'][fold]
                     and pred_csv.is_file() and metric_csv.is_file() and checkpoint.is_file(),
                     f'{arm_name}/{fold}: split, test or outputs differ from reviewed source')
+            saved = torch.load(checkpoint, map_location='cpu', weights_only=False)
+            actual_rank = saved.get('extra_state', {}).get('ranking_loss_protocol', {})
+            actual_rng = saved.get('extra_state', {}).get('training_rng_protocol', {})
+            require(actual_rank.get('name') == 'train_only_sequence_pairwise_logistic_v1'
+                    and actual_rank.get('mode') == 'pairwise_logistic'
+                    and actual_rank.get('weight') == ARMS[arm_name]
+                    and actual_rank.get('temperature') == .1
+                    and actual_rank.get('min_target_delta') == .05
+                    and actual_rank.get('target_source') ==
+                    'folded_outer_training_soft_multi_only'
+                    and actual_rank.get('source_config_sha256') == file_sha(runtime_path)
+                    and actual_rng.get('training_seed') == info['fold_seeds'][fold]
+                    and actual_rng.get('validation_split_seed') == info['fold_seeds'][fold],
+                    f'{arm_name}/{fold}: checkpoint actual ranking loss or RNG protocol differs')
+            model_config = saved.get('config', {})
+            require(model_config.get('hidden_dim') == 256
+                    and model_config.get('node_conv_mode') == 'single_k5'
+                    and model_config.get('virtual_node_mode') == 'single'
+                    and model_config.get('bond_head_type') == 'four_state_mlp'
+                    and model_config.get('bond_fusion_mode') == 'concat',
+                    f'{arm_name}/{fold}: checkpoint architecture differs')
+            strict_config = dict(runtime, model=model_config)
+            with torch.random.fork_rng(devices=[]):
+                model = GraphTransformer(build_model_config(strict_config)).cpu()
+            model.load_state_dict(saved['model_state_dict'], strict=True)
+            require(int(model.four_state_mode_code.item()) == 4
+                    and int(model.node_conv_mode_code.item()) == 1
+                    and int(model.node_conv_schema_code.item()) == 1
+                    and 'virtual_node_mode_code' not in saved['model_state_dict']
+                    and all(torch.isfinite(parameter).all().item()
+                            for parameter in model.parameters()),
+                    f'{arm_name}/{fold}: checkpoint strict restore or mode marker failed')
+            parameter_count = sum(parameter.numel() for parameter in model.parameters())
+            del model, saved
             with pred_csv.open(encoding='utf-8-sig', newline='') as stream:
                 reader = csv.DictReader(stream)
                 require(reader.fieldnames is not None and
@@ -627,6 +676,8 @@ def make_audit_manifest(info: dict) -> dict:
                             'split_seed': runtime['training']['validation_split_seed'],
                             'lambda': ARMS[arm_name], 'tau': .1, 'delta': .05,
                             'max_seq_len': runtime['data']['max_seq_len'],
+                            'parameter_count': parameter_count,
+                            'ranking_loss_protocol': actual_rank,
                             'source_commit': info['gitrev'],
                             'evaluation_id': evaluation_id,
                             'prediction_rows': prediction_rows,

@@ -13,6 +13,7 @@ import re
 import yaml
 import logging
 import json
+import hashlib
 import math
 import time
 from datetime import datetime
@@ -988,6 +989,23 @@ def create_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any]) -> opti
     return scheduler
 
 
+def ranking_loss_checkpoint_protocol(trainer, source_config_path):
+    """Record the loss settings actually consumed by a logistic ranking trainer."""
+    if trainer.ranking_loss_mode != 'pairwise_logistic':
+        return None
+    with open(source_config_path, 'rb') as stream:
+        config_sha256 = hashlib.sha256(stream.read()).hexdigest()
+    return {
+        'name': 'train_only_sequence_pairwise_logistic_v1',
+        'mode': trainer.ranking_loss_mode,
+        'weight': trainer.ranking_loss_weight,
+        'temperature': trainer.ranking_temperature,
+        'min_target_delta': trainer.ranking_min_target_delta,
+        'target_source': 'folded_outer_training_soft_multi_only',
+        'source_config_sha256': config_sha256,
+    }
+
+
 def save_checkpoint_with_selection(model, optimizer, epoch, loss, metrics,
                                    filepath, selection, is_best=False, extra_state=None):
     """Keep the existing checkpoint schema and persist F1-selection progress.
@@ -1318,6 +1336,10 @@ def main():
             'four_state_conditional_weight': trainer.four_state_conditional_weight,
             'four_state_union_brier_weight': trainer.four_state_union_brier_weight,
         })
+    ranking_protocol = ranking_loss_checkpoint_protocol(trainer, args.config)
+    if ranking_protocol is not None:
+        transfer_extra_state = dict(transfer_extra_state or {},
+                                    ranking_loss_protocol=ranking_protocol)
     if union_brier_protocol:
         # Snapshot once after seed, dataset paths and checkpoint directory resolve.
         resolved_config_path = os.path.abspath(os.path.join(
