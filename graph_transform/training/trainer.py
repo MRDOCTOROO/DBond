@@ -46,7 +46,24 @@ class Trainer:
         self.model = model
         self.optimizer = optimizer
         self.criterion = criterion
+        self.config = config or {}
         self.four_state_enabled = getattr(model, 'bond_head_type', 'concat_mlp') == 'four_state_mlp'
+        rank_cfg = self.config.get('loss', {})
+        self.ranking_loss_mode = str(rank_cfg.get('ranking_loss_mode', 'legacy_hinge'))
+        self.ranking_loss_weight = float(rank_cfg.get('ranking_loss_weight', 0.0))
+        self.ranking_temperature = float(rank_cfg.get('ranking_temperature', 0.1))
+        self.ranking_min_target_delta = float(rank_cfg.get('ranking_min_target_delta', 0.05))
+        if self.ranking_loss_mode not in ('legacy_hinge', 'pairwise_logistic'):
+            raise ValueError('Unknown ranking_loss_mode')
+        if not math.isfinite(self.ranking_loss_weight) or self.ranking_loss_weight < 0:
+            raise ValueError('ranking_loss_weight must be finite and nonnegative')
+        if self.ranking_loss_mode == 'pairwise_logistic':
+            if not self.four_state_enabled:
+                raise ValueError('Stage14 pairwise logistic requires four-state head')
+            if not math.isfinite(self.ranking_temperature) or self.ranking_temperature <= 0:
+                raise ValueError('ranking_temperature must be finite and positive')
+            if not math.isfinite(self.ranking_min_target_delta) or not 0 <= self.ranking_min_target_delta < 1:
+                raise ValueError('ranking_min_target_delta must be finite and in [0,1)')
         self.four_state_conditional_weight = (config or {}).get('loss', {}).get('four_state_conditional_weight', 1.0)
         cw = self.four_state_conditional_weight
         if (isinstance(cw, bool) or not isinstance(cw, (int, float))
@@ -64,7 +81,8 @@ class Trainer:
         if self.four_state_enabled:
             lc = config.get('loss', {})
             if (lc.get('main_loss') != 'binary_cross_entropy' or lc.get('handle_imbalance', False)
-                    or lc.get('use_auxiliary_losses', False) or float(lc.get('ranking_loss_weight', 0)) != 0):
+                    or lc.get('use_auxiliary_losses', False)
+                    or (self.ranking_loss_mode == 'legacy_hinge' and self.ranking_loss_weight != 0)):
                 raise ValueError('four-state joint training requires the plain BCE-compatible control configuration')
         self.scheduler = scheduler
         self.device = device
@@ -145,6 +163,11 @@ class Trainer:
         total_ion12_loss = 0.0
         total_ion12_bond_loss = 0.0
         total_main_loss = 0.0
+        total_ranking_loss = 0.0
+        total_ranking_pairs = 0
+        total_ranking_zero_pair_batches = 0
+        total_ranking_grad_abs = 0.0
+        total_ranking_grad_probe_seconds = 0.0
         total_samples = 0
         num_batches = 0
         total_fetch_wait_time = 0.0
@@ -194,6 +217,11 @@ class Trainer:
             total_dbond_style_loss += loss_stats['dbond_style_loss'] * sample_count
             total_aux_bond_loss += loss_stats.get('aux_bond_loss', 0.0) * sample_count
             total_peptide_aux_loss += loss_stats.get('peptide_aux_loss', 0.0) * sample_count
+            total_ranking_loss += loss_stats.get('ranking_loss', 0.0)
+            total_ranking_pairs += int(loss_stats.get('ranking_pairs', 0))
+            total_ranking_zero_pair_batches += int(loss_stats.get('ranking_zero_pair_batch', 0))
+            total_ranking_grad_abs += loss_stats.get('ranking_output_gradient_abs', 0.0)
+            total_ranking_grad_probe_seconds += loss_stats.get('ranking_grad_probe_seconds', 0.0)
             if self.ion12_enabled:
                 total_ion12_loss += loss_stats['ion12_aux_loss'] * sample_count
                 total_ion12_bond_loss += loss_stats['ion12_aux_loss'] * valid_bond_count
@@ -286,6 +314,13 @@ class Trainer:
         metrics['dbond_style_loss'] = total_dbond_style_loss / total_samples if total_samples > 0 else 0.0
         metrics['aux_bond_loss'] = total_aux_bond_loss / total_samples if total_samples > 0 else 0.0
         metrics['peptide_aux_loss'] = total_peptide_aux_loss / total_samples if total_samples > 0 else 0.0
+        if self.ranking_loss_mode == 'pairwise_logistic':
+            metrics['ranking_loss_raw_batch_mean'] = total_ranking_loss / num_batches if num_batches else 0.0
+            metrics['ranking_pairs_total'] = total_ranking_pairs
+            metrics['ranking_zero_pair_batches'] = total_ranking_zero_pair_batches
+            metrics['ranking_output_gradient_abs_batch_mean'] = total_ranking_grad_abs / num_batches if num_batches else 0.0
+            metrics['ranking_grad_probe_seconds_total'] = total_ranking_grad_probe_seconds
+            metrics['ranking_grad_probe_seconds_batch_mean'] = total_ranking_grad_probe_seconds / num_batches if num_batches else 0.0
         if self.ion12_enabled:
             metrics['ion12_aux_loss'] = total_ion12_loss / total_samples if total_samples > 0 else 0.0
             metrics['main_loss'] = total_main_loss / total_valid_bonds if total_valid_bonds > 0 else 0.0
@@ -480,11 +515,33 @@ class Trainer:
         loss, aux_stats = self._apply_auxiliary_head_losses(
             loss, batch_data, self._soft_targets(batch_data, targets), row_weights)
 
-        # 序列级 pairwise ranking loss（loss.ranking_loss_weight > 0 启用）：
-        # 肽级断裂比的 pairwise margin，直接优化 q_spearman_pep_seq / enrichment_seq
-        rank_weight = float(self.config.get('loss', {}).get('ranking_loss_weight', 0.0))
+        # 序列级排序辅助项：保留历史 hinge 默认模式；Stage14 显式启用
+        # batch-local logistic 代理目标，不等同于完整验证集上的 q_seq 指标。
+        rank_weight = self.ranking_loss_weight
         ranking_loss_val = 0.0
-        if rank_weight > 0.0:
+        ranking_pairs = 0
+        ranking_zero_pair_batch = 0
+        ranking_gradient_abs = 0.0
+        ranking_grad_probe_seconds = 0.0
+        if self.ranking_loss_mode == 'pairwise_logistic' and self.model.training:
+            from .pairwise_sequence_ranking import pairwise_sequence_logistic_loss
+
+            ranking_loss, rank_stats = pairwise_sequence_logistic_loss(
+                predictions_full, batch_data,
+                temperature=self.ranking_temperature,
+                min_target_delta=self.ranking_min_target_delta)
+            ranking_pairs = rank_stats['eligible_pairs']
+            ranking_zero_pair_batch = rank_stats['zero_pair_batch']
+            ranking_loss_val = float(ranking_loss.detach().item())
+            if rank_weight > 0.0 and ranking_pairs > 0:
+                probe_started = time.perf_counter()
+                rank_gradient = torch.autograd.grad(
+                    rank_weight * ranking_loss, predictions_full, retain_graph=True)[0]
+                valid = batch_data['label_mask'].bool()
+                ranking_gradient_abs = float(rank_gradient[valid].abs().mean().detach().item())
+                ranking_grad_probe_seconds = time.perf_counter() - probe_started
+            loss = loss + rank_weight * ranking_loss
+        elif self.ranking_loss_mode == 'legacy_hinge' and rank_weight > 0.0:
             ranking_loss = self._sequence_ranking_loss(predictions_full, batch_data)
             loss = loss + rank_weight * ranking_loss
             ranking_loss_val = float(ranking_loss.item())
@@ -513,6 +570,10 @@ class Trainer:
             'ion12_aux_loss': aux_stats.get('ion12_aux_loss', 0.0),
             'main_loss': main_loss_value,
             'ranking_loss': ranking_loss_val,
+            'ranking_pairs': ranking_pairs,
+            'ranking_zero_pair_batch': ranking_zero_pair_batch,
+            'ranking_output_gradient_abs': ranking_gradient_abs,
+            'ranking_grad_probe_seconds': ranking_grad_probe_seconds,
         }
 
     def _soft_targets(self, batch_data: Dict[str, Any], targets: torch.Tensor) -> torch.Tensor:
