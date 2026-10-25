@@ -41,7 +41,7 @@ The completed batch writes `registry.json` and `audit_manifest.json`; it is
 weights, source bindings, raw predictions, and metrics. D is recorded only as
 an alias. Stage 14 may start only after that audit passes.
 
-The `audit_manifest.json` interface is `{stage, root, source_commit, arms}`.
+The `audit_manifest.json` interface is `{stage, ops, root, source_commit, arms}`.
 Each arm/fold record includes seed, prediction CSV, test CSV, metric CSV,
 checkpoint, runtime config, internal train/validation CSVs, and SHA-256 hashes.
 The worker rechecks folded train, test, full-row validation, target manifest,

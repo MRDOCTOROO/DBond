@@ -274,7 +274,7 @@ def launch(args):
     require(current_revision is None or current_revision == source_commit,
             'Declared source commit differs from pod Git HEAD')
     info = {'status': 'submitted', 'stage': 'S13', 'created_at': now(),
-            'ops_root': str(ops), 'root': str(run_root),
+            'ops': str(ops), 'ops_root': str(ops), 'root': str(run_root),
             'run_root': str(run_root),
             'source_revision': source_commit,
             'source_tree_sha256': proof['source_tree_sha256'],
@@ -306,6 +306,7 @@ def launch(args):
         # Once a worker exists, only that worker may issue the terminal event.
         if process is None and (ops / 'launch.json').is_file():
             failure = {'status': 'failed', 'stage': 'S13', 'finished_at': now(),
+                       'ops': str(ops),
                        'root': str(run_root), 'run_root': str(run_root),
                        'source_revision': source_commit,
                        'error': f'Launch initialization failed: {type(error).__name__}: {error}',
@@ -364,6 +365,9 @@ def register_outputs(info, ops):
     from train_5fold import _stable_fold_seed, make_fold_config
 
     root = Path(info['run_root'])
+    require(info['ops'] == info['ops_root'] == str(ops)
+            and info['root'] == info['run_root'] == str(root),
+            'Stage 13 launch/ops/run-root binding mismatch')
     status = read_json(root / 'status.json')
     manifest = read_json(root / 'manifest.json')
     require(status['status'] == 'completed' and len(manifest['arms']) == 3,
@@ -376,6 +380,7 @@ def register_outputs(info, ops):
             and all(item['status'] == 'completed' for item in status['arms']),
             'Batch source snapshot or arm completion record mismatch')
     registry = {'status': 'completed_unreviewed', 'stage': 'S13',
+                'ops': str(ops), 'root': str(root),
                 'created_at': now(), 'source_revision': info['source_revision'],
                 'source_tree_sha256': info['source_tree_sha256'],
                 'source_files_sha256': info['source_files_sha256'],
@@ -592,7 +597,8 @@ def register_outputs(info, ops):
                 < next(iter(parameter_counts['S13-C'])),
             'Formal checkpoint parameter counts violate the declared A/C matching')
     audit_manifest = {
-        'stage': 'S13', 'root': str(root), 'source_commit': info['source_revision'],
+        'stage': 'S13', 'ops': str(ops), 'root': str(root),
+        'source_commit': info['source_revision'],
         'source_tree_sha256': info['source_tree_sha256'],
         'source_files_sha256': info['source_files_sha256'],
         'arms': audit_rows,
@@ -617,7 +623,9 @@ def worker(args):
         require(run_root.parent == STAGE13_RUN_BASE
                 and run_root.name.startswith('dbond_s13_multiscale_conv_20261026_'),
                 'Stage 13 run root escaped the dedicated checkpoint namespace')
-        require(info['root'] == info['run_root'] and info['status'] == 'submitted'
+        require(info['ops'] == info['ops_root'] == str(ops)
+                and info['root'] == info['run_root']
+                and info['status'] == 'submitted'
                 and info['source_files_sha256'] == source_fingerprint()
                 and info['source_tree_sha256'] == fingerprint_sha(source_fingerprint())
                 and info['smoke_sha256'] == sha(ops / 'smoke.json')
@@ -643,6 +651,7 @@ def worker(args):
                                  detail='Independent metric audit pending'))
         write_new_json(ops / 'terminal.json',
                        {'status': 'completed', 'stage': 'S13', 'finished_at': now(),
+                        'ops': str(ops),
                         'root': info['root'], 'run_root': info['run_root'],
                         'source_revision': info['source_revision'],
                         'registry': str(ops / 'registry.json'),
@@ -656,6 +665,7 @@ def worker(args):
                                  detail=f'{type(error).__name__}: {error}'))
         write_new_json(ops / 'terminal.json',
                        {'status': 'failed', 'stage': 'S13', 'finished_at': now(),
+                        'ops': str(ops),
                         'root': info['root'], 'run_root': info['run_root'],
                         'source_revision': info['source_revision'],
                         'error': f'{type(error).__name__}: {error}',
