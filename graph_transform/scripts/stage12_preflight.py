@@ -53,10 +53,26 @@ def config_path(arm):
     return ROOT / f'graph_transform/config/pre_synthesis_stage12_fusion_{arm}.yaml'
 
 
-def comparable(config, arm):
+def comparable(config, arm, artifact_root=None):
     value = copy.deepcopy(config)
     value['experiment'].pop('description', None)
     value['model'].pop('stage12_fusion_mode', None)
+    if artifact_root is not None:
+        # make_fold_config receives one distinct temporary output root per arm.
+        # Normalize only the five generated output paths; split inputs, seeds,
+        # masks, loss, and every other setting must still compare exactly.
+        for section, key in (('training', 'checkpoint_dir'),
+                             ('logging', 'log_dir'),
+                             ('logging', 'tensorboard_log_dir'),
+                             ('evaluation', 'output_metric_dir'),
+                             ('evaluation', 'output_pred_dir')):
+            path = Path(value[section][key])
+            try:
+                suffix = path.relative_to(artifact_root)
+            except ValueError as error:
+                raise AssertionError(
+                    f'{arm}: {section}.{key} escaped its temporary output root') from error
+            value[section][key] = str(Path('ARM_ARTIFACT_ROOT') / suffix)
     text = json.dumps(value, sort_keys=True)
     return text.replace(f'stage12_fusion_{arm}', 'stage12_fusion_ARM')
 
@@ -235,8 +251,9 @@ def run(args):
                 cfg['data']['cache_graphs'] = False
                 cfg['data']['cache_dir'] = str(Path(temp) / 'cache' / fold)
                 fold_configs[arm] = cfg
-            base_fold = comparable(fold_configs[ARMS[0]], ARMS[0])
-            require(all(comparable(fold_configs[arm], arm) == base_fold for arm in ARMS),
+            base_fold = comparable(fold_configs[ARMS[0]], ARMS[0], Path(temp) / ARMS[0])
+            require(all(comparable(fold_configs[arm], arm, Path(temp) / arm) == base_fold
+                        for arm in ARMS),
                     f'{fold}: resolved configs are not paired')
             train, val, test = create_datasets(fold_configs[ARMS[0]])
             sets = [set(dataset.data['seq']) for dataset in (train, val, test)]
