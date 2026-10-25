@@ -469,13 +469,38 @@
       "dashboard": "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops/parallel_global_dashboard.html",
       "local_receipts": "F:/codexout/dbond_parallel_global_replication_results_20261025/",
       "outcome": "Seed42 same-round cross vs single: F1 +0.031680pp (3/5), AUC -0.000382, q-Brier +0.001713, spectrum harmonic F1 -0.000979pp. All four preregistered engineering gates failed. q_seq +0.001994 and Top10 +0.007288 have weak positive mean directions, not robust ordering evidence. Source and raw CSV independent audits passed; retain single-k5 as stronger candidate. Untouched sequence-disjoint confirmation needed before paper-main promotion."
+    },
+    {
+      "id": 12,
+      "name": "single_k5_same_fold_seed_ensemble_ranking",
+      "status": "submitted",
+      "authorized_at_local": "2026-10-25",
+      "protocol": "experiments/k5_seed_ensemble_ranking_v1.md",
+      "ops": "/mnt/pvc/graphtrans/four_state_k5_seed_ensemble_ops",
+      "batch_prefix": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_k5_seed_ensemble_batch",
+      "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/four_state_k5_seed_ensemble_batch/20261025_105747",
+      "gitrev": "5adaa00ffdb50f04e764139ae53de39d73afa7ab",
+      "tag": "dbond-k5-seed-ensemble-v1-20261025",
+      "launched_at_utc": "2026-10-25T10:57:47.956982+00:00",
+      "launch": "/mnt/pvc/graphtrans/four_state_k5_seed_ensemble_ops/launch.json",
+      "worker_pid": 1921365,
+      "gpu": 0,
+      "batch_size": 512,
+      "runner_sha256": "18e11dbe169fb3ebda79cd56010e56bea6596d1da985ae7f32c36e9c378e16e6",
+      "protocol_sha256": "add4915a2d18ae28faa548e0f6c01db33cbf25a8d54750438c0feb76bd8dd65b",
+      "preflight_sha256": "54688947c9c9d6ecba9729f409c392c5bf8e9bb7566548e68e3b6a99ba6ffd9c",
+      "source_stages": [11, 8, 10],
+      "training_base_seeds": [42, 43, 45],
+      "fold_ids": [1222, 2252, 3514, 6072, 9075],
+      "arms": ["seed42_single_k5", "seed43_single_k5", "seed45_single_k5", "equal_q_mean_3seed"],
+      "action": "Inference-only same-fold ensemble with fixed equal weights and 0.5 threshold. Verify source checkpoints and archived metrics, audit all five fold paired ranking and classification results, report and ack; no further experiment automatically."
     }
   ],
   "auto_advance": false,
   "scheduling_update": {
     "date_local": "2026-10-25",
-    "reason": "User authorized a seed42 same-round independent replication of single-k5 versus parallel4_cross-k5 after stage10 review, followed by a paper-readiness decision.",
-    "current_fusion_action": "Completed, independently reviewed, reported and acked; no automatic follow-up.",
+    "reason": "User authorized continued ranking exploration on the supported single-global-node k5 four-state model; stage12 is a fixed three-seed same-fold inference ensemble.",
+    "current_fusion_action": "Stage12 submitted; review only its exact completion event and do not auto-advance.",
     "requested_combination": {
       "bond_head_type": "four_state_mlp",
       "report": "/mnt/pvc/graphtrans/four_state_width_ops/report.md",
@@ -486,7 +511,7 @@
       "hidden_dim": 128,
       "status": "already_completed_and_reviewed"
     },
-    "next_new_experiment": "No automatic experiment. Stage11 reviewed and acked. Any confirmatory untouched sequence-disjoint evaluation needs separate user authorization; learned graph and chemical priors remain deferred.",
+    "next_new_experiment": "No automatic follow-up after stage12. Untouched sequence-disjoint confirmation remains necessary for a paper claim; learned graph and chemical priors remain deferred.",
     "serial_stage_ids": []
   },
   "auto_advance_allowlist": []
