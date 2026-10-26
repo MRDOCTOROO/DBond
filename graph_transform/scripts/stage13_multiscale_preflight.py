@@ -53,6 +53,7 @@ def config_protocol(config):
     value = copy.deepcopy(config)
     value['experiment'].pop('name', None)
     value['experiment'].pop('description', None)
+    value['experiment'].pop('base_name', None)
     value['model'].pop('node_conv_mode', None)
     for key in ('cache_dir', 'cache_dir_template'):
         value['data'].pop(key, None)
