@@ -1,15 +1,58 @@
-# Stage 14: training-only pairwise ranking auxiliary loss
+# Stage 14: minimal train-only pairwise ranking test
 
-This is an independent same-round four-arm ablation on the original single-global-node, single-scale Conv1D `k=5`, H256, 3GCN+2GAT, FiLM, late/static/concat/nocharge, four-state α=1/Brier=0 model. The four arms differ only in `loss.ranking_loss_weight`: `0`, `0.01`, `0.05`, `0.10`. Every arm uses `loss.ranking_loss_mode=pairwise_logistic`, temperature `0.1`, target gap strictly greater than `0.05`, the original random row sampler, training base seed 42 and internal validation split base seed 42. Lambda zero computes pair-availability diagnostics but contributes exactly zero ranking gradient. It is the required fair control.
+The revised authorized budget trains **only** the original single-global-node,
+single-scale Conv1D `k=5`, H256 four-state model with pairwise-logistic loss
+weight `lambda=0.05`, temperature `tau=0.1`, and minimum target gap `0.05`.
+The five fixed sequence-isolated outer folds use training base seed 42 and
+internal split base seed 42. This is five new models, one per fold. Lambda
+0.01 and 0.10 are cancelled; neither is trained or used for selection.
 
-The existing `Trainer._sequence_ranking_loss` is a historical batch-local **hinge** loss with a `ranking_margin` parameter. It previously yielded a negative result. This study leaves that code and its default route intact. The new optional logistic route is a different loss. The existing peptide auxiliary-head RankNet loss is also distinct: Stage 14 directly constrains the four-state union prediction, adds no head, and changes no inference parameters.
+The pairwise term acts on the existing union bond logit. Folded outer-training
+rows supply soft-q labels. Within an ordinary shuffled minibatch, each
+condition is averaged first, then conditions are averaged within a sequence;
+only distinct-sequence pairs whose mean soft-q gap exceeds 0.05 contribute to
+the logistic objective. The training DataLoader retains its original random
+row shuffle, batch size 128, drop-last behavior and group-uniform folded
+training weights. The algorithm does **not** introduce a sequence-aware
+sampler. Batch-local pairs are a stochastic training proxy for the complete
+sequence-level `q_seq` metric; they are not full-dataset pair enumeration.
 
-Four-state output `[none,b,y,both]` maps to a union bond probability `q=1−P(none)` via the existing `union_logit` model output. For each folded outer-training condition row, the training objective averages `sigmoid(union_logit)` and `soft_multi` over valid bonds. It averages repeated rows within each `(sequence,charge,NCE)` condition, then gives conditions equal weight within each sequence. A minibatch forms only unordered **different-sequence** pairs with absolute mean target gap `>0.05`, applying `softplus(−sign(Δtarget)·Δprediction/0.1)`. No external test label, q or score enters training; the fold's outer-train-only q source and sequence-disjoint internal split are SHA-bound to the reviewed Stage 11 evidence during pod smoke. The existing random row sampler means minibatches may contain only a subset of a sequence's conditions. This is a stochastic proxy for the full `q_spearman_pep_seq` metric, whose evaluation groups all conditions first, then sequences. Batch legal-pair count, zero-pair count, raw rank loss, weighted output-gradient magnitude, and ranking computation/probe host-wall time are recorded for every epoch. The exact full-sequence metric is recomputed from predictions only after training.
+The reviewed Stage 11 single-global-node `k=5`, seed42 weights are the
+candidate comparison baseline **only after** the pod verifies model, data,
+training, optimizer, checkpoint-selection, threshold and padding rules. The
+new launcher checks the historical configuration against a zero-weight
+control configuration after excluding only artifact locations and the added
+ranking fields. Pod smoke constructs the zero-weight model in memory and
+verifies exact four-state CE/gradient, identical initialization, pair
+availability and absence of RNG consumption. The zero-weight model is not
+trained. Stage 11 result, review and checkpoint registry hashes, all five
+train/validation/test/target hashes, and source lineage are frozen into the
+Stage 14 launch and manifest. If these checks fail, stop; do not claim the
+historical baseline is matched. A new five-fold lambda-zero control is
+permitted only if an actual sampling/protocol mismatch is identified and
+explicitly recorded under the user's conditional baseline rule.
 
-All four arms use original sequence-grouped external folds `1222,2252,3514,6072,9075`, group-uniform folded training, complete original-spectrum internal validation, `max_f1` checkpoint selection, and fixed threshold 0.5 with all valid-bond metrics padding-free. No epoch, threshold, λ, τ, δ or seed is chosen using external test data. The pod-only ops path is `/mnt/pvc/graphtrans/dbond_s14_pairwise_ranking_20261026_ops`; its run root is under `/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/stage14_pairwise_batch/<timestamp>`. Stage 13 must first produce an independently audited receipt at `/mnt/pvc/graphtrans/dbond_s13_multiscale_conv_20261026_ops/independent_audit/audit_receipt.json`; both `smoke` and `launch` bind its SHA to the Stage 13 launch, completed terminal, source commit, run root, and audit manifest. The `launch` CLI requires the exact receipt via `--stage13-audit`. `smoke` must pass once before `launch`. `worker` creates `terminal.json` only after all 20 fold runs and an `audit_manifest.json` containing actual arm/fold/seed/λ/τ/δ/max sequence length, source commit, train/validation/test/prediction/metric/checkpoint/config paths and SHA256s. Independent pod audit still must strictly restore all 20 checkpoints, verify same-pass prediction provenance and recompute all metrics before any scientific interpretation or acknowledgment.
+No external test data select the epoch, threshold, lambda or seed. The fixed
+threshold is 0.5; checkpoint selection uses internal valid-bond F1 on the
+complete original-spectrum validation source. After five models finish, the
+frozen worker registers actual checkpoint/config/prediction/log/source SHA
+and terminal status. Independent pod audit strictly restores each checkpoint
+and recomputes same-pass padding-free metrics. Because the candidate-only
+batch has no new lambda-zero arm, the formal batch audit must be followed by
+a separately SHA-bound pod comparison to the reviewed historical Stage 11
+single-k5 seed42 outputs; a self-comparison of lambda0.05 is not an efficacy
+result. Report all five paired differences and sample SD, including any
+negative bond-F1/spectrum-F1/calibration outcomes and ranking gains. Apply
+the previously declared Stage 14 screening gates without changing them.
 
-Primary comparison is each positive λ against same-round λ=0. Predeclared screening gates: mean `q_seq` improvement ≥0.01 with ≥4/5 fold wins; mean Top10 enrichment improvement ≥0.01; Bond-F1 degradation no worse than 0.20 percentage points, spectrum-F1 degradation no worse than 0.20 percentage points, and q-Brier degradation no worse than 0.001. All arms and metrics, paired fold differences, SDs, time, memory and parameters must be reported. Five overlapping folds and one initialization are exploratory evidence, not five independent replications. Failed smoke, source binding or run is a halt; no automatic retry or model promotion.
-
-If the batch `status.json` is completed but registration of `audit_manifest.json` or `terminal.json` fails, an operator may run `stage14_pairwise_ops.py finalize --source-commit <exact-40-hex> --stage13-audit /mnt/pvc/graphtrans/dbond_s13_multiscale_conv_20261026_ops/independent_audit/audit_receipt.json` from the same frozen source snapshot. This command never starts a worker or runs training. It rechecks the frozen source, Stage 13 audit, smoke, raw inputs and all 20 finished checkpoints, then writes or verifies the audit manifest and completed terminal. If a failed terminal exists, the operator must also supply `--recover-failed-terminal`; only a post-training registration failure may be replaced, and the prior terminal is archived byte-for-byte under ops with its SHA in the recovered terminal. This explicit path also covers a missing terminal. A completed matching terminal is idempotently verified. Epoch progress is never consulted. The audit manifest binds each fold's completed training log SHA and reports only observed `training_plus_final_evaluation_seconds`, `test_evaluation_and_export_seconds`, and peak allocated GPU memory recorded in epoch logs; standalone inference time and process peak RAM are unavailable and remain unestimated.
-
-This local implementation is **not** pod-validated or launched. It is an isolated snapshot for parent review and integration. All numerical work, training, metric recalculation and plotting are reserved for the authorized pod.
+Stage 14 starts only after the revised minimal Stage 13 has an independent
+audited receipt at
+`/mnt/pvc/graphtrans/dbond_s13_minimal_c64_20261026_ops/independent_audit/audit_receipt.json`.
+The dedicated Stage 14 ops path is
+`/mnt/pvc/graphtrans/dbond_s14_minimal_pairwise_20261026_ops` and its run root
+is under `.../stage14_minimal_pairwise_batch/<timestamp>`. The source must be
+frozen to a new exact Git commit, deployed in a separate pod checkout,
+smoked once, and launched once on genuinely idle GPUs. Old four-arm source
+commit `1eb4570` must not be launched. Five overlapping folds and one seed
+are exploratory evidence; passing the engineering gate permits at most one
+predeclared seed43 five-fold replication, not automatic manuscript promotion.

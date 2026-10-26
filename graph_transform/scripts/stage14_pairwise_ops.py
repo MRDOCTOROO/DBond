@@ -1,4 +1,4 @@
-"""Pod-only Stage14 same-round pairwise-ranking sweep (four lambda arms).
+"""Pod-only Stage14 minimal pairwise-ranking test (lambda 0.05 only).
 
 `smoke` and `launch` are the training operator actions. `worker` runs one
 immutable batch. `finalize` only registers an already completed batch after
@@ -31,13 +31,18 @@ import yaml
 from data.row_validation import file_sha
 from train_5fold import _stable_fold_seed, make_fold_config
 
-OPS = Path('/mnt/pvc/graphtrans/dbond_s14_pairwise_ranking_20261026_ops')
-CHECKPOINT_BASE = Path('/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/stage14_pairwise_batch')
-STAGE13_OPS = Path('/mnt/pvc/graphtrans/dbond_s13_multiscale_conv_20261026_ops')
+OPS = Path('/mnt/pvc/graphtrans/dbond_s14_minimal_pairwise_20261026_ops')
+CHECKPOINT_BASE = Path('/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/stage14_minimal_pairwise_batch')
+STAGE13_OPS = Path('/mnt/pvc/graphtrans/dbond_s13_minimal_c64_20261026_ops')
 STAGE13_AUDIT = STAGE13_OPS / 'independent_audit/audit_receipt.json'
 PRIOR = Path('/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops')
 TARGETS = Path('/mnt/pvc/graphtrans/four_state_targets_v1')
-ARMS = {'lambda0': 0.0, 'lambda001': 0.01, 'lambda005': 0.05, 'lambda010': 0.10}
+ARMS = {'lambda005': 0.05}
+# The zero-weight arm is constructed only during smoke to prove exact legacy
+# four-state CE/gradient and unchanged initialization.  It is never trained.
+SMOKE_ARMS = {'lambda0': 0.0, **ARMS}
+HISTORICAL_BASELINE_CONFIG = (
+    REPO / 'graph_transform/config/pre_synthesis_four_state_parallel_global_replication_single.yaml')
 FOLDS = ('1222', '2252', '3514', '6072', '9075')
 # The shared venv supplies only the interpreter and installed packages.  Every
 # script, config, and Python import used by this batch comes from REPO.
@@ -129,11 +134,15 @@ def committed_source_provenance(bound: dict[str, str], gitrev: str) -> dict:
                     f'Uncommitted production source: {relative}')
             exceptions.append({'path': relative, 'live_sha256': actual_sha, 'commit_sha256': blob_sha})
     require(len(exceptions) <= 1, 'Unexpected dirty Python source')
-    for arm in ARMS:
+    for arm in SMOKE_ARMS:
         relative = str(config_path(arm).relative_to(REPO)).replace('\\', '/')
         blob = subprocess.check_output(['git', 'show', f'{gitrev}:{relative}'], cwd=REPO)
         require(hashlib.sha256(blob).hexdigest() == file_sha(config_path(arm)),
                 f'{arm}: config differs from committed source')
+    relative = str(HISTORICAL_BASELINE_CONFIG.relative_to(REPO)).replace('\\', '/')
+    blob = subprocess.check_output(['git', 'show', f'{gitrev}:{relative}'], cwd=REPO)
+    require(hashlib.sha256(blob).hexdigest() == file_sha(HISTORICAL_BASELINE_CONFIG),
+            'Historical single-k5 baseline config differs from committed source')
     return {'gitrev': gitrev, 'source_root': str(REPO),
             'method': 'git_checkout', 'known_unrelated_source_exception': exceptions}
 
@@ -180,7 +189,9 @@ def stage13_audit(receipt_path: Path = STAGE13_AUDIT) -> dict:
             == manifest.get('source_commit') == receipt.get('source_commit')
             and terminal.get('status') == 'completed'
             and receipt.get('manifest_sha256') == file_sha(files['manifest'])
-            and len(manifest.get('arms', [])) == 15,
+            and len(manifest.get('arms', [])) == 10
+            and {str(entry.get('arm')) for entry in manifest.get('arms', [])}
+            == {'S13-A', 'S13-C'},
             'Stage13 independent audit, run root, source or manifest binding failed')
     require(Path(root).resolve().parent == Path('/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform').resolve(),
             'Stage13 audited run root escaped graph_transform checkpoints')
@@ -199,6 +210,36 @@ def canonical_config(value: dict, arm: str) -> dict:
     return json.loads(text)
 
 
+def check_historical_baseline_config(zero_config: dict) -> dict:
+    """Show that lambda zero changes no baseline data/training/evaluation rule.
+
+    Artifact names and output/cache paths may differ, while all substantive
+    fields must match the reviewed Stage11 single-global k5 configuration.
+    """
+    old = yaml.safe_load(HISTORICAL_BASELINE_CONFIG.read_text(encoding='utf-8'))
+    comparable = copy.deepcopy(zero_config)
+    for key in ('ranking_loss_mode', 'ranking_loss_weight',
+                'ranking_temperature', 'ranking_min_target_delta'):
+        comparable['loss'].pop(key)
+    for group, keys in {
+        'data': ('cache_dir_template', 'cache_dir'),
+        'evaluation': ('output_metric_dir', 'output_pred_dir'),
+        'experiment': ('description', 'name'),
+        'logging': ('log_dir', 'tensorboard_log_dir'),
+        'training': ('checkpoint_dir',),
+    }.items():
+        for key in keys:
+            comparable[group][key] = old[group][key]
+    require(comparable == old,
+            'Historical Stage11 single-k5 baseline differs in data, model, '
+            'optimizer, checkpoint choice, evaluation or sampler settings')
+    return {'path': str(HISTORICAL_BASELINE_CONFIG),
+            'config_sha256': file_sha(HISTORICAL_BASELINE_CONFIG),
+            'zero_weight_config_sha256': file_sha(config_path('lambda0')),
+            'substantive_config_identical': True,
+            'sampler': 'unchanged_random_row_shuffle'}
+
+
 def check_config(arm: str, value: dict) -> None:
     model, data, loss, train = value['model'], value['data'], value['loss'], value['training']
     require(model['hidden_dim'] == 256 and model['node_conv_mode'] == 'single_k5'
@@ -214,7 +255,7 @@ def check_config(arm: str, value: dict) -> None:
     require(loss['four_state_conditional_weight'] == 1
             and loss['four_state_union_brier_weight'] == 0
             and loss['ranking_loss_mode'] == 'pairwise_logistic'
-            and loss['ranking_loss_weight'] == ARMS[arm]
+            and loss['ranking_loss_weight'] == SMOKE_ARMS[arm]
             and loss['ranking_temperature'] == .1
             and loss['ranking_min_target_delta'] == .05,
             f'{arm}: loss/temperature/delta mismatch')
@@ -237,7 +278,8 @@ def check_config(arm: str, value: dict) -> None:
 def prior_audit() -> dict:
     """Bind to reviewed Stage11 data split, source and target lineage."""
     paths = {name: PRIOR / name for name in ('launch.json', 'terminal.json', 'review_receipt.json',
-                                             'smoke.json', 'result.json')}
+                                             'smoke.json', 'result.json',
+                                             'checkpoint_registry.json')}
     require(all(path.is_file() for path in paths.values()), 'Reviewed Stage11 provenance missing')
     items = {name: read_json(path) for name, path in paths.items()}
     launch, terminal, review, smoke = (items[name] for name in
@@ -248,8 +290,12 @@ def prior_audit() -> dict:
             and smoke['status'] == 'passed', 'Stage11 provenance/review mismatch')
     require(file_sha(paths['result.json']) == review['result_sha256'],
             'Stage11 reviewed result changed')
+    require(file_sha(paths['checkpoint_registry.json']) == review['registry_sha256'],
+            'Stage11 reviewed checkpoint registry changed')
     return {'root': launch['root'], 'gitrev': launch['gitrev'],
             'review_sha256': file_sha(paths['review_receipt.json']),
+            'result_sha256': file_sha(paths['result.json']),
+            'registry_sha256': file_sha(paths['checkpoint_registry.json']),
             'smoke_sha256': file_sha(paths['smoke.json']),
             'folds': smoke['folds'], 'target_manifests': smoke['target_manifests'],
             'test_sha256': items['result.json']['test_source_sha256_by_fold']}
@@ -292,7 +338,8 @@ def smoke(gpu: int, source_commit: str | None) -> None:
     torch.cuda.set_device(gpu)
     predecessor = stage13_audit()
     old = prior_audit()
-    configs = {arm: yaml.safe_load(config_path(arm).read_text(encoding='utf-8')) for arm in ARMS}
+    configs = {arm: yaml.safe_load(config_path(arm).read_text(encoding='utf-8'))
+               for arm in SMOKE_ARMS}
     canonical = None
     for arm, value in configs.items():
         check_config(arm, value)
@@ -300,6 +347,7 @@ def smoke(gpu: int, source_commit: str | None) -> None:
         if canonical is None:
             canonical = normalized
         require(normalized == canonical, f'{arm}: config differs beyond lambda and artifact names')
+    baseline_config = check_historical_baseline_config(configs['lambda0'])
 
     # This folded training source has one q row per (seq,charge,NCE), computed
     # exclusively from the outer training spectra.  Internal split is by seq.
@@ -372,7 +420,7 @@ def smoke(gpu: int, source_commit: str | None) -> None:
                 ranking_protocol = ranking_loss_checkpoint_protocol(trainer, config_path(arm))
                 require(ranking_protocol is not None
                         and ranking_protocol['mode'] == 'pairwise_logistic'
-                        and ranking_protocol['weight'] == ARMS[arm]
+                        and ranking_protocol['weight'] == SMOKE_ARMS[arm]
                         and ranking_protocol['temperature'] == .1
                         and ranking_protocol['min_target_delta'] == .05
                         and ranking_protocol['target_source'] ==
@@ -416,11 +464,10 @@ def smoke(gpu: int, source_commit: str | None) -> None:
                 del model, trainer, loss
             require(all(model_states[arm].keys() == model_states['lambda0'].keys()
                         and all(torch.equal(model_states[arm][key], model_states['lambda0'][key])
-                                for key in model_states['lambda0']) for arm in ARMS),
-                    'Four arms do not share identical initial parameters')
-            require(checks['lambda0']['ranking_pairs'] == checks['lambda001']['ranking_pairs']
-                    == checks['lambda005']['ranking_pairs'] == checks['lambda010']['ranking_pairs'],
-                    'Four arms see different sequence-pair counts')
+                                for key in model_states['lambda0']) for arm in SMOKE_ARMS),
+                    'Zero-weight control and lambda 0.05 differ at initialization')
+            require(checks['lambda0']['ranking_pairs'] == checks['lambda005']['ranking_pairs'],
+                    'Zero-weight control and lambda 0.05 see different sequence-pair counts')
             # Permuting labels across two sequences must change direction; no
             # valid pair and same-sequence-only examples must return exact zero.
             synthetic = {'soft_labels': torch.tensor([[.8], [.1]], device=f'cuda:{gpu}'),
@@ -479,15 +526,17 @@ def smoke(gpu: int, source_commit: str | None) -> None:
              'source_root': str(REPO),
              'source_sha256': bound_source,
              'source_provenance': committed_source_provenance(bound_source, gitrev),
-             'configs': {arm: file_sha(config_path(arm)) for arm in ARMS},
+             'configs': {arm: file_sha(config_path(arm)) for arm in SMOKE_ARMS},
              'stage13_audit': predecessor, 'prior': old,
+             'historical_baseline_config': baseline_config,
              'folds': evidence, 'smoke_losses': losses,
              'smoke_ranking_stats': checks,
              'definition': 'train-only folded soft-q; condition-first/sequence-second aggregation; '
                            'distinct-sequence unordered pairs with |target gap|>0.05; '
                            'softplus(-signed score difference/0.1); original row shuffle in all arms',
              'checks': {'lambda0_same_initialization': True,
-                        'four_arm_same_sampler_config': True,
+                        'candidate_and_zero_weight_same_sampler_config': True,
+                        'historical_baseline_substantive_config_parity': True,
                         'historical_split_and_target_bindings': True,
                         'loss_additivity': True, 'ranking_gradient': True,
                         'same_sequence_exclusion': True, 'duplicate_condition_invariance': True,
@@ -516,7 +565,11 @@ def launch(receipt_path: Path | None, source_commit: str | None) -> None:
                 and proof['source_root'] == str(REPO)
                 and proof['source_sha256'] == source_manifest()
                 and proof['source_provenance'] == committed_source_provenance(proof['source_sha256'], revision())
-                and all(proof['configs'][arm] == file_sha(config_path(arm)) for arm in ARMS),
+                and all(proof['configs'][arm] == file_sha(config_path(arm))
+                        for arm in SMOKE_ARMS)
+                and proof['historical_baseline_config']
+                == check_historical_baseline_config(
+                    yaml.safe_load(config_path('lambda0').read_text(encoding='utf-8'))),
                 'Stale or incomplete source/config-bound pod smoke')
         require(proof['stage13_audit'] == stage13_audit(receipt_path),
                 'Stage13 audit receipt changed or was not independently passed')
@@ -528,6 +581,7 @@ def launch(receipt_path: Path | None, source_commit: str | None) -> None:
         info = {'schema_version': 1, 'root': str(root), 'gitrev': gitrev,
                 'source_root': str(REPO),
                 'created_at': utc_now(), 'arms': ARMS, 'folds': FOLDS,
+                'historical_baseline_config': proof['historical_baseline_config'],
                 'training_base_seed': 42, 'validation_split_base_seed': 42,
                 'fold_seeds': {fold: _stable_fold_seed(42, fold) for fold in FOLDS},
                 'configs': proof['configs'], 'smoke_sha256': file_sha(OPS / 'smoke.json'),
@@ -731,19 +785,22 @@ def make_audit_manifest(info: dict) -> dict:
     require(len(entries) == len(ARMS) * len(FOLDS)
             and {(entry['arm'], entry['fold']) for entry in entries}
             == {(arm, fold) for arm in ARMS for fold in FOLDS},
-            'Stage14 audit manifest is not a complete unique four-arm/five-fold matrix')
+            'Stage14 audit manifest is not a complete unique lambda 0.05 five-fold matrix')
     for fold in FOLDS:
         paired = [entry for entry in entries if entry['fold'] == fold]
         require(all(len({entry[key] for entry in paired}) == 1
                     for key in ('train_csv_sha256', 'val_csv_sha256', 'test_csv_sha256',
                                 'validation_source_csv_sha256', 'four_state_manifest_sha256')),
-                f'{fold}: same-round arms do not share train/validation/test/target source SHA')
+                f'{fold}: trained arms do not share train/validation/test/target source SHA')
     return {'stage': 'S14', 'schema_version': 1, 'status': 'completed_pending_audit',
             'ops': str(OPS), 'root': info['root'],
             'source_commit': info['gitrev'], 'source_root': info['source_root'],
             'stage13_audit': info['stage13_audit'],
-            'arms': entries, 'baseline_arm': 'lambda0',
-            'same_round_control': 'lambda0',
+            'arms': entries, 'baseline_arm': 'lambda005',
+            'comparison_baseline': 'reviewed_stage11_single_k5_seed42',
+            'historical_baseline_config': info['historical_baseline_config'],
+            'historical_baseline_provenance': info['prior'],
+            'same_round_control': None,
             'pairwise_mode': 'train-only logistic, tau0.1, delta0.05; no sequence-aware sampler',
             'scope': 'Manifest binds training fold, internal validation and same-pass external prediction; '
                      'independent metric audit must still verify CSV row provenance and recompute metrics.'}
@@ -793,7 +850,11 @@ def finalize_completed(receipt_path: Path | None, source_commit: str | None,
             and info['source_provenance'] == proof['source_provenance']
             == committed_source_provenance(proof['source_sha256'], gitrev)
             and info['configs'] == proof['configs']
-            and all(info['configs'][arm] == file_sha(config_path(arm)) for arm in ARMS)
+            and all(info['configs'][arm] == file_sha(config_path(arm))
+                    for arm in SMOKE_ARMS)
+            and info['historical_baseline_config'] == proof['historical_baseline_config']
+            == check_historical_baseline_config(
+                yaml.safe_load(config_path('lambda0').read_text(encoding='utf-8')))
             and info['prior'] == proof['prior'] == prior_audit()
             and info['stage13_audit'] == proof['stage13_audit'] == stage13_audit(receipt_path)
             and info['arms'] == ARMS and tuple(info['folds']) == FOLDS
@@ -853,7 +914,10 @@ def worker() -> None:
         require(info['stage13_audit'] == stage13_audit(),
                 'Audited Stage13 predecessor changed after Stage14 launch')
         require(source_manifest() == info['source_sha256']
-                and all(file_sha(config_path(arm)) == info['configs'][arm] for arm in ARMS),
+                and all(file_sha(config_path(arm)) == info['configs'][arm]
+                        for arm in SMOKE_ARMS)
+                and info['historical_baseline_config']['config_sha256']
+                == file_sha(HISTORICAL_BASELINE_CONFIG),
                 'Source/config changed after launch')
         verify_training_inputs(read_json(OPS / 'smoke.json'))
         command = [PY, '-u', str(REPO / 'graph_transform/scripts/run_architecture_batch.py'),
