@@ -212,8 +212,8 @@ def preflight(gpu, output):
         config_saved = copy.deepcopy(saved.get('config') or yaml.safe_load(Path(bound['config']).read_text()))
         restore = GraphTransformer(build_model_config(config_saved))
         restore.load_state_dict(saved['model_state_dict'], strict=True)
-        require(saved['training_rng_protocol']['training_seed'] == actual_seed
-                and saved['training_rng_protocol']['validation_split_seed'] == actual_seed, 'Baseline actual seeds')
+        require(saved['extra_state']['training_rng_protocol']['training_seed'] == actual_seed
+                and saved['extra_state']['training_rng_protocol']['validation_split_seed'] == actual_seed, 'Baseline actual seeds')
         proof['baseline'][fold] = {k: bound[k] for k in ('checkpoint', 'checkpoint_sha256', 'config', 'config_sha256', 'metrics_csv', 'metrics_sha256')}
         proof['baseline'][fold]['prediction'] = prediction
         row.update(training_seed=actual_seed, split_seed=actual_seed,
