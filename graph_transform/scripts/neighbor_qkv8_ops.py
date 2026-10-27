@@ -152,7 +152,10 @@ def preflight(gpu, output):
     launch = read(BASE_OPS / 'launch.json')
     require(launch['gitrev'] == old['gitrev'] == BASE_REV and old['status'] == 'completed', 'Baseline revision/status')
     changed = {'graph_transform/models/graph_transformer.py', 'graph_transform/models/attention_v2.py',
-               'graph_transform/models/utils.py'}
+               'graph_transform/models/utils.py',
+               # Historical unrelated dirty script; never imported by training.
+               # Keep that original file untouched and exclude only this script.
+               'graph_transform/scripts/ensemble_baseline_preds.py'}
     for name, digest in launch['source_sha256'].items():
         if name not in changed:
             require(file_sha(REPO / name) == digest, f'Unexpected production difference: {name}')
@@ -284,7 +287,10 @@ def preflight(gpu, output):
 def smoke():
     require(not (OPS/'smoke.json').exists() and not (OPS/'launch.json').exists(), 'Existing successful smoke/launch')
     ids, _, _ = idle()
-    with (OPS/'preflight.log').open('x') as log:
+    attempt=1
+    while (OPS/f'preflight.attempt_{attempt:02d}.log').exists():
+        attempt+=1
+    with (OPS/f'preflight.attempt_{attempt:02d}.log').open('x') as log:
         subprocess.run([PY, __file__, 'preflight', '--gpu', str(ids[0]), '--output', str(OPS/'smoke.json')],
                        cwd=REPO, stdout=log, stderr=subprocess.STDOUT, check=True)
     print(json.dumps({'status':'passed','smoke_sha256':file_sha(OPS/'smoke.json')}))
