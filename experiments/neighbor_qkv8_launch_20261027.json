@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "namespace": "dbond_neighbor_qkv8_20261027",
+  "authorization": "用户明确要求中心节点生成Q、邻接节点生成K/V、聚合加权V和，8个注意力头，先做一个实验。",
+  "status": "submitted",
+  "pod": "gsj-5090.devpod",
+  "python": "/mnt/pvc/graphtrans/DBond/.venv/bin/python",
+  "ops": "/mnt/pvc/graphtrans/dbond_neighbor_qkv8_20261027_ops",
+  "launch_root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/neighbor_qkv8_batch/20261027_131636",
+  "source_snapshot": "/mnt/pvc/graphtrans/dbond_neighbor_qkv8_source_150a4af",
+  "source_commit": "150a4affc7bb4c2b0375419e78d44d97ce66b16b",
+  "source_tag": "dbond-neighbor-qkv8-seed42-v2-20261027",
+  "source_bundle": "F:/codexout/neighbor_qkv8_source_20261027_v3.bundle",
+  "source_bundle_sha256": "ba9f2a391c4cfed2db6413599e178a839bf158089086f7a7597480b5632aa1be",
+  "smoke_sha256": "a47a9181dcff3ede68aa0ab4723838baa1fb89e4ce85dcda914849922dca2d18",
+  "candidate": "replace_two_GAT4_with_two_neighbor_QKV8",
+  "fixed_backbone": "H256, single global, k5, FiLM, 3GCN, static edges, original concat, four-state alpha1/Brier0, late theory15",
+  "new_training_budget": 5,
+  "folds": [
+    "1222",
+    "2252",
+    "3514",
+    "6072",
+    "9075"
+  ],
+  "training_base_seed": 42,
+  "validation_split_base_seed": 42,
+  "baseline": {
+    "arm": "single",
+    "ops": "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops",
+    "gitrev": "111c23313da9ae11a7ee33f8357be0a1876086ec",
+    "reuse": "passed_five_checkpoint_sha_strict_cpu_data_protocol_and_legacy_one_step_equivalence",
+    "result_sha256": "683e19aa5358f9870b4b6ee298d45d3de4493ddb26c67d1f7fdf5d9c0472409d",
+    "registry_sha256": "4f4b7d476d94fe25126d4ca8d4cf85ab2e1285c5d910cff624e98fd62bb61254"
+  },
+  "terminal_audit_script": "/mnt/pvc/graphtrans/dbond_neighbor_qkv8_20261027_ops/independent_audit/terminal_audit.py",
+  "terminal_audit_sha256": "e040ea90d1b08c5ade0c95f1d6f2ecc1d1a6cca471cc2bbace2c972905dbf08c",
+  "engineering_gates": {
+    "bond_f1_delta_min": 0.002,
+    "bond_f1_wins_min": 4,
+    "auc_delta_min": 0,
+    "q_brier_delta_max": 0
+  },
+  "parameter_count": {
+    "baseline": 2002284,
+    "candidate": 2397044
+  },
+  "limitations": "Attention mechanism, heads and capacity change together. Five overlapping sequence partitions, one training initialization per partition. No claim of physical contacts or causal attention importance.",
+  "preflight_failures": [
+    "Historical unrelated ensemble_baseline_preds.py SHA; excluded only that unused script, preserved original file.",
+    "Archived checkpoint RNG protocol is nested in extra_state; corrected metadata locator only. No training existed in either failed attempt."
+  ],
+  "auto_advance": false,
+  "auto_advance_allowlist": [],
+  "completion_event_acknowledged": false,
+  "new_experiments_after_completion": "none_without_new_user_authorization",
+  "launch_created_at": "2026-10-27T13:16:36.547795+00:00",
+  "worker_pid": 2287311,
+  "gpus": [
+    0,
+    1,
+    2,
+    4
+  ],
+  "config_sha256": "6b3dedaadcfa1a344413de423801343340134289c66441c0c5c439505b7ea9e8",
+  "launch_guard_compatibility_sha256": "f41134241d2b00d77dbc6250460949aa2b2561a9914c16678f81eee5ae1d74b6",
+  "launch_attempts": [
+    "First check stopped before claim/worker due sparse dataset placeholder paths; only guard adapted after exact symlink and SHA verification.",
+    "One valid launch 2026-10-27T13:16:36.547795Z; no duplicate training."
+  ],
+  "launch_sha256": "eb4465b9b95c35d8d9737117571ce6d92b0dd31bc165c777dfbce27150b3b788",
+  "automation_id": "dbond-8",
+  "completion_monitor": "active_terminal_events_only"
+}
