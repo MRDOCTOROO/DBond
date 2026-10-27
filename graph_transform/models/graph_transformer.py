@@ -820,6 +820,24 @@ class GraphTransformer(nn.Module):
             self.register_buffer('virtual_node_group_size_code', torch.tensor(
                 self.virtual_group_size, dtype=torch.int64))
     
+        # Replace only the two graph-attention blocks after all historical
+        # construction. Keep shared initialization and subsequent RNG unchanged.
+        from .neighbor_qkv_attention import validate_neighbor_mode, NeighborQKVAttention
+        self.neighbor_attention_mode = validate_neighbor_mode(
+            getattr(config, 'neighbor_attention_mode', 'legacy'))
+        if self.neighbor_attention_mode == 'qkv8':
+            if self.gat_attention_type != 'gat' or config.num_gat_layers != 2:
+                raise ValueError('qkv8 experiment replaces exactly two legacy GAT blocks')
+            with torch.random.fork_rng(devices=[]):
+                replacement = nn.ModuleList([NeighborQKVAttention(config) for _ in self.gat_layers])
+                for old, new in zip(self.gat_layers, replacement):
+                    new.edge_message_gate.load_state_dict(old.edge_message_gate.state_dict())
+                    new.layer_norm.load_state_dict(old.layer_norm.state_dict())
+                self.gat_layers = replacement
+            self.register_buffer('neighbor_attention_mode_code', torch.tensor(1, dtype=torch.int64))
+            self.register_buffer('neighbor_attention_schema_code', torch.tensor(1, dtype=torch.int64))
+            self.register_buffer('neighbor_attention_heads_code', torch.tensor(8, dtype=torch.int64))
+
     def load_state_dict(self, state_dict, strict=True, assign=False):
         # Validate before PyTorch starts copying any shared tensors. This also
         # protects direct loads and repeated attempts after a rejected load.
@@ -833,6 +851,8 @@ class GraphTransformer(nn.Module):
         from .node_context_conv import validate_node_conv_checkpoint
         from .utils import validate_virtual_node_checkpoint
         try:
+            from .neighbor_qkv_attention import validate_neighbor_checkpoint
+            validate_neighbor_checkpoint(self, state_dict)
             validate_attention_checkpoint(self, state_dict)
             validate_position_checkpoint(self, state_dict)
             validate_bond_head_checkpoint(self, state_dict)

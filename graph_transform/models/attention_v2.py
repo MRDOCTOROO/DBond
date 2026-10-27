@@ -29,6 +29,16 @@ Legacy GAT has no marker; keeping this convention preserves its state schema.
 GATv2 requires both its scalar int64 marker and every a_v2 parameter. Config
 metadata, when supplied, must agree with the actual state (absent flag = GAT).
 """
+    if getattr(model, 'neighbor_attention_mode', 'legacy') == 'qkv8':
+        from .neighbor_qkv_attention import validate_neighbor_checkpoint
+        validate_neighbor_checkpoint(model, state_dict)
+        if checkpoint_config is not None:
+            declared = checkpoint_config.get('model', checkpoint_config)
+            if declared.get('neighbor_attention_mode') != 'qkv8' or declared.get('neighbor_qkv_heads') != 8:
+                raise ValueError('Neighbor QKV checkpoint config/state mismatch')
+        if any(k.endswith(('.a', '.a_v2', '.W')) for k in state_dict if k.startswith('gat_layers.')):
+            raise ValueError('Legacy GAT tensors found in a neighbor QKV checkpoint')
+        return
     requested = validate_attention_type(model.gat_attention_type)
     marker = state_dict.get(ATTENTION_MODE_KEY)
     if ATTENTION_MODE_KEY in state_dict:

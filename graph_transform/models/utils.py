@@ -116,6 +116,8 @@ class ModelConfig:
         self.num_gcn_layers = 3
         self.num_gat_layers = 2
         self.gat_attention_type = 'gat'
+        self.neighbor_attention_mode = 'legacy'
+        self.neighbor_qkv_heads = 8
         
         # 序列配置
         self.max_seq_len = 100
