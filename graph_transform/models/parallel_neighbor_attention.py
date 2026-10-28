@@ -1,6 +1,6 @@
-"""A zero-output-initialized QKV8 context branch parallel to intact GAT4.
+"""Zero-output-initialized QKV8 context added to intact GAT4 output.
 
-Q(center), K/V(incoming neighbors) read the same post-GCN packed features.
+Parallel mode reads post-GCN features; serial mode reads post-two-GAT features.
 The branch returns only a residual context; no self residual, LN, dropout or
 FFN is added here. Its zero projection initially preserves the original model.
 """
@@ -15,13 +15,14 @@ MARKERS = ('parallel_neighbor_attention_mode_code',
 
 
 def validate_parallel_neighbor_mode(mode):
-    if mode not in ('none', 'qkv8'):
+    if mode not in ('none', 'qkv8', 'serial_qkv8'):
         raise ValueError(f'Unknown parallel_neighbor_attention_mode: {mode!r}')
     return mode
 
 
 def validate_parallel_neighbor_checkpoint(model, state):
-    enabled = getattr(model, 'parallel_neighbor_attention_mode', 'none') == 'qkv8'
+    mode = getattr(model, 'parallel_neighbor_attention_mode', 'none')
+    enabled = mode in ('qkv8', 'serial_qkv8')
     found = {k for k in state if k.startswith('parallel_neighbor_attention_')}
     if found != (set(MARKERS) if enabled else set()):
         raise ValueError('Parallel neighbor attention checkpoint mode/schema mismatch')
@@ -36,8 +37,9 @@ def validate_parallel_neighbor_checkpoint(model, state):
         if any(not torch.is_tensor(state[k]) or state[k].dtype != torch.int64
                or state[k].shape != torch.Size([]) for k in MARKERS):
             raise ValueError('Parallel neighbor attention requires scalar int64 markers')
-        if [int(state[k]) for k in MARKERS] != [1, 1, 8, 1]:
-            raise ValueError('Parallel neighbor attention requires mode1/schema1/heads8/residual-fusion1')
+        expected_mode = 2 if mode == 'serial_qkv8' else 1
+        if [int(state[k]) for k in MARKERS] != [expected_mode, 1, 8, 1]:
+            raise ValueError(f'Neighbor attention requires mode{expected_mode}/schema1/heads8/residual-fusion1')
 
 
 class ParallelNeighborQKV8(nn.Module):
@@ -48,6 +50,7 @@ class ParallelNeighborQKV8(nn.Module):
         self.hidden_dim = 256
         self.num_heads = 8
         self.head_dim = 32
+        self.route = getattr(config, 'parallel_neighbor_attention_mode', 'qkv8')
         self.q_proj = nn.Linear(256, 256, bias=False)
         self.k_proj = nn.Linear(256, 256, bias=False)
         self.v_proj = nn.Linear(256, 256, bias=False)
@@ -98,7 +101,8 @@ class ParallelNeighborQKV8(nn.Module):
         self.last_diagnostics = {}
         if self.enable_diagnostics:
             self.last_diagnostics = {
-                'mode': 'parallel_qkv8', 'num_heads': 8, 'head_dim': 32,
+                'mode': 'serial_qkv8' if self.route == 'serial_qkv8' else 'parallel_qkv8',
+                'num_heads': 8, 'head_dim': 32,
                 'num_packed_nodes': x.shape[0], 'num_edges': edge_index.shape[1],
                 'context_l2_mean': float(context.detach().float().norm(dim=-1).mean()) if x.shape[0] else 0.,
                 'projected_residual_l2_mean': float(residual.detach().float().norm(dim=-1).mean()) if x.shape[0] else 0.,
