@@ -118,6 +118,7 @@ class ModelConfig:
         self.gat_attention_type = 'gat'
         self.neighbor_attention_mode = 'legacy'
         self.neighbor_qkv_heads = 8
+        self.parallel_neighbor_attention_mode = 'none'
         
         # 序列配置
         self.max_seq_len = 100

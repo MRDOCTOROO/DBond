@@ -838,6 +838,25 @@ class GraphTransformer(nn.Module):
             self.register_buffer('neighbor_attention_schema_code', torch.tensor(1, dtype=torch.int64))
             self.register_buffer('neighbor_attention_heads_code', torch.tensor(8, dtype=torch.int64))
 
+        from .parallel_neighbor_attention import validate_parallel_neighbor_mode, ParallelNeighborQKV8
+        self.parallel_neighbor_attention_mode = validate_parallel_neighbor_mode(
+            getattr(config, 'parallel_neighbor_attention_mode', 'none'))
+        if self.parallel_neighbor_attention_mode == 'qkv8':
+            if (self.neighbor_attention_mode != 'legacy' or self.gat_attention_type != 'gat'
+                    or config.num_gcn_layers != 3 or config.num_gat_layers != 2
+                    or config.num_attention_heads != 4 or self.edge_state_mode != 'static'
+                    or self.virtual_node_mode != 'single' or self.node_conv_mode != 'single_k5'
+                    or self.bond_fusion_mode != 'concat' or self.bond_head_type != 'four_state_mlp'):
+                raise ValueError('Parallel QKV8 requires the intact original single-k5 3GCN+2GAT4 four-state backbone')
+            with torch.random.fork_rng(devices=[]):
+                self.parallel_neighbor_context = ParallelNeighborQKV8(config)
+            self.register_buffer('parallel_neighbor_attention_mode_code', torch.tensor(1, dtype=torch.int64))
+            self.register_buffer('parallel_neighbor_attention_schema_code', torch.tensor(1, dtype=torch.int64))
+            self.register_buffer('parallel_neighbor_attention_heads_code', torch.tensor(8, dtype=torch.int64))
+            self.register_buffer('parallel_neighbor_attention_fusion_code', torch.tensor(1, dtype=torch.int64))
+        self.enable_parallel_neighbor_diagnostics = False
+        self.last_parallel_neighbor_diagnostics = {}
+
     def load_state_dict(self, state_dict, strict=True, assign=False):
         # Validate before PyTorch starts copying any shared tensors. This also
         # protects direct loads and repeated attempts after a rejected load.
@@ -851,6 +870,8 @@ class GraphTransformer(nn.Module):
         from .node_context_conv import validate_node_conv_checkpoint
         from .utils import validate_virtual_node_checkpoint
         try:
+            from .parallel_neighbor_attention import validate_parallel_neighbor_checkpoint
+            validate_parallel_neighbor_checkpoint(self, state_dict)
             from .neighbor_qkv_attention import validate_neighbor_checkpoint
             validate_neighbor_checkpoint(self, state_dict)
             validate_attention_checkpoint(self, state_dict)
@@ -1117,6 +1138,10 @@ class GraphTransformer(nn.Module):
             node_features = add_packed_residue_positions(
                 node_features, positions, seq_lens_tensor, node_lens_tensor)
         
+        # Both paths receive the SAME post-GCN features. Original GATs are
+        # neither removed nor fed the new attention context.
+        parallel_neighbor_input = (node_features if self.parallel_neighbor_attention_mode == 'qkv8' else None)
+
         # 图注意力层
         gat_timings = {}
         for i, gat_layer in enumerate(self.gat_layers):
@@ -1153,6 +1178,22 @@ class GraphTransformer(nn.Module):
                     gat_timings[f'gat_layer_{i}_{key}'] = float(value)
         if timing_enabled:
             gat_end = time.perf_counter()
+
+        self.last_parallel_neighbor_diagnostics = {}
+        if self.parallel_neighbor_attention_mode == 'qkv8':
+            self.parallel_neighbor_context.enable_diagnostics = bool(self.enable_parallel_neighbor_diagnostics)
+            context_residual = self.parallel_neighbor_context(
+                parallel_neighbor_input, batch_data['edge_index'], edge_features)
+            original_features = node_features
+            node_features = original_features + context_residual.to(dtype=original_features.dtype)
+            if self.enable_parallel_neighbor_diagnostics:
+                self.last_parallel_neighbor_diagnostics = dict(self.parallel_neighbor_context.last_diagnostics)
+                self.last_parallel_neighbor_diagnostics.update({
+                    'original_gat_l2_mean': float(original_features.detach().float().norm(dim=-1).mean()) if original_features.size(0) else 0.,
+                    'actual_fusion_difference_l2_mean': float((node_features-original_features).detach().float().norm(dim=-1).mean()) if original_features.size(0) else 0.,
+                    'branch_reads': 'post_3GCN_before_original_2GAT',
+                    'fusion': 'original_2GAT_output_plus_zero_initialized_context_projection',
+                })
 
         # Read the four independently updated global tokens from the actual
         # packed GNN output. Their order is fixed by GraphBuilder: L..L+3.
