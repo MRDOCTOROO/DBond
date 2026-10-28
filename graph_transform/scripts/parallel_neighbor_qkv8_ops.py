@@ -117,8 +117,8 @@ def preflight(gpu, output):
             'Legacy off-mode state differs')
     seed(42); candidate = GraphTransformer(build_model_config(runtime))
     require(torch.equal(rng, torch.get_rng_state()), 'Candidate changed following RNG stream')
-    require(all(torch.equal(v, candidate.state_dict()[k]) for k, v in control.state_dict().items()
-                if k in candidate.state_dict()), 'Candidate changed shared initialization')
+    require(all(torch.equal(v, candidate.state_dict()[k]) for k, v in control.state_dict().items()),
+            'Candidate changed or removed an original backbone state')
     candidate.load_state_dict(candidate.state_dict(), strict=True)
     for receiver, state in ((candidate, control.state_dict()), (control, candidate.state_dict())):
         try:
