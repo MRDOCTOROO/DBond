@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "namespace": "dbond_parallel_neighbor_qkv8_20261028",
+  "authorization": "用户要求保留原特征提取，新增8头邻域交叉注意力作为并行分支融合，检验F1与排序能力。",
+  "status": "submitted",
+  "updated_at": "2026-10-28T17:16:18.5599567+08:00",
+  "pod": "gsj-5090.devpod",
+  "python": "/mnt/pvc/graphtrans/DBond/.venv/bin/python",
+  "ops": "/mnt/pvc/graphtrans/dbond_parallel_neighbor_qkv8_20261028_ops",
+  "launch_root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/parallel_neighbor_qkv8_batch/20261028_091256",
+  "source_commit": "920e9a71e9b8839e88f7b5632bb786627d9defee",
+  "source_snapshot_planned": "/mnt/pvc/graphtrans/dbond_parallel_neighbor_qkv8_source_920e9a7",
+  "source_bundle": "F:/codexout/dbond_parallel_neighbor_qkv8_results_20261028/source.bundle",
+  "source_bundle_sha256": "b782cf59c93eb3f4f673ce5066559742e24ccd93c1c6b7b98e5c0678c8279c5a",
+  "source_bundle_prerequisite": "111c23313da9ae11a7ee33f8357be0a1876086ec",
+  "config": "graph_transform/config/pre_synthesis_parallel_neighbor_qkv8_seed42.yaml",
+  "config_local_sha256": "fbee952c492ff48201e66c848f1ddf0a7241456a38a2c4f0f1ad02781e8a15a8",
+  "candidate": "intact_3GCN_2GAT4_with_one_parallel_neighbor_QKV8_residual_context",
+  "fusion": "H5_original_plus_zero_initialized_output_projection_of_QKV8_reading_shared_H3",
+  "fixed_backbone": "H256, single global, k5, FiLM, 3GCN, original 2GAT4, static edges, original concat, four-state alpha1/Brier0, late theory15",
+  "new_training_budget": 5,
+  "folds": [
+    "1222",
+    "2252",
+    "3514",
+    "6072",
+    "9075"
+  ],
+  "training_base_seed": 42,
+  "validation_split_base_seed": 42,
+  "baseline": {
+    "arm": "single",
+    "ops": "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops",
+    "gitrev": "111c23313da9ae11a7ee33f8357be0a1876086ec",
+    "reuse_status": "passed_five_checkpoint_sha_strict_cpu_data_protocol_and_legacy_one_step_equivalence",
+    "expected_result_sha256": "683e19aa5358f9870b4b6ee298d45d3de4493ddb26c67d1f7fdf5d9c0472409d",
+    "expected_registry_sha256": "4f4b7d476d94fe25126d4ca8d4cf85ab2e1285c5d910cff624e98fd62bb61254"
+  },
+  "preflight": {
+    "static_source_syntax": "passed",
+    "numerical_pod": "passed",
+    "smoke_sha256": "d7addd2fed9074028b04c548a0a671bff683be0d61de3ed23334c94653fd5a0a"
+  },
+  "launch": {
+    "status": "uniquely_submitted",
+    "gpus": [
+      2,
+      3
+    ],
+    "worker_pid": 2368926,
+    "launch_sha256": "9e31acf63ec47e43faa60c0f55af8bb749e93aafd1591bc98c67429dd4209705"
+  },
+  "engineering_gates": {
+    "bond_f1_delta_min": 0,
+    "spectrum_harmonic_f1_delta_min": 0,
+    "q_seq_delta_min": 0.01,
+    "q_seq_wins_min": 4,
+    "top10_delta_min": 0.01,
+    "q_brier_delta_max": 0.001,
+    "auc_delta_min": -0.001,
+    "require_all": true
+  },
+  "terminal_auditor_sha256": {
+    "metadata_resource_audit.py": "5b7eb6c1e21fce3040adb7274799c268766c9605af64c5dc7d2b53e1b841bd29",
+    "present_results.py": "46e9412f6e055295e84b860be032c4c28a21c8b4ecde46c8ec0dad143696093a",
+    "run_terminal_review.py": "bdae0b55527815c3daf383e6c01faa9f60c59792123f7bb88b24988f64824650",
+    "terminal_audit.py": "df4ba107bc1b6a222a95376a9c004ff583d877a728f27e9b6b04920d5cb9801a"
+  },
+  "deployment_helper_sha256": "e5a85e95baf2556fa1e53168abc4321e0b89040ccdf03a2295db92ef0a619392",
+  "auto_advance": false,
+  "auto_advance_allowlist": [],
+  "completion_event_acknowledged": false,
+  "automation_id": "dbond-8",
+  "blocked_reason": null,
+  "user_input_requested": false,
+  "no_local_numerical_execution": true,
+  "no_automatic_replication_or_paper_promotion": true,
+  "launch_created_at": "2026-10-28T17:12:56.635841+08:00",
+  "source_snapshot": "/mnt/pvc/graphtrans/dbond_parallel_neighbor_qkv8_source_920e9a7",
+  "fold_seeds": {
+    "1222": {
+      "training": 949822381,
+      "split": 949822381
+    },
+    "2252": {
+      "training": 2775888976,
+      "split": 2775888976
+    },
+    "3514": {
+      "training": 1365222152,
+      "split": 1365222152
+    },
+    "6072": {
+      "training": 612878555,
+      "split": 612878555
+    },
+    "9075": {
+      "training": 1785808201,
+      "split": 1785808201
+    }
+  },
+  "parameter_count": {
+    "baseline": 2002284,
+    "candidate": 2332532,
+    "new_branch": 330248
+  },
+  "config_sha256": "fbee952c492ff48201e66c848f1ddf0a7241456a38a2c4f0f1ad02781e8a15a8",
+  "completion_monitor": "active_terminal_events_only_every_45_minutes",
+  "source_tag": "dbond-parallel-neighbor-qkv8-seed42-v1-20261028"
+}

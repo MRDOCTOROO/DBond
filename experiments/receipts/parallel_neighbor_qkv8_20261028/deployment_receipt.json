@@ -1,0 +1,15 @@
+{
+  "status": "source_deployed_only",
+  "gitrev": "920e9a71e9b8839e88f7b5632bb786627d9defee",
+  "snapshot": "/mnt/pvc/graphtrans/dbond_parallel_neighbor_qkv8_source_920e9a7",
+  "bundle_sha256": "b782cf59c93eb3f4f673ce5066559742e24ccd93c1c6b7b98e5c0678c8279c5a",
+  "dataset_realpath": "/mnt/pvc/graphtrans/DBond/dataset",
+  "candidate_config_sha256": "fbee952c492ff48201e66c848f1ddf0a7241456a38a2c4f0f1ad02781e8a15a8",
+  "auditor_sha256": {
+    "metadata_resource_audit.py": "5b7eb6c1e21fce3040adb7274799c268766c9605af64c5dc7d2b53e1b841bd29",
+    "present_results.py": "dcfc446c8cd027edec2826b3e10cb1cd4d177517829442361860737117b169ec",
+    "terminal_audit.py": "df4ba107bc1b6a222a95376a9c004ff583d877a728f27e9b6b04920d5cb9801a"
+  },
+  "preflight_executed": false,
+  "training_launched": false
+}
