@@ -1,0 +1,5 @@
+{
+  "key": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/serial_neighbor_qkv8_batch/20261028_145845|completed",
+  "script_output": "{\"acknowledged\": \"/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/serial_neighbor_qkv8_batch/20261028_145845|completed\"}\n",
+  "acknowledged_at": "2026-10-28T16:40:43.079399+00:00"
+}

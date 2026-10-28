@@ -1,0 +1,20 @@
+{
+  "status": "completed_read_only",
+  "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/serial_neighbor_qkv8_batch/20261028_145845",
+  "gitrev": "e1f82daedee28d8f85c53a5f97794df408463ece",
+  "architecture_review_sha256": "850bcf826de099f89ede46ea7b5b46c7c2ba576506ba571e78a090e7159daf56",
+  "main_review_sha256": "aaa87863f28565ea58d3b9b81f9f8a5cc40f3ee856d4830837f48fc73afd5796",
+  "result_unchanged_sha256": "1dacdbc4a763455c1e59d51a22fc8f85e665101ca000db18043445f589dda24d",
+  "registry_unchanged_sha256": "9c20ad148007a9021a20c0652a84bb1530fc863f9a711673eb071be522a43df1",
+  "frozen_source_sha256": {
+    "graph_transform/models/attention_layers.py": "8436b26dbf2fe74c7543206c398f3d0ea83c5a3f037be024c6d63f867ef4ceb6",
+    "graph_transform/models/parallel_neighbor_attention.py": "cd3d9c16255bf1226d8c580774410426cf22034fca85ce23bf9cd2796a3fa0ca",
+    "graph_transform/models/graph_transformer.py": "a8e203ce16e9d5540646609d4da6d0c842921f317350eb12aabcdf7cdd9b836a",
+    "graph_transform/models/bond_cross_attention.py": "8efd16e7516a6a7cb9c62fec6d7363a7d443d9ee9d95fa678d7d271a7b0ead8c",
+    "graph_transform/models/bond_fusion_heads.py": "aabdd0c9a00f2d2d126bb8a4ac6e0d3b3b30d2b0d63046771c85ae190437f33c"
+  },
+  "new_experiments_launched": 0,
+  "scope": "Read-only code/protocol comparison after completed numerical audit; one future control suggestion, no execution authorization.",
+  "completed_at": "2026-10-28T16:39:15.203744+00:00",
+  "binding_script_sha256": "6f01bb3d9b89a540c65834bcf527f8cc8a560399f4bfe0629e57ac60b425f4a2"
+}

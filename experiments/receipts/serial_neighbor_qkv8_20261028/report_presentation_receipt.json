@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "main_audit_sha256": "aaa87863f28565ea58d3b9b81f9f8a5cc40f3ee856d4830837f48fc73afd5796",
+  "metadata_resource_audit_sha256": "c7a5dcdbd7fd9b27e8cf3f1faa40cc7155ba419ffa32ef3da078a79a40f36005",
+  "analysis_sha256": "17868f8af67d03041a579333899bcc82980f14112e6c72ab7f57e0ddd295296d",
+  "dashboard_sha256": "3fc271bcdc28a60dc0e191774496ef34b20e3f39e85612901f3b9dcbcf1ad43b",
+  "result_unchanged_sha256": "1dacdbc4a763455c1e59d51a22fc8f85e665101ca000db18043445f589dda24d",
+  "registry_unchanged_sha256": "9c20ad148007a9021a20c0652a84bb1530fc863f9a711673eb071be522a43df1",
+  "formatter_sha256": "539b3e5523e01fb4af0f5469eb53b4eaf372c4f2107b94954e253519aee92d99"
+}

@@ -1,0 +1,26 @@
+{
+  "status": "passed",
+  "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/serial_neighbor_qkv8_batch/20261028_145845",
+  "gitrev": "e1f82daedee28d8f85c53a5f97794df408463ece",
+  "audited": [
+    "legacy_gat4/1222",
+    "legacy_gat4/2252",
+    "legacy_gat4/3514",
+    "legacy_gat4/6072",
+    "legacy_gat4/9075",
+    "serial_neighbor_qkv8/1222",
+    "serial_neighbor_qkv8/2252",
+    "serial_neighbor_qkv8/3514",
+    "serial_neighbor_qkv8/6072",
+    "serial_neighbor_qkv8/9075"
+  ],
+  "strict_cpu_checkpoints": 10,
+  "same_pass_predictions_recomputed": 10,
+  "trained_formula_checks": 5,
+  "source_launch_sha256": "0ea89de45c5b30fcbceb60a7df6a3ac8fb31d286f7f96a580b5de3a177ebecb9",
+  "smoke_sha256": "df82755e4f4283463a736291cc7068a58d3e403d9df56704e7f2eb10a84eaf10",
+  "result_sha256": "1dacdbc4a763455c1e59d51a22fc8f85e665101ca000db18043445f589dda24d",
+  "registry_sha256": "9c20ad148007a9021a20c0652a84bb1530fc863f9a711673eb071be522a43df1",
+  "audit_script_sha256": "99318d69afdc8c942313be6091fcbba73f7e18c36f260beaced91f6f67c8e75d",
+  "audited_at": "2026-10-28T15:54:31.348254+00:00"
+}
