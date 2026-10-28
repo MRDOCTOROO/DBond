@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "namespace": "dbond_serial_neighbor_qkv8_20261028",
+  "authorization": "用户明确要求按照原GAT之后、肽键拼接之前串联8头注意力的建议进行实验并查看结果。",
+  "status": "submitted",
+  "updated_at": "2026-10-28T23:00:03.0291248+08:00",
+  "pod": "gsj-5090.devpod",
+  "python": "/mnt/pvc/graphtrans/DBond/.venv/bin/python",
+  "ops": "/mnt/pvc/graphtrans/dbond_serial_neighbor_qkv8_20261028_ops",
+  "launch_root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/serial_neighbor_qkv8_batch/20261028_145845",
+  "source_commit": "e1f82daedee28d8f85c53a5f97794df408463ece",
+  "source_snapshot_planned": "/mnt/pvc/graphtrans/dbond_serial_neighbor_qkv8_source_e1f82da",
+  "source_bundle": "F:/codexout/dbond_serial_neighbor_qkv8_results_20261028/source.bundle",
+  "source_bundle_sha256": "0e46bbe767e972768d8dcabe7f2cfaa16b5b04c4f6e7c608dcda7dfad9ae6d39",
+  "source_bundle_prerequisite": "111c23313da9ae11a7ee33f8357be0a1876086ec",
+  "source_tag_planned": "dbond-serial-neighbor-qkv8-seed42-v1-20261028",
+  "config": "graph_transform/config/pre_synthesis_serial_neighbor_qkv8_seed42.yaml",
+  "config_local_sha256": "18d957491a02eed389e4cf2772ac09d6db3b98ab0064841e75f7406f367c3669",
+  "candidate": "intact_3GCN_2GAT4_then_one_serial_neighbor_QKV8_residual_context",
+  "fusion": "H5_plus_zero_initialized_output_projection_of_QKV8_reading_H5",
+  "mode": "serial_qkv8",
+  "mode_marker": 2,
+  "fixed_backbone": "H256, single global, k5, FiLM, 3GCN, original 2GAT4, static edges, original concat, four-state alpha1/Brier0, late theory15",
+  "new_training_budget": 5,
+  "folds": [
+    "1222",
+    "2252",
+    "3514",
+    "6072",
+    "9075"
+  ],
+  "training_base_seed": 42,
+  "validation_split_base_seed": 42,
+  "baseline": {
+    "arm": "single",
+    "ops": "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops",
+    "gitrev": "111c23313da9ae11a7ee33f8357be0a1876086ec",
+    "reuse_status": "passed_five_checkpoint_sha_strict_cpu_data_protocol_and_legacy_one_step_equivalence",
+    "expected_result_sha256": "683e19aa5358f9870b4b6ee298d45d3de4493ddb26c67d1f7fdf5d9c0472409d",
+    "expected_registry_sha256": "4f4b7d476d94fe25126d4ca8d4cf85ab2e1285c5d910cff624e98fd62bb61254"
+  },
+  "preflight": {
+    "static_source_syntax": "passed",
+    "independent_static_review": "passed",
+    "numerical_pod": "passed",
+    "smoke_sha256": "df82755e4f4283463a736291cc7068a58d3e403d9df56704e7f2eb10a84eaf10"
+  },
+  "launch": {
+    "status": "uniquely_submitted",
+    "gpus": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "worker_pid": 2395731,
+    "launch_sha256": "0ea89de45c5b30fcbceb60a7df6a3ac8fb31d286f7f96a580b5de3a177ebecb9"
+  },
+  "engineering_gates": {
+    "bond_f1_delta_min": 0,
+    "spectrum_harmonic_f1_delta_min": 0,
+    "q_seq_delta_min": 0.01,
+    "q_seq_wins_min": 4,
+    "top10_delta_min": 0.01,
+    "q_brier_delta_max": 0.001,
+    "auc_delta_min": -0.001,
+    "require_all": true
+  },
+  "terminal_auditor_sha256": {
+    "metadata_resource_audit.py": "cd055ce1b60afc23e6c20e625a2ec1663fdd3eefb47e0437c29c6e336be6575c",
+    "present_results.py": "539b3e5523e01fb4af0f5469eb53b4eaf372c4f2107b94954e253519aee92d99",
+    "run_terminal_review.py": "7ac24041bd0cc79ec01df052acb35fbe444cc5a805bb342969a21710b587e7cc",
+    "terminal_audit.py": "99318d69afdc8c942313be6091fcbba73f7e18c36f260beaced91f6f67c8e75d"
+  },
+  "deployment_helper_sha256": "d5715f6616bf98bf22f5df5f85a0640a3a53a880a61f43ef8929295bd5a37c97",
+  "auto_advance": false,
+  "auto_advance_allowlist": [],
+  "completion_event_acknowledged": false,
+  "automation_id": "dbond-8",
+  "no_local_numerical_execution": true,
+  "no_automatic_replication_or_paper_promotion": true,
+  "launch_created_at": "2026-10-28T22:58:45.835347+08:00",
+  "source_snapshot": "/mnt/pvc/graphtrans/dbond_serial_neighbor_qkv8_source_e1f82da",
+  "fold_seeds": {
+    "1222": {
+      "training": 949822381,
+      "split": 949822381
+    },
+    "2252": {
+      "training": 2775888976,
+      "split": 2775888976
+    },
+    "3514": {
+      "training": 1365222152,
+      "split": 1365222152
+    },
+    "6072": {
+      "training": 612878555,
+      "split": 612878555
+    },
+    "9075": {
+      "training": 1785808201,
+      "split": 1785808201
+    }
+  },
+  "parameter_count": {
+    "baseline": 2002284,
+    "candidate": 2332532,
+    "added_attention": 330248
+  },
+  "config_sha256": "8ce89726b1aaee90ac97ea3eba8d129dd5b2f60f4588342d2cc85bd142f50779",
+  "completion_monitor": "active_terminal_events_only_every_45_minutes",
+  "source_tag": "dbond-serial-neighbor-qkv8-seed42-v1-20261028"
+}

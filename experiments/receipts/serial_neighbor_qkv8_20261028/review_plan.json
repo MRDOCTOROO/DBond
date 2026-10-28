@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "ops": "/mnt/pvc/graphtrans/dbond_serial_neighbor_qkv8_20261028_ops",
+  "launch_root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/serial_neighbor_qkv8_batch/20261028_145845",
+  "source_commit": "e1f82daedee28d8f85c53a5f97794df408463ece",
+  "launch_sha256": "0ea89de45c5b30fcbceb60a7df6a3ac8fb31d286f7f96a580b5de3a177ebecb9",
+  "smoke_sha256": "df82755e4f4283463a736291cc7068a58d3e403d9df56704e7f2eb10a84eaf10",
+  "auditor_sha256": {
+    "metadata_resource_audit.py": "cd055ce1b60afc23e6c20e625a2ec1663fdd3eefb47e0437c29c6e336be6575c",
+    "present_results.py": "539b3e5523e01fb4af0f5469eb53b4eaf372c4f2107b94954e253519aee92d99",
+    "run_terminal_review.py": "7ac24041bd0cc79ec01df052acb35fbe444cc5a805bb342969a21710b587e7cc",
+    "terminal_audit.py": "99318d69afdc8c942313be6091fcbba73f7e18c36f260beaced91f6f67c8e75d"
+  },
+  "new_training_budget": 5,
+  "auto_advance": false,
+  "candidate_route": "H5_plus_Wo_A8_H5",
+  "mode_marker": 2
+}

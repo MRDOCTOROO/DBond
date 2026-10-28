@@ -1,0 +1,16 @@
+{
+  "status": "source_deployed_only",
+  "gitrev": "e1f82daedee28d8f85c53a5f97794df408463ece",
+  "snapshot": "/mnt/pvc/graphtrans/dbond_serial_neighbor_qkv8_source_e1f82da",
+  "bundle_sha256": "0e46bbe767e972768d8dcabe7f2cfaa16b5b04c4f6e7c608dcda7dfad9ae6d39",
+  "dataset_realpath": "/mnt/pvc/graphtrans/DBond/dataset",
+  "candidate_config_sha256": "8ce89726b1aaee90ac97ea3eba8d129dd5b2f60f4588342d2cc85bd142f50779",
+  "auditor_sha256": {
+    "metadata_resource_audit.py": "cd055ce1b60afc23e6c20e625a2ec1663fdd3eefb47e0437c29c6e336be6575c",
+    "present_results.py": "539b3e5523e01fb4af0f5469eb53b4eaf372c4f2107b94954e253519aee92d99",
+    "run_terminal_review.py": "7ac24041bd0cc79ec01df052acb35fbe444cc5a805bb342969a21710b587e7cc",
+    "terminal_audit.py": "99318d69afdc8c942313be6091fcbba73f7e18c36f260beaced91f6f67c8e75d"
+  },
+  "preflight_executed": false,
+  "training_launched": false
+}
