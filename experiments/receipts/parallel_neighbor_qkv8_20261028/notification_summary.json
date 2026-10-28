@@ -1,0 +1,81 @@
+{
+  "decision": "未通过本轮预设工程门槛，保留原单全局节点＋k5模型",
+  "improvement_gate": false,
+  "metrics": {
+    "f1": {
+      "label": "肽键级 micro-F1",
+      "baseline": "80.5206 ± 0.6902%",
+      "candidate": "80.0129 ± 0.5897%",
+      "delta": "-0.5076 ± 0.3268个百分点",
+      "wins": 1,
+      "delta_mean_display": "-0.5076个百分点"
+    },
+    "ex_f1_harmonic": {
+      "label": "谱图平均P/R调和F1",
+      "baseline": "76.2674 ± 0.5546%",
+      "candidate": "75.8234 ± 0.3674%",
+      "delta": "-0.4440 ± 0.3873个百分点",
+      "wins": 1,
+      "delta_mean_display": "-0.4440个百分点"
+    },
+    "accuracy": {
+      "label": "Bond-Acc",
+      "baseline": "80.3090 ± 0.3729%",
+      "candidate": "79.5795 ± 0.2629%",
+      "delta": "-0.7295 ± 0.2025个百分点",
+      "wins": 0,
+      "delta_mean_display": "-0.7295个百分点"
+    },
+    "auc": {
+      "label": "ROC-AUC",
+      "baseline": "0.8878826 ± 0.0046607",
+      "candidate": "0.8800360 ± 0.0034590",
+      "delta": "-0.0078467 ± 0.0030128",
+      "wins": 0,
+      "delta_mean_display": "-0.0078467"
+    },
+    "q_brier": {
+      "label": "q-Brier ↓",
+      "baseline": "0.0642534 ± 0.0027737",
+      "candidate": "0.0694838 ± 0.0010364",
+      "delta": "+0.0052304 ± 0.0019511",
+      "wins": 0,
+      "delta_mean_display": "+0.0052304"
+    },
+    "q_seq": {
+      "label": "序列排序相关 q_seq",
+      "baseline": "0.6494086 ± 0.0699388",
+      "candidate": "0.6347691 ± 0.0737626",
+      "delta": "-0.0146395 ± 0.0357186",
+      "wins": 2,
+      "delta_mean_display": "-0.0146395"
+    },
+    "q_top10_enrichment_seq": {
+      "label": "Top10%序列富集比",
+      "baseline": "1.2581367 ± 0.0320714",
+      "candidate": "1.2633954 ± 0.0249557",
+      "delta": "+0.0052586 ± 0.0270319",
+      "wins": 2,
+      "delta_mean_display": "+0.0052586"
+    },
+    "ex_precision": {
+      "label": "谱图平均Precision",
+      "baseline": "73.5170 ± 1.2592%",
+      "candidate": "72.1506 ± 0.7921%",
+      "delta": "-1.3665 ± 0.8630个百分点",
+      "wins": 0,
+      "delta_mean_display": "-1.3665个百分点"
+    },
+    "ex_recall": {
+      "label": "谱图平均Recall",
+      "baseline": "79.2830 ± 1.9554%",
+      "candidate": "79.9136 ± 1.3453%",
+      "delta": "+0.6305 ± 1.6948个百分点",
+      "wins": 2,
+      "delta_mean_display": "+0.6305个百分点"
+    }
+  },
+  "batch_wall_minutes": "95.51",
+  "scope": "No extra training or manuscript replacement",
+  "audit_passed": true
+}

@@ -1,0 +1,16 @@
+{
+  "status": "passed",
+  "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/parallel_neighbor_qkv8_batch/20261028_091256",
+  "gitrev": "920e9a71e9b8839e88f7b5632bb786627d9defee",
+  "strict_cpu_checkpoints": 10,
+  "same_pass_predictions_recomputed": 10,
+  "trained_formula_checks": 5,
+  "performance_joint_goal_passed": false,
+  "main_review_sha256": "a1a912937fdfc4c0a4a24c6bce4b94b303659e51b0dc18bd7005819edf77ef87",
+  "resource_review_sha256": "5291ef622c0faa9c1733384df5ecb26b4658b9413b5dcdccf4f0bca1d90077e8",
+  "presentation_review_sha256": "03e825a39eb5e14d16a425132f9713938f66f94665e550de5ff56fd725a4f568",
+  "result_sha256": "2e2ee76f3c337ea7e83e9787487acd62173064cbcfaf790864c035a39f189627",
+  "registry_sha256": "112b570e85287b4b347cd875ccbeb3d69a4d109aae843ea8f91f8c0a96529047",
+  "verified_at": "2026-10-28T11:36:51.923513+00:00",
+  "verification_script_sha256": "b3774147b5bf0dbc6059e54ee1bdbfd58b70e77ae3fe2ad6c2c51147b80c0129"
+}
