@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "namespace": "dbond_parallel_sequence_encoder_20261101",
+  "status": "audited",
+  "authorization": "2026-11-01用户授权制定方案并在Pod验证完整图路线与独立Transformer路线末端融合",
+  "pod": "gsj-5090.devpod",
+  "python": "/mnt/pvc/graphtrans/DBond/.venv/bin/python",
+  "ops": "/mnt/pvc/graphtrans/dbond_parallel_sequence_encoder_20261101_ops",
+  "local_source": "F:/codexout/dbond_graph_transformer_parallel_dev_20261101",
+  "source_base": "111c23313da9ae11a7ee33f8357be0a1876086ec",
+  "candidate": "intact_graph_route_plus_independent_preconv_sequence_transformer1_late_residual_fusion",
+  "common_input": "original_NodeEncoder_output_before_k5",
+  "new_training_budget": 5,
+  "folds": [
+    "1222",
+    "2252",
+    "3514",
+    "6072",
+    "9075"
+  ],
+  "training_base_seed": 42,
+  "validation_split_base_seed": 42,
+  "baseline": {
+    "ops": "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops",
+    "arm": "single",
+    "source": "111c23313da9ae11a7ee33f8357be0a1876086ec",
+    "reuse_status": "passed_five_checkpoint_sha_strict_cpu_data_protocol_and_legacy_one_step_equivalence",
+    "result_sha256": "683e19aa5358f9870b4b6ee298d45d3de4493ddb26c67d1f7fdf5d9c0472409d",
+    "registry_sha256": "4f4b7d476d94fe25126d4ca8d4cf85ab2e1285c5d910cff624e98fd62bb61254"
+  },
+  "engineering_gates": {
+    "bond_f1_delta_min": 0.0,
+    "q_seq_delta_min": 0.01,
+    "q_seq_wins_min": 4,
+    "spectrum_harmonic_f1_delta_min": -0.002,
+    "auc_delta_min": -0.001,
+    "q_brier_delta_max": 0.001,
+    "require_all": true,
+    "secondary_without_mandatory_improvement": [
+      "top10",
+      "precision",
+      "recall",
+      "bond_accuracy"
+    ]
+  },
+  "auto_advance": false,
+  "auto_advance_allowlist": [],
+  "no_automatic_replication_or_paper_promotion": true,
+  "completion_event_acknowledged": true,
+  "no_local_numerical_execution": true,
+  "source_commit": "683a7fb01748786b457a2d27d56af949a182c2f0",
+  "source_snapshot": "/mnt/pvc/graphtrans/dbond_parallel_sequence_encoder_source_683a7fb",
+  "source_bundle": "F:/codexout/dbond_parallel_sequence_encoder_results_20261101/source.bundle",
+  "source_bundle_sha256": "ff1d1ca9225eb242432d84ac2f4d43b4bbbca8d192c26f1c7881ca6464d1eeb7",
+  "source_bundle_prerequisite": "111c23313da9ae11a7ee33f8357be0a1876086ec",
+  "config": "graph_transform/config/pre_synthesis_parallel_sequence_encoder_seed42.yaml",
+  "config_sha256": "5a3fdf3542e0c4811d7395147631e6da6c4fdb7d0818fcd0737e9fc88971e497",
+  "source_tag": "dbond-parallel-sequence-transformer1-seed42-v1-20261101",
+  "launch_root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/parallel_sequence_encoder_batch/20261101_032319",
+  "launch_created_at": "2026-11-01T11:23:19.380605+08:00",
+  "launch_sha256": "1348f71b724df669c287736b4ddb94e3c17473f96964d3e8d6b4147c9740f333",
+  "smoke_sha256": "1f4626d68391ec22fd6ff1d46bb6498d33eb447b30f1f1e6828f31b3a8b1a3a1",
+  "launch": {
+    "status": "uniquely_submitted",
+    "gpus": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "worker_pid": 2718038
+  },
+  "preflight": {
+    "status": "passed",
+    "strict_baseline_reuse": true,
+    "initial_failure_preserved": true,
+    "verification_execution": {
+      "cpu_threads": 1,
+      "production_training_unchanged": true,
+      "adapter": "/mnt/pvc/graphtrans/dbond_parallel_sequence_encoder_20261101_ops/independent_audit/run_preflight_fixed_cpu.py",
+      "adapter_sha256": "029beb07aa0f5ed17c1196a1c00da00850ed59fa35d7c5ee37307fead074d3c1",
+      "first_failed_preflight_sha256": "d682574df2e045aad24e2fc0990764186d012c48387b1cfc554f69f4cd604ae0",
+      "diagnostic_sha256": {
+        "initial_equivalence_diagnostic.json": "0446e0718fc759511b1b1c4d2cdf2a9e0d91e0c61c4d72da2a741be4151c9e97",
+        "preflight_context_diagnostic.json": "23ff77135aa438c9239bd4865b3c7cf8d5c225367e31a363d7020f5244321cce",
+        "no_hook_diagnostic.json": "86d7c9e8a4c0da9b2e90a7243d180e1a45fd804b89c45f3aecf92bd5f97e08fe"
+      },
+      "no_assertion_or_tolerance_relaxed": true,
+      "root_cause": "First exact comparison failure was not reproduced in fixed-fixture diagnostics; verification uses a fixed single CPU thread."
+    }
+  },
+  "fold_seeds": {
+    "1222": {
+      "training": 949822381,
+      "split": 949822381
+    },
+    "2252": {
+      "training": 2775888976,
+      "split": 2775888976
+    },
+    "3514": {
+      "training": 1365222152,
+      "split": 1365222152
+    },
+    "6072": {
+      "training": 612878555,
+      "split": 612878555
+    },
+    "9075": {
+      "training": 1785808201,
+      "split": 1785808201
+    }
+  },
+  "parameter_count": {
+    "baseline": 2002284,
+    "candidate": 2595180,
+    "added": 592896
+  },
+  "auditor_sha256": {
+    "terminal_audit.py": "2c7061bb9cc272431be865eaa75de1ab3f5afdc25ebada4ed353d7e489b93838",
+    "metadata_resource_audit.py": "d22f8df380b60f55ced679e2e0abba10ad4bac98fcc0b27d993cc97f287205ff",
+    "present_results.py": "6295f6d0aef3299a47b5858d10203471d205815176442b4216fc8445c3b05654",
+    "run_terminal_review.py": "28e96f038df1f8ac4a4429e90f1eecabff690975497cd9ba1591efa805d062e9"
+  },
+  "review_plan_sha256": "d1778d0916acfb3de0149ec3f9954b4b646a2322367622404f41c991d1af4e55",
+  "completion_monitor": "stopped_automation_deleted",
+  "automation_id": "dbond-transformer",
+  "submission_binding_status": "passed",
+  "updated_at": "2026-11-01",
+  "audit_driver_pid": 2725060,
+  "audit_driver_started_once": true,
+  "completion_event_key": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/parallel_sequence_encoder_batch/20261101_032319|completed",
+  "audit_finished_at": "2026-11-01T04:18:44.443826+00:00",
+  "engineering_gate_passed": false,
+  "decision": "未达到本轮完整工程目标",
+  "result_sha256": "0c821f1395da3f62325b1d3bb166e622439ddc7c5aed4fc6577bf134ec8db259",
+  "checkpoint_registry_sha256": "bec86da35834c37ab9bbe7f74df62c378f8c7523542891bb61894948cf79af6e",
+  "audit_receipt_sha256": "8cdd53673737b05f7429b92ad5ce26f37fa8cf2fe0aa352feda8dbe11c698b02",
+  "metadata_resource_receipt_sha256": "fe211805111f166124edc3ee9f499c8fb42a074e9e00e52661492997e88ffeae",
+  "presentation_receipt_sha256": "6443d0848d303dd6d795271cd50a0e9b8a949579978db5119183fd2fb3b2198f",
+  "final_binding_receipt_sha256": "3753fe48631011cb28c799dfb9310206e4bfb00000ba11dd807cef220c1d3ace",
+  "archive_sha256": "d95bb31337f4194c7abb1baa68f4b0fc24244ef953a005da2e4d62233e35dab1",
+  "completion_ack_receipt_sha256": "2b7f30a7282934158c107b5176f3d5e3f55a5da1a98746257963e3813e3a09e2",
+  "completion_summary": {
+    "f1": {
+      "label": "肽键级 micro-F1",
+      "baseline": "80.5206 ± 0.6902%",
+      "candidate": "79.0599 ± 0.5279%",
+      "delta": "-1.4607 ± 0.3038个百分点",
+      "wins": 0,
+      "delta_mean_display": "-1.4607个百分点"
+    },
+    "ex_f1_harmonic": {
+      "label": "谱图平均P/R调和F1",
+      "baseline": "76.2674 ± 0.5546%",
+      "candidate": "74.4645 ± 0.4033%",
+      "delta": "-1.8029 ± 0.4378个百分点",
+      "wins": 0,
+      "delta_mean_display": "-1.8029个百分点"
+    },
+    "q_seq": {
+      "label": "序列排序相关 q_seq",
+      "baseline": "0.6494086 ± 0.0699388",
+      "candidate": "0.5416521 ± 0.0755700",
+      "delta": "-0.1077565 ± 0.0522470",
+      "wins": 0,
+      "delta_mean_display": "-0.1077565"
+    },
+    "q_top10_enrichment_seq": {
+      "label": "Top10%序列富集比",
+      "baseline": "1.2581367 ± 0.0320714",
+      "candidate": "1.2443476 ± 0.0267490",
+      "delta": "-0.0137891 ± 0.0283882",
+      "wins": 1,
+      "delta_mean_display": "-0.0137891"
+    }
+  },
+  "next_experiments_authorized": false,
+  "automation_deleted": true
+}
