@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "namespace": "dbond_bond_query_neighbor_20261101",
+  "status": "audited",
+  "authorization": "2026-11-01用户授权继续验证消息机制互补性，优先进行肽键Query邻域交叉注意力最小对照",
+  "pod": "gsj-5090.devpod",
+  "python": "/mnt/pvc/graphtrans/DBond/.venv/bin/python",
+  "ops": "/mnt/pvc/graphtrans/dbond_bond_query_neighbor_20261101_ops",
+  "local_source": "F:/codexout/dbond_bond_query_neighbor_dev_20261101",
+  "source_base": "111c23313da9ae11a7ee33f8357be0a1876086ec",
+  "candidate": "bond_query_qkv8",
+  "new_training_budget": 5,
+  "folds": [
+    "1222",
+    "2252",
+    "3514",
+    "6072",
+    "9075"
+  ],
+  "training_base_seed": 42,
+  "validation_split_base_seed": 42,
+  "baseline": {
+    "ops": "/mnt/pvc/graphtrans/four_state_parallel_global_replication_ops",
+    "arm": "single",
+    "source": "111c23313da9ae11a7ee33f8357be0a1876086ec",
+    "reuse_status": "passed_five_checkpoint_sha_strict_cpu_data_protocol_and_legacy_one_step_equivalence",
+    "result_sha256": "683e19aa5358f9870b4b6ee298d45d3de4493ddb26c67d1f7fdf5d9c0472409d",
+    "registry_sha256": "4f4b7d476d94fe25126d4ca8d4cf85ab2e1285c5d910cff624e98fd62bb61254"
+  },
+  "engineering_gates": {
+    "bond_f1_delta_min": 0.0,
+    "q_seq_delta_min": 0.01,
+    "q_seq_wins_min": 4,
+    "spectrum_harmonic_f1_delta_min": -0.002,
+    "auc_delta_min": -0.001,
+    "q_brier_delta_max": 0.001,
+    "require_all": true,
+    "secondary_without_mandatory_improvement": [
+      "top10",
+      "precision",
+      "recall",
+      "bond_accuracy"
+    ]
+  },
+  "auto_advance": false,
+  "auto_advance_allowlist": [],
+  "completion_event_acknowledged": true,
+  "no_automatic_replication_or_paper_promotion": true,
+  "no_local_numerical_execution": true,
+  "source_commit": "36fcc54f5f6ee9975b4b98a4f36fb2455095d257",
+  "source_snapshot": "/mnt/pvc/graphtrans/dbond_bond_query_neighbor_source_36fcc54",
+  "source_bundle": "F:/codexout/dbond_bond_query_neighbor_results_20261101/source.bundle",
+  "source_bundle_sha256": "977808e53bb3121b8b2c430d915903e748bdea899cd711130dba4ae64890bd7a",
+  "source_bundle_prerequisite": "111c23313da9ae11a7ee33f8357be0a1876086ec",
+  "config": "graph_transform/config/pre_synthesis_bond_query_neighbor_seed42.yaml",
+  "config_sha256": "99ad529b1d4b425f711e24658895fee8553e92270007ad9f6645e22101847c44",
+  "source_tag": "dbond-bond-query-neighbor-qkv8-seed42-v1-20261101",
+  "launch_root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/bond_query_neighbor_batch/20261101_151012",
+  "launch_created_at": "2026-11-01T15:10:12.594146+00:00",
+  "launch_sha256": "b2ceb4f64e222b869b36d0d45b86c2f364cb6acfbaff027818e208844b45d75c",
+  "smoke_sha256": "ce1af33aa2bc09d2ea2fe2b285ccc71050a72c46d745766d09f328845f98ee93",
+  "launch": {
+    "status": "uniquely_submitted",
+    "gpus": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "worker_pid": 2770123
+  },
+  "preflight": {
+    "status": "passed",
+    "strict_baseline_reuse": true,
+    "verification_cpu_threads": 1
+  },
+  "fold_seeds": {
+    "1222": {
+      "training": 949822381,
+      "split": 949822381
+    },
+    "2252": {
+      "training": 2775888976,
+      "split": 2775888976
+    },
+    "3514": {
+      "training": 1365222152,
+      "split": 1365222152
+    },
+    "6072": {
+      "training": 612878555,
+      "split": 612878555
+    },
+    "9075": {
+      "training": 1785808201,
+      "split": 1785808201
+    }
+  },
+  "parameter_count": {
+    "baseline": 2002284,
+    "candidate": 2396524,
+    "added": 394240
+  },
+  "auditor_sha256": {
+    "terminal_audit.py": "d51663730a8577b781d33e5dc45a4f8e2d852ae557341468026f7e25e29e8d3e",
+    "metadata_resource_audit.py": "c837f475f18351c9e5efa465e23f912ac6d4bba08c60aa4976bcefcab62b7c7a",
+    "present_results.py": "ca82f33d28a9aaf98fe9887047f153d990c7f461457b7b6c3a4ac5738128addb",
+    "run_terminal_review.py": "0f5e22895ace60f728d1428376d7b077dd09fd707a3942ad66f429908cc63fc5"
+  },
+  "review_plan_sha256": "752a0e42067a76a23b079e563a989033edb8118e0d54c534d9f78d92d2920df4",
+  "completion_monitor": "stopped_automation_deleted",
+  "submission_verification": {
+    "status": "passed",
+    "root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/bond_query_neighbor_batch/20261101_151012",
+    "source_commit": "36fcc54f5f6ee9975b4b98a4f36fb2455095d257",
+    "source_files_unchanged": true,
+    "launch_sha256": "b2ceb4f64e222b869b36d0d45b86c2f364cb6acfbaff027818e208844b45d75c",
+    "smoke_sha256": "ce1af33aa2bc09d2ea2fe2b285ccc71050a72c46d745766d09f328845f98ee93",
+    "review_plan_sha256": "752a0e42067a76a23b079e563a989033edb8118e0d54c534d9f78d92d2920df4",
+    "auditor_sha256": {
+      "terminal_audit.py": "d51663730a8577b781d33e5dc45a4f8e2d852ae557341468026f7e25e29e8d3e",
+      "metadata_resource_audit.py": "c837f475f18351c9e5efa465e23f912ac6d4bba08c60aa4976bcefcab62b7c7a",
+      "present_results.py": "ca82f33d28a9aaf98fe9887047f153d990c7f461457b7b6c3a4ac5738128addb",
+      "run_terminal_review.py": "0f5e22895ace60f728d1428376d7b077dd09fd707a3942ad66f429908cc63fc5"
+    },
+    "verification_cpu_threads": 1,
+    "no_preflight_adapter_required": true
+  },
+  "completion_event_key": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/bond_query_neighbor_batch/20261101_151012|completed",
+  "audit_finished_at": "2026-11-01T16:05:08.708750+00:00",
+  "engineering_gate_passed": false,
+  "decision": "未达到本轮完整工程目标",
+  "result_sha256": "738dba1ab7d37afeb8a1fe1a5f1ef0c1c7937705c58c2fc9be61cf13809489e3",
+  "checkpoint_registry_sha256": "7f8db26aaba4a25e199d33fe8c547b23a93f6b0a75f1bad653b5063c3b921a88",
+  "audit_receipt_sha256": "84ca073499a0696dcee2b79f53a50a34f65792f537781aa723cf7c0cb173e981",
+  "metadata_resource_receipt_sha256": "7d73bc05f09ad2015eae664e19d429d2e82719e57b6c7d00f167ae4271df1906",
+  "presentation_receipt_sha256": "decced5bb8f236de2f1434da86486f6bcf68ef64d561345a6c8239448fac1c5f",
+  "final_binding_receipt_sha256": "791976146b3e42cc4634a5a44d295babda739da419bf5c63b8e53527f3757a24",
+  "archive_sha256": "7adc1bd085e06b2cad6b1094b5d28916cfe0ca14409dbf9446a7165546c86ff7",
+  "completion_ack_receipt_sha256": "19a287b63af7180bc8e02b708c0ecc85a1b520dfe02ecc4ced56df8b21a82a1c",
+  "completion_summary": {
+    "f1": {
+      "label": "肽键级 micro-F1",
+      "baseline": "80.5206 ± 0.6902%",
+      "candidate": "80.1171 ± 0.4256%",
+      "delta": "-0.4034 ± 0.2958个百分点",
+      "wins": 0,
+      "delta_mean_display": "-0.4034个百分点"
+    },
+    "ex_f1_harmonic": {
+      "label": "谱图平均P/R调和F1",
+      "baseline": "76.2674 ± 0.5546%",
+      "candidate": "75.6490 ± 0.1759%",
+      "delta": "-0.6184 ± 0.4924个百分点",
+      "wins": 0,
+      "delta_mean_display": "-0.6184个百分点"
+    },
+    "q_seq": {
+      "label": "序列排序相关 q_seq",
+      "baseline": "0.6494086 ± 0.0699388",
+      "candidate": "0.6594864 ± 0.0704131",
+      "delta": "+0.0100778 ± 0.0268359",
+      "wins": 3,
+      "delta_mean_display": "+0.0100778"
+    },
+    "q_top10_enrichment_seq": {
+      "label": "Top10%序列富集比",
+      "baseline": "1.2581367 ± 0.0320714",
+      "candidate": "1.2496280 ± 0.0291988",
+      "delta": "-0.0085087 ± 0.0269208",
+      "wins": 2,
+      "delta_mean_display": "-0.0085087"
+    }
+  },
+  "next_experiments_authorized": false,
+  "updated_at": "2026-11-02",
+  "automation_deleted": true
+}
