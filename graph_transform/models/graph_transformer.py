@@ -819,6 +819,55 @@ class GraphTransformer(nn.Module):
             self.register_buffer('virtual_node_schema_code', torch.tensor(1, dtype=torch.int64))
             self.register_buffer('virtual_node_group_size_code', torch.tensor(
                 self.virtual_group_size, dtype=torch.int64))
+
+        # Independent complete sequence route: capture the shared NodeEncoder
+        # output before k5; fuse only after the unchanged full GCN/GAT route.
+        # Construct last and fork CPU initialization RNG, keeping every legacy
+        # parameter and the subsequent training/dropout random stream intact.
+        from .parallel_sequence_encoder import (
+            validate_parallel_sequence_encoder_mode, parallel_sequence_marker_values,
+            ParallelSequenceTransformer1)
+        self.parallel_sequence_encoder_mode = validate_parallel_sequence_encoder_mode(
+            getattr(config, 'parallel_sequence_encoder_mode', 'none'))
+        if self.parallel_sequence_encoder_mode != 'none':
+            required = {
+                'hidden_dim': 256, 'node_conv_mode': 'single_k5',
+                'virtual_node_mode': 'single', 'use_global_node': True,
+                'use_condition_film': True, 'num_gcn_layers': 3,
+                'num_gat_layers': 2, 'num_attention_heads': 4,
+                'gat_attention_type': 'gat', 'edge_state_mode': 'static',
+                'theory_fusion_stage': 'late', 'bond_fusion_mode': 'concat',
+                'bond_head_type': 'four_state_mlp', 'use_theory_features': True,
+                'bond_use_edge_repr': True, 'bond_use_diff_feature': True,
+                'bond_use_product_feature': True, 'concat_heads': True,
+                'gat_use_edge_bias': True, 'gat_use_edge_gate': True,
+                'position_embedding_mode': 'input_concat',
+                'use_position_embedding': True, 'use_state_features': True,
+                'use_env_features': True, 'use_physicochemical_features': True,
+                'use_edge_features': True, 'use_raw_edge_attr': True,
+                'use_edge_type_embedding': True, 'use_distance_embedding': True,
+                'dropout': 0.1, 'use_long_range_edges': False,
+                'sequence_adapter_type': 'none', 'bond_condition_mode': 'none',
+                'use_residue_chemistry': False, 'use_fragment_readout': False,
+                'use_ion12_aux_head': False, 'use_deep_supervision': False,
+                'use_peptide_aux_head': False, 'use_charge_partition_features': False,
+            }
+            mismatched = {key: (getattr(config, key, value), value)
+                          for key, value in required.items()
+                          if getattr(config, key, value) != value}
+            for key in ('parallel_neighbor_attention_mode', 'neighbor_attention_mode'):
+                if getattr(config, key, 'none') != 'none':
+                    mismatched[key] = (getattr(config, key), 'none')
+            if mismatched:
+                raise ValueError(
+                    'transformer1 requires the frozen single-k5 four-state graph recipe; '
+                    f'unsupported combinations={mismatched}')
+            with torch.random.fork_rng(devices=[]):
+                self.parallel_sequence_context = ParallelSequenceTransformer1(self.hidden_dim)
+            for key, value in parallel_sequence_marker_values().items():
+                self.register_buffer(key, torch.tensor(value, dtype=torch.int64))
+        self.enable_parallel_sequence_diagnostics = False
+        self.last_parallel_sequence_diagnostics = {}
     
     def load_state_dict(self, state_dict, strict=True, assign=False):
         # Validate before PyTorch starts copying any shared tensors. This also
@@ -831,6 +880,7 @@ class GraphTransformer(nn.Module):
         from .dynamic_edges import validate_edge_state_checkpoint
         from .bond_fusion_heads import validate_bond_fusion_checkpoint
         from .node_context_conv import validate_node_conv_checkpoint
+        from .parallel_sequence_encoder import validate_parallel_sequence_checkpoint
         from .utils import validate_virtual_node_checkpoint
         try:
             validate_attention_checkpoint(self, state_dict)
@@ -842,6 +892,7 @@ class GraphTransformer(nn.Module):
             validate_bond_fusion_checkpoint(self, state_dict)
             validate_node_conv_checkpoint(self, state_dict)
             validate_virtual_node_checkpoint(self, state_dict)
+            validate_parallel_sequence_checkpoint(self, state_dict)
         except ValueError as error:
             raise RuntimeError(str(error)) from error
         saved_ion = {k for k in state_dict if k.startswith('ion12_head.')}
@@ -880,6 +931,11 @@ class GraphTransformer(nn.Module):
         node_features = self.node_encoder(
             batch_data, self.residue_chemistry if self.use_residue_chemistry else None,
             self.sequence_adapter if self.sequence_adapter_type != 'none' else None)
+        # This reference is captured before the graph route applies k5. The
+        # graph path below is unchanged; the sequence branch never reads H3/H5.
+        sequence_route_input = (node_features
+                                if self.parallel_sequence_encoder_mode != 'none' else None)
+        self.last_parallel_sequence_diagnostics = {}
         self.last_node_conv_diagnostics = {}
         if self.node_conv_mode != 'none':
             self.node_context_conv.enable_node_conv_diagnostics = bool(self.enable_node_conv_diagnostics)
@@ -1133,6 +1189,29 @@ class GraphTransformer(nn.Module):
                     gat_timings[f'gat_layer_{i}_{key}'] = float(value)
         if timing_enabled:
             gat_end = time.perf_counter()
+
+        if self.parallel_sequence_encoder_mode != 'none':
+            self.parallel_sequence_context.enable_diagnostics = bool(
+                self.enable_parallel_sequence_diagnostics)
+            sequence_residual = self.parallel_sequence_context(
+                sequence_route_input, seq_lens_tensor)
+            # Flatten true residues in the same row-major order used by graph
+            # packing. Each sequence's global node receives exactly zero.
+            residue_indices = (node_offsets[:, None] + seq_positions[None, :])[valid_seq_mask]
+            packed_residual = node_features.new_zeros(node_features.shape).index_copy(
+                0, residue_indices, sequence_residual[valid_seq_mask].to(node_features.dtype))
+            graph_output = node_features
+            node_features = graph_output + packed_residual
+            if self.enable_parallel_sequence_diagnostics:
+                self.last_parallel_sequence_diagnostics = {
+                    'mode': self.parallel_sequence_encoder_mode,
+                    **self.parallel_sequence_context.last_diagnostics,
+                    'branch_input': sequence_route_input.detach(),
+                    'packed_residue_indices': residue_indices.detach(),
+                    'packed_residual': packed_residual.detach(),
+                    'graph_output': graph_output.detach(),
+                    'fused_output': node_features.detach(),
+                }
 
         # Read the four independently updated global tokens from the actual
         # packed GNN output. Their order is fixed by GraphBuilder: L..L+3.

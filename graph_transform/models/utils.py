@@ -157,6 +157,9 @@ class ModelConfig:
         # Optional full-width residue Conv1D before global packing and FiLM;
         # none preserves the legacy model state and initialization RNG.
         self.node_conv_mode = 'none'
+        # Independent pre-k5 sequence Transformer fused after the original
+        # complete GCN/GAT route. none adds no module or checkpoint state.
+        self.parallel_sequence_encoder_mode = 'none'
         # Experimental grouped and parallel virtual nodes are opt-in. The
         # single route preserves its original graph, RNG and checkpoint schema.
         self.virtual_node_mode = 'single'
@@ -232,6 +235,8 @@ class ModelConfig:
         validate_bond_fusion_mode(self.bond_fusion_mode)
         from .node_context_conv import validate_node_conv_mode
         validate_node_conv_mode(self.node_conv_mode)
+        from .parallel_sequence_encoder import validate_parallel_sequence_encoder_mode
+        validate_parallel_sequence_encoder_mode(self.parallel_sequence_encoder_mode)
         validate_virtual_node_mode(self.virtual_node_mode)
         validate_virtual_group_size(self.virtual_group_size)
     
@@ -570,6 +575,11 @@ class CheckpointManager:
         if hasattr(model, 'node_conv_mode'):
             from .node_context_conv import validate_node_conv_checkpoint
             validate_node_conv_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
+
+        if hasattr(model, 'parallel_sequence_encoder_mode'):
+            from .parallel_sequence_encoder import validate_parallel_sequence_checkpoint
+            validate_parallel_sequence_checkpoint(
+                model, checkpoint['model_state_dict'], checkpoint.get('config'))
 
         if hasattr(model, 'virtual_node_mode'):
             validate_virtual_node_checkpoint(model, checkpoint['model_state_dict'], checkpoint.get('config'))
