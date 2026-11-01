@@ -819,6 +819,51 @@ class GraphTransformer(nn.Module):
             self.register_buffer('virtual_node_schema_code', torch.tensor(1, dtype=torch.int64))
             self.register_buffer('virtual_node_group_size_code', torch.tensor(
                 self.virtual_group_size, dtype=torch.int64))
+
+        # This isolated experiment adds only a readout on the completed H5;
+        # original nodes, GAT layers and six source slots are never replaced.
+        from .bond_neighbor_context import (validate_bond_neighbor_context_mode,
+                                            BondNeighborQKV8,
+                                            BOND_NEIGHBOR_MARKER_VALUES)
+        self.bond_neighbor_context_mode = validate_bond_neighbor_context_mode(
+            getattr(config, 'bond_neighbor_context_mode', 'none'))
+        if self.bond_neighbor_context_mode != 'none':
+            original_recipe = (
+                self.hidden_dim == 256 and len(self.gcn_layers) == 3
+                and len(self.gat_layers) == 2 and config.num_attention_heads == 4
+                and self.gat_attention_type == 'gat'
+                and self.node_conv_mode == 'single_k5'
+                and self.virtual_node_mode == 'single' and self.use_global_node
+                and self.use_condition_film and self.edge_state_mode == 'static'
+                and self.theory_fusion_stage == 'late' and self.use_theory_features
+                and self.bond_head_type == 'four_state_mlp'
+                and self.bond_fusion_mode == 'concat'
+                and self.position_embedding_mode == 'input_concat'
+                and config.use_position_embedding and config.use_physicochemical_features
+                and self.use_state_features and self.use_env_features
+                and config.use_edge_features and config.concat_heads
+                and config.gat_use_edge_bias and config.gat_use_edge_gate
+                and all((self.bond_use_edge_repr, self.bond_use_diff_feature,
+                         self.bond_use_product_feature))
+                and config.max_distance == 6
+                and not config.use_long_range_edges
+                and not self.use_charge_partition_features
+                and not self.use_residue_chemistry and not self.use_fragment_readout
+                and self.sequence_adapter_type == 'none'
+                and self.bond_condition_mode == 'none'
+                and not self.use_ion12_aux_head and not self.use_deep_supervision
+                and not self.use_peptide_aux_head
+                and getattr(config, 'parallel_neighbor_attention_mode', 'none') == 'none'
+                and getattr(config, 'parallel_sequence_encoder_mode', 'none') == 'none')
+            if not original_recipe:
+                raise ValueError('bond_query_qkv8 requires the frozen original single-k5 four-state recipe')
+            # Build last, protect all legacy initialization and subsequent RNG.
+            with torch.random.fork_rng(devices=[]):
+                self.bond_neighbor_context = BondNeighborQKV8(self.hidden_dim)
+            for name, value in BOND_NEIGHBOR_MARKER_VALUES.items():
+                self.register_buffer(name, torch.tensor(value, dtype=torch.int64))
+        self.enable_bond_neighbor_diagnostics = False
+        self.last_bond_neighbor_diagnostics = {}
     
     def load_state_dict(self, state_dict, strict=True, assign=False):
         # Validate before PyTorch starts copying any shared tensors. This also
@@ -832,7 +877,9 @@ class GraphTransformer(nn.Module):
         from .bond_fusion_heads import validate_bond_fusion_checkpoint
         from .node_context_conv import validate_node_conv_checkpoint
         from .utils import validate_virtual_node_checkpoint
+        from .bond_neighbor_context import validate_bond_neighbor_checkpoint
         try:
+            validate_bond_neighbor_checkpoint(self, state_dict)
             validate_attention_checkpoint(self, state_dict)
             validate_position_checkpoint(self, state_dict)
             validate_bond_head_checkpoint(self, state_dict)
@@ -871,6 +918,7 @@ class GraphTransformer(nn.Module):
             torch.Tensor: 键级别断裂预测结果 [batch_size, max_bonds]
         """
         timing_enabled = bool(getattr(self, 'enable_timing', False))
+        self.last_bond_neighbor_diagnostics = {}
         device = self._infer_batch_device(batch_data)
         if timing_enabled:
             _maybe_sync(device, True)
@@ -1222,7 +1270,31 @@ class GraphTransformer(nn.Module):
             ion12_active = self.use_ion12_aux_head and self.training
             if self.bond_head_type == 'four_state_mlp':
                 from .four_state import union_logit
-                if self.virtual_node_mode == 'parallel4_cross':
+                if self.bond_neighbor_context_mode == 'bond_query_qkv8':
+                    # The query reads H5 endpoints and the original e_ij; K/V
+                    # are unique real graph neighbors. Only head hidden states
+                    # receive the delta, so H5 and the original 6H concat stay.
+                    context_diagnostics = bool(self.enable_bond_neighbor_diagnostics)
+                    self.bond_neighbor_context.enable_diagnostics = context_diagnostics
+                    context_delta = self.bond_neighbor_context(
+                        node_features, batch_data['edge_index'], bond_src, bond_dst,
+                        e_ij, seq_lens_tensor, node_lens_tensor)
+                    hidden = self.bond_head[1](self.bond_head[0](bond_features))
+                    fused_hidden = hidden + context_delta.to(dtype=hidden.dtype)
+                    state_logits = self.bond_head[3](self.bond_head[2](fused_hidden)).float()
+                    if context_diagnostics:
+                        self.last_bond_neighbor_diagnostics = dict(
+                            self.bond_neighbor_context.last_diagnostics)
+                        self.last_bond_neighbor_diagnostics.update({
+                            'H5': node_features.detach(),
+                            'bond_src': bond_src.detach(), 'bond_dst': bond_dst.detach(),
+                            'e_ij': e_ij.detach(),
+                            'base_hidden': hidden.detach(),
+                            'fused_hidden': fused_hidden.detach(),
+                            'bond_features': bond_features.detach(),
+                            'valid_bond_mask': valid_bond_mask.detach(),
+                        })
+                elif self.virtual_node_mode == 'parallel4_cross':
                     # Every valid bond reads the four post-GNN global slots
                     # using its two endpoint representations as the query.
                     bond_sample_indices = torch.arange(

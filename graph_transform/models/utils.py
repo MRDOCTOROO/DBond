@@ -167,6 +167,9 @@ class ModelConfig:
         # Independent from the binary/four-state supervision choice. Legacy
         # concat adds neither state-dict keys nor initialization RNG draws.
         self.bond_fusion_mode = 'concat'
+        # Independent bond queries read nearby real residues after the complete
+        # original graph network. Absence preserves the historical model.
+        self.bond_neighbor_context_mode = 'none'
         self.use_charge_partition_features = False
         self.bond_cross_attention_heads = 4
         # Target-domain operational fragment matches, used only as training targets.
@@ -232,6 +235,8 @@ class ModelConfig:
         validate_bond_fusion_mode(self.bond_fusion_mode)
         from .node_context_conv import validate_node_conv_mode
         validate_node_conv_mode(self.node_conv_mode)
+        from .bond_neighbor_context import validate_bond_neighbor_context_mode
+        validate_bond_neighbor_context_mode(self.bond_neighbor_context_mode)
         validate_virtual_node_mode(self.virtual_node_mode)
         validate_virtual_group_size(self.virtual_group_size)
     
