@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "source_commit": "683a7fb01748786b457a2d27d56af949a182c2f0",
+  "launch_root": "/mnt/pvc/graphtrans/DBond/checkpoints/graph_transform/parallel_sequence_encoder_batch/20261101_032319",
+  "launch_sha256": "1348f71b724df669c287736b4ddb94e3c17473f96964d3e8d6b4147c9740f333",
+  "smoke_sha256": "1f4626d68391ec22fd6ff1d46bb6498d33eb447b30f1f1e6828f31b3a8b1a3a1",
+  "auditor_sha256": {
+    "terminal_audit.py": "2c7061bb9cc272431be865eaa75de1ab3f5afdc25ebada4ed353d7e489b93838",
+    "metadata_resource_audit.py": "d22f8df380b60f55ced679e2e0abba10ad4bac98fcc0b27d993cc97f287205ff",
+    "present_results.py": "6295f6d0aef3299a47b5858d10203471d205815176442b4216fc8445c3b05654",
+    "run_terminal_review.py": "28e96f038df1f8ac4a4429e90f1eecabff690975497cd9ba1591efa805d062e9"
+  },
+  "preflight_adapter": {
+    "cpu_threads": 1,
+    "production_training_unchanged": true,
+    "adapter": "/mnt/pvc/graphtrans/dbond_parallel_sequence_encoder_20261101_ops/independent_audit/run_preflight_fixed_cpu.py",
+    "adapter_sha256": "029beb07aa0f5ed17c1196a1c00da00850ed59fa35d7c5ee37307fead074d3c1",
+    "first_failed_preflight_sha256": "d682574df2e045aad24e2fc0990764186d012c48387b1cfc554f69f4cd604ae0",
+    "diagnostic_sha256": {
+      "initial_equivalence_diagnostic.json": "0446e0718fc759511b1b1c4d2cdf2a9e0d91e0c61c4d72da2a741be4151c9e97",
+      "preflight_context_diagnostic.json": "23ff77135aa438c9239bd4865b3c7cf8d5c225367e31a363d7020f5244321cce",
+      "no_hook_diagnostic.json": "86d7c9e8a4c0da9b2e90a7243d180e1a45fd804b89c45f3aecf92bd5f97e08fe"
+    },
+    "no_assertion_or_tolerance_relaxed": true,
+    "root_cause": "First exact comparison failure was not reproduced in fixed-fixture diagnostics; verification uses a fixed single CPU thread."
+  },
+  "protocol_sha256": "8fb29439e54b7f5b5f34471f534b9e84628342a93452ba9295fd4d12214b87e1",
+  "gates": {
+    "bond_f1_delta_min": 0.0,
+    "q_seq_delta_min": 0.01,
+    "q_seq_wins_min": 4,
+    "spectrum_harmonic_f1_delta_min": -0.002,
+    "auc_delta_min": -0.001,
+    "q_brier_delta_max": 0.001,
+    "require_all": true,
+    "secondary_without_mandatory_improvement": [
+      "top10",
+      "precision",
+      "recall",
+      "bond_accuracy"
+    ]
+  },
+  "all_computation_pod_only": true,
+  "no_automatic_extra_training": true
+}
