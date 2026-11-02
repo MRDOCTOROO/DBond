@@ -389,6 +389,15 @@ class BinaryBondMetrics:
 
         predictions = np.asarray(predictions)
         targets = np.asarray(targets)
+        # Store canonical logits for both public input modes. The historical
+        # from_logits=False flag was accepted but ignored; training's default
+        # True path stays byte-for-byte unchanged.
+        if not from_logits:
+            probabilities = predictions.astype(np.float32)
+            if not np.isfinite(probabilities).all() or ((probabilities < 0) | (probabilities > 1)).any():
+                raise ValueError('Probability input must be finite and in [0, 1]')
+            with np.errstate(divide='ignore'):
+                predictions = np.log(probabilities) - np.log1p(-probabilities)
 
         if predictions.ndim == 1:
             predictions = predictions.reshape(1, -1)
