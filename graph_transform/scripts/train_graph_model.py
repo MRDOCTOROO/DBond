@@ -1126,6 +1126,7 @@ def main():
     parser.add_argument('--seed', type=int, help='随机种子')
     
     args = parser.parse_args()
+    # Opt-in research runs keep external test paths absent during development.
 
     # 容器 /dev/shm 通常极小（64MB），多 worker DataLoader 的默认 shm 共享策略会
     # "No space left on device" 崩溃；改用文件系统共享绕过 shm 限制。
@@ -1151,6 +1152,12 @@ def main():
         training_config.get('checkpoint_selection', 'legacy'),
         training_config.get('min_delta', 0.0),
     )
+    research_selector = None
+    if training_config.get('research_selection') is not None:
+        from training.research_selection import ResearchSelection
+        if config['data'].get('test_csv_path') or args.resume:
+            raise ValueError('Research development requires deferred test and fresh training')
+        research_selector = ResearchSelection(training_config['research_selection'])
     
     # 设置随机种子（--seed 0 是合法值，不能被 falsy 回退吞掉）
     seed = args.seed if args.seed is not None else config['experiment'].get('seed', 42)
@@ -1338,6 +1345,9 @@ def main():
             'initialization': model_initialization,
         })
     logger.info(f"Checkpoint dir: {training_config['checkpoint_dir']}")
+    if research_selector is not None:
+        with open(os.path.join(training_config['checkpoint_dir'], 'resolved_training_config.yaml'), 'w', encoding='utf-8') as stream:
+            yaml.safe_dump(config, stream, sort_keys=False)
     log_config = config.get('logging', {})
     tb_writers: Dict[str, SummaryWriter] = {}
     if log_config.get('use_tensorboard', False):
@@ -1426,6 +1436,18 @@ def main():
             # anchor. legacy keeps the historical min_delta-gated save behavior.
             current_f1 = val_metrics['f1']
             selection_decision = selection.update(current_f1, epoch + 1)
+            if research_selector is not None:
+                improved, research_state = research_selector.update(val_metrics, epoch + 1)
+                audit_row = dict(epoch=epoch + 1, train_loss=train_metrics['loss'],
+                                 train_f1=train_metrics['f1'], validation=val_metrics,
+                                 research_selection=research_state)
+                with open(os.path.join(training_config['checkpoint_dir'], 'validation_selection.jsonl'), 'a', encoding='utf-8') as stream:
+                    stream.write(json.dumps(audit_row, allow_nan=False, default=float) + '\n')
+                if improved:
+                    extra = dict(transfer_extra_state or {}, research_selection=research_state)
+                    save_checkpoint_with_selection(model, optimizer, epoch, val_metrics['loss'],
+                        val_metrics, os.path.join(training_config['checkpoint_dir'], 'best_model_composite.pt'),
+                        selection, extra_state=extra)
             if selection_decision.save_best:
                 checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints/graph_transform')
                 os.makedirs(checkpoint_dir, exist_ok=True)
