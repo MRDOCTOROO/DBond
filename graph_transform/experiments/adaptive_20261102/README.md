@@ -56,3 +56,30 @@ References: [SGC](https://proceedings.mlr.press/v97/wu19e.html),
 [conditional Bernoulli mixtures](https://proceedings.mlr.press/v48/lij16.html).
 
 Data, raw predictions and model weights are not added to this repository.
+
+## First completed arms: inner validation only
+
+On 2026-11-03 local time, full/no_theory/no_message_passing finished all five
+splits. An external CPU review strictly restored all 30 policy checkpoints,
+recomputed their saved prediction NPZ files independently, bound source labels,
+real-bond masks, train/validation data and target sidecars, and verified only
+declared configuration changes. No external-test inference was performed.
+
+Relative to full with max-F1 selection, removing theory changed Bond-F1 by
++0.1566 percentage points (4/5 favorable), example harmonic F1 by +0.3494 points
+(4/5), and subset accuracy by -0.0198 points. This is a small exploratory
+simplification benefit, not the desired large gain or a confirmed replacement.
+Removing all GCN/GAT messages reduced Bond-F1 by 1.6919 points, example harmonic
+F1 by 1.7542 points and subset accuracy by 1.5096 points, each unfavorable on
+all five splits. Original bond-edge readout remained in that ablation.
+
+Fourteen of fifteen policy pairs had tensor-identical model states. The review
+uses one canonical prediction pass for those pairs and preserves the original
+receipts, so replay noise cannot be mistaken for a selection improvement.
+Weighted checkpoint selection did not change full/no_theory weights or improve
+subset accuracy. Shallow and binary candidates remain under the original
+worker; no new wave or historical retraining was launched for this partial report.
+
+Partial result SHA256:
+`d4af131f25e0803cff54960310148f112bfeec0d317352585a0d91620ecb5c03`.
+The outer-wave terminal event is not acknowledged before the complete wave ends.
