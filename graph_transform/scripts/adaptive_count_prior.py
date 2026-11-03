@@ -86,6 +86,8 @@ def smoke(plan):
     # Synthetic estimator/serialization only; no production count model is fit in smoke.
     toy=pd.DataFrame(dict(seq=['ACDEFG','KLMNPQ','RSTVWY','AAAAAA']*12,charge=[2,3,4,5]*12,nce=[20,30,40,50]*12,pep_mass=[600.,700.,800.,900.]*12))
     x=features(toy);model=estimator(42,2).fit(x,np.tile([1,2,3,4],12));path=ops/'synthetic_roundtrip.joblib';joblib.dump(model,path);assert np.array_equal(model.predict_proba(x),joblib.load(path).predict_proba(x))
+    indices=np.unique(np.r_[np.arange(min(16,len(frame))),np.argmax(mask.sum(1))]);nn=mask[indices].sum(1);prior=prior_probability(model,features(frame.iloc[indices]),nn)
+    decision,kk=joint_map(p[indices],mask[indices],prior);assert np.array_equal(kk,decision.sum(1)) and not decision[~mask[indices]].any() and (kk<=nn).all()
     dump(ops/'smoke.json',dict(status='passed',gitrev=rev(),source_sha256=sha(__file__),plan_sha256=sha(ARGS.plan),bound_inputs=bindings,independent_bruteforce_MAP=True,poisson_binomial_recovers_raw=True,padding_invariant=True,synthetic_estimator_CPU_roundtrip=True,training_validation_sequence_overlap=0,production_count_models_trained=0))
     print(json.dumps(dict(status='passed',bound_inputs=len(bindings))))
 def fold_worker(rt,fold,seed,root):
