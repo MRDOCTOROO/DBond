@@ -80,7 +80,9 @@ def one(rt,plan,fold,root):
     train,val,binding=inputs(rt,fold);ty,tm=matrix(train);vy,vm=matrix(val);tg,ts=partition(train,ty);vg,vs=partition(val,vy);target=check_targets(plan,fold,tg,vg,val)
     models={};proof={}
     for model in MODELS:
-        y,p,mask,frame,_,b=rt.input_data(model,fold);assert np.array_equal(y,vy) and np.array_equal(mask,vm) and b['frame_sha256']==binding['val_sha256']
+        y,p,mask,frame,_,b=rt.input_data(model,fold)
+        expected=np.arange(mask.shape[1])[None,:]<(frame.seq.str.len().to_numpy()-1)[:,None]
+        assert np.array_equal(mask,expected) and np.array_equal(mask.sum(1),vm.sum(1)) and np.array_equal(y[mask],vy[vm]) and b['frame_sha256']==binding['val_sha256']
         models[model]=moments(y,p,vg);proof[model]=b
     path=root/f'fold_{fold}.json';dump(path,dict(status='completed',fold=fold,input=binding,target_consistency=target,train=ts,validation=vs,model_moments=models,model_sources=proof,interpretation='Group frequencies and modal agreements are descriptive in-sample label statistics, NOT universal Bayes ceilings or deployable scores; grouping omits some physical acquisition factors.'))
     return dict(fold=fold,result=str(path),sha256=sha(path))
@@ -92,6 +94,10 @@ def smoke(plan):
     for fold in FOLDS:
         train,val,b=inputs(rt,fold);bindings[fold]=b
         assert set(train.nce)<=set((20,30,40,50)) and set(val.nce)<=set((20,30,40,50))
+        truth,valid=matrix(val)
+        for name in MODELS:
+            yy,pp,mm,fr,_,proof=rt.input_data(name,fold)
+            assert np.array_equal(mm,np.arange(mm.shape[1])[None,:]<(fr.seq.str.len().to_numpy()-1)[:,None]) and np.array_equal(mm.sum(1),valid.sum(1)) and np.array_equal(yy[mm],truth[valid]) and proof['frame_sha256']==b['val_sha256']
     dump(ops/'smoke.json',dict(status='passed',gitrev=rev(),source_sha256=sha(__file__),plan_sha256=sha(ARGS.plan),bindings=bindings,sequence_isolation=True,variance_decomposition_fixture=True,no_model_fitting=True))
     print(json.dumps(dict(status='passed',bound_folds=len(bindings))))
 def launch(plan):
