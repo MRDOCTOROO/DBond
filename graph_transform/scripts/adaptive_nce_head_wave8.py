@@ -23,8 +23,9 @@ def smoke(gpu):
  from training.trainer import Trainer
  from training.loss_functions import BinaryBondLoss
  ts.logger=logging.getLogger('nce_head_preflight')
- torch.set_num_threads(1);torch.cuda.set_device(gpu)
+ torch.set_num_threads(1)
  core.require(gpu in core.free_gpus(),'Preflight requires an idle GPU')
+ torch.cuda.set_device(gpu)
  OPS.mkdir(exist_ok=True);core.require(not(OPS/'smoke.json').exists(),'Smoke already committed')
  bound=reuse.previous_binding()
  allowed={'graph_transform/models/graph_transformer.py','graph_transform/models/utils.py'}
