@@ -699,7 +699,7 @@ class GraphTransformer(nn.Module):
         if self.nce_head_mode not in ('none', 'stratified4'):
             raise ValueError('Unsupported nce_head_mode')
         if self.nce_head_mode != 'none':
-            if (self.bond_head_type != 'four_state_mlp' or self.bond_fusion_mode != 'concat'
+            if (self.bond_head_type != 'four_state_mlp' or getattr(config, 'bond_fusion_mode', 'concat') != 'concat'
                     or self.virtual_node_mode != 'single' or self.use_charge_partition_features
                     or self.bond_condition_mode != 'none'):
                 raise ValueError('stratified4 requires original single-global concat four-state head')
