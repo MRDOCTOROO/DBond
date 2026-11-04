@@ -82,7 +82,14 @@ class FourStateDataset(Dataset):
         if parent.split != 'train' or parent.augmentation:
             raise ValueError('four-state targets attach only to unaugmented folded training')
         self.parent = parent
-        self.four_state_provenance = store.provenance
+        self.four_state_provenance = dict(store.provenance)
+        # Describe the actual training weighting without changing any target.
+        # Preserve the historical group_uniform provenance exactly.
+        scheme = getattr(parent, 'weighting_scheme', 'none')
+        if scheme != 'group_uniform':
+            self.four_state_provenance['weighting_scheme'] = scheme
+            self.four_state_provenance['loss'] = (
+                'soft four-state CE, valid-bond weighted mean, ' + scheme)
         self.targets = store.validate_frame(parent.data, require_all)
 
     def __getattr__(self, name):
