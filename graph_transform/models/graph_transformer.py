@@ -695,6 +695,17 @@ class GraphTransformer(nn.Module):
             self.register_buffer('four_state_mode_code', torch.tensor(4, dtype=torch.int64))
 
         self.use_charge_partition_features = getattr(config, 'use_charge_partition_features', False)
+        self.nce_head_mode = getattr(config, 'nce_head_mode', 'none')
+        if self.nce_head_mode not in ('none', 'stratified4'):
+            raise ValueError('Unsupported nce_head_mode')
+        if self.nce_head_mode != 'none':
+            if (self.bond_head_type != 'four_state_mlp' or getattr(config, 'bond_fusion_mode', 'concat') != 'concat'
+                    or self.virtual_node_mode != 'single' or self.use_charge_partition_features
+                    or self.bond_condition_mode != 'none'):
+                raise ValueError('stratified4 requires original single-global concat four-state head')
+            from .nce_state_residual import NCEStateResidual
+            self.nce_state_residual = NCEStateResidual(self.hidden_dim)
+            self.register_buffer('nce_head_mode_code', torch.tensor([1, 1, 4], dtype=torch.int64))
         if not isinstance(self.use_charge_partition_features, bool):
             raise ValueError('use_charge_partition_features must be boolean')
         if self.use_charge_partition_features:
@@ -832,7 +843,9 @@ class GraphTransformer(nn.Module):
         from .bond_fusion_heads import validate_bond_fusion_checkpoint
         from .node_context_conv import validate_node_conv_checkpoint
         from .utils import validate_virtual_node_checkpoint
+        from .nce_state_residual import validate_nce_head_checkpoint
         try:
+            validate_nce_head_checkpoint(self, state_dict)
             validate_attention_checkpoint(self, state_dict)
             validate_position_checkpoint(self, state_dict)
             validate_bond_head_checkpoint(self, state_dict)
@@ -1273,6 +1286,13 @@ class GraphTransformer(nn.Module):
                     if fusion_diagnostics:
                         from .bond_fusion_heads import residual_diagnostics
                         self.last_bond_fusion_diagnostics.update(residual_diagnostics(hidden, corrected))
+                elif self.nce_head_mode == 'stratified4':
+                    # Reuse the original activation and dropout exactly once.
+                    hidden = self.bond_head[2](self.bond_head[1](self.bond_head[0](bond_features)))
+                    bond_samples = torch.arange(batch_size, device=node_features.device)[:, None].expand_as(
+                        valid_bond_mask)[valid_bond_mask]
+                    state_logits = (self.bond_head[3](hidden).float()
+                        + self.nce_state_residual(hidden, batch_data['nces'], bond_samples).float())
                 else:
                     state_logits = self.bond_head(bond_features).float()
                 if self.virtual_node_mode == 'parallel4' and self.enable_parallel_global_diagnostics:

@@ -167,6 +167,7 @@ class ModelConfig:
         # Independent from the binary/four-state supervision choice. Legacy
         # concat adds neither state-dict keys nor initialization RNG draws.
         self.bond_fusion_mode = 'concat'
+        self.nce_head_mode = 'none'
         self.use_charge_partition_features = False
         self.bond_cross_attention_heads = 4
         # Target-domain operational fragment matches, used only as training targets.
