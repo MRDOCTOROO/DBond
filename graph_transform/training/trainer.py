@@ -66,6 +66,12 @@ class Trainer:
             if (lc.get('main_loss') != 'binary_cross_entropy' or lc.get('handle_imbalance', False)
                     or lc.get('use_auxiliary_losses', False) or float(lc.get('ranking_loss_weight', 0)) != 0):
                 raise ValueError('four-state joint training requires the plain BCE-compatible control configuration')
+        count_weight = (config or {}).get('loss', {}).get('cardinality_weight', 0.0)
+        if (isinstance(count_weight, bool) or not isinstance(count_weight, (int, float))
+                or not math.isfinite(count_weight) or count_weight < 0
+                or (count_weight > 0 and not self.four_state_enabled)):
+            raise ValueError('cardinality_weight requires a finite nonnegative value and four-state head')
+        self.cardinality_weight = count_weight
         self.scheduler = scheduler
         self.device = device
         self.config = config or {}
@@ -471,6 +477,15 @@ class Trainer:
                 batch_data['four_state_targets'], batch_data['label_mask'], row_weights,
                 conditional_weight=self.four_state_conditional_weight,
                 union_brier_weight=self.four_state_union_brier_weight)
+
+        if self.cardinality_weight > 0:
+            from .cardinality_loss import cardinality_cross_entropy
+            if 'cardinality_histogram' not in batch_data:
+                raise ValueError('Count loss requires source-bound training-only histograms')
+            if row_weights is not None and not torch.equal(row_weights, torch.ones_like(row_weights)):
+                raise ValueError('Cardinality experiment requires uniform condition weighting')
+            loss = loss + self.cardinality_weight * cardinality_cross_entropy(
+                self.model.last_four_state_logits, batch_data['label_mask'], batch_data['cardinality_histogram'])
 
         main_loss_value = float(loss.detach().item()) if self.ion12_enabled else 0.0
 

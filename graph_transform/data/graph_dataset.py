@@ -487,6 +487,15 @@ class GraphDataLoader:
                 state_targets.append(target)
             batch_data['four_state_targets'] = pad_sequence(state_targets, batch_first=True, padding_value=0.0)
 
+        has_cardinality = ['cardinality_histogram' in item for item in batch]
+        if any(has_cardinality):
+            if not all(has_cardinality):
+                raise ValueError('Mixed cardinality supervision in one batch')
+            histograms = [item['cardinality_histogram'] for item in batch]
+            if any(h.shape != (len(item['sequence']),) for h, item in zip(histograms, batch)):
+                raise ValueError('Cardinality histogram length mismatch')
+            batch_data['cardinality_histogram'] = pad_sequence(histograms, batch_first=True, padding_value=0.0)
+
         has_ion12 = ['ion12_targets' in item for item in batch]
         if any(has_ion12):
             if not all(has_ion12):

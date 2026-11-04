@@ -724,8 +724,12 @@ def create_datasets(config: Dict[str, Any]) -> tuple:
             })
         dataset = dataset_cls(**kwargs)
         if four_state_store is not None and split == 'train':
-            return FourStateDataset(dataset, four_state_store,
+            wrapped = FourStateDataset(dataset, four_state_store,
                 require_all=os.path.abspath(csv_path) == os.path.abspath(data_config['train_csv_path']))
+            if config.get('loss', {}).get('cardinality_weight', 0) > 0:
+                from data.cardinality_dataset import CardinalityDataset
+                wrapped = CardinalityDataset(wrapped)
+            return wrapped
         if ion12_store is not None and split in ('train', 'val'):
             return Ion12GraphDataset(dataset, ion12_store)
         return dataset
